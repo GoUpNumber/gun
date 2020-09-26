@@ -1,41 +1,36 @@
-use crate::bitcoin::{hashes::Hash, OutPoint, Script, Txid};
+use crate::{
+    bitcoin::{hashes::Hash, OutPoint, Script, Txid},
+    change::Change,
+};
 use core::str::FromStr;
-use olivia_core::{EventId, http::EventResponse};
-use magical::{Wallet, blockchain::Blockchain, database::BatchDatabase, reqwest, TxBuilder, FeeRate, wallet::coin_selection::DumbCoinSelection};
+use magical::{
+    blockchain::Blockchain, database::BatchDatabase, reqwest,
+    wallet::coin_selection::DumbCoinSelection, FeeRate, TxBuilder, Wallet,
+};
+use olivia_core::{http::EventResponse, EventId};
 use olivia_secp256k1::{schnorr_fun::fun::XOnly, Secp256k1};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proposal {
     pub oracle: String,
     pub event_id: EventId,
+    pub payload: Payload,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Payload {
     pub inputs: Vec<magical::bitcoin::OutPoint>,
     pub public_key: XOnly,
-    pub change: Option<(u64, Script)>,
+    pub change: Option<Change>,
 }
 
 impl Proposal {
     pub fn to_string(&self) -> String {
-        let mut binary = vec![];
-        binary.push(0x00);
-        binary.push(self.inputs.len() as u8);
-
-        for input in self.inputs.iter() {
-            binary.push(input.vout as u8);
-            binary.extend(input.txid.as_ref());
-        }
-
-        binary.extend(self.public_key.as_bytes());
-
-        if let Some(ref change) = self.change {
-            binary.extend(change.0.to_be_bytes().as_ref());
-            binary.extend(change.1.as_bytes())
-        }
-
         format!(
             "PROPOSE!{}!{}!{}",
             self.oracle,
             self.event_id,
-            base2048::encode(&binary[..])
+            base2048::encode(bincode::serialize(&self.payload).unwrap().as_ref())
         )
     }
 
@@ -44,62 +39,19 @@ impl Proposal {
         if segments.next() != Some("PROPOSE") {
             return Err("not a proposal")?;
         }
-        let oracle = segments.next().ok_or("missing oralce")?;
+        let oracle = segments.next().ok_or("missing oralce")?.to_string();
         let event_id = EventId::from_str(segments.next().ok_or("missing event id")?)?;
         let base2048_encoded = segments.next().ok_or("missing base2048 encoded data")?;
         let binary = base2048::decode(base2048_encoded).ok_or("invalid base2048 encoding")?;
-        if binary.len() < 2 {
-            return Err("too short")?;
-        }
+        let payload = bincode::deserialize::<Payload>(&binary[..])?;
 
-        match binary[0] {
-            0x00 => {
-                let (n_inputs, mut remaining) = binary[1..].split_first().ok_or("too short")?;
-                let n_inputs = *n_inputs as usize;
-                let mut inputs = Vec::with_capacity(n_inputs);
-                for _ in 0..n_inputs {
-                    let (vout, tail) = remaining.split_first().ok_or("too short")?;
-                    let (txid, tail) = checked_split_at(tail, 32).ok_or("too short")?;
-                    let txid = Txid::from_slice(&txid).unwrap();
-                    inputs.push(OutPoint::new(txid, (*vout).into()));
-                    remaining = tail
-                }
-
-                let (public_key, remaining) = checked_split_at(remaining, 32).ok_or("too short")?;
-                let public_key = XOnly::from_slice(public_key).ok_or("invalid public key")?;
-                let change = if remaining.len() > 0 {
-                    let (value_slice, remaining) =
-                        checked_split_at(remaining, 8).ok_or("too short")?;
-                    let mut value = [0u8; 8];
-                    value.copy_from_slice(&value_slice);
-                    let value = u64::from_be_bytes(value);
-                    let script = Script::from(remaining.to_vec());
-                    Some((value, script))
-                } else {
-                    None
-                };
-
-                Ok(Proposal {
-                    oracle: oracle.to_string(),
-                    event_id,
-                    inputs,
-                    public_key,
-                    change,
-                })
-            }
-            _ => Err("Unknown type tag")?,
-        }
+        Ok(Proposal {
+            oracle,
+            event_id,
+            payload,
+        })
     }
 }
-
-fn checked_split_at(slice: &[u8], mid: usize) -> Option<(&[u8], &[u8])> {
-    if slice.len() < mid {
-        return None;
-    }
-    Some(slice.split_at(mid))
-}
-
-
 
 pub async fn make_proposalment(
     seed: &[u8; 64],
@@ -145,10 +97,12 @@ pub async fn make_proposalment(
     Ok(Proposal {
         oracle: url.host().unwrap().to_string(),
         event_id,
-        inputs,
-        public_key: keypair.public_key,
-        change: change_script.map(|script| (value, script)),
-       })
+        payload: Payload {
+            inputs,
+            public_key: keypair.public_key,
+            change: change_script.map(|script| Change::new(value, script)),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -167,19 +121,22 @@ mod test {
             oracle: "h00.ooo".into(),
             event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails?left-win")
                 .unwrap(),
-            inputs: vec![
-                OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),
-                OutPoint::new(Txid::from_slice(&[2u8; 32]).unwrap(), 1),
-            ],
-            public_key: forty_two,
-            change: None,
+            payload: Payload {
+                inputs: vec![
+                    OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),
+                    OutPoint::new(Txid::from_slice(&[2u8; 32]).unwrap(), 1),
+                ],
+                public_key: forty_two,
+                change: None,
+            },
         };
 
         let encoded = proposal.to_string();
+        dbg!(&encoded);
         let decoded = Proposal::from_str(&encoded).unwrap();
         assert_eq!(decoded, proposal);
 
-        proposal.change = Some((100_000, change_address.script_pubkey()));
+        proposal.payload.change = Some(Change::new(100_000, change_address.script_pubkey()));
 
         let encoded = proposal.to_string();
         dbg!(&encoded);
