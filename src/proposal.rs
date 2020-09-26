@@ -24,13 +24,14 @@ pub struct Payload {
     pub change: Option<Change>,
 }
 
+
 impl Proposal {
     pub fn to_string(&self) -> String {
         format!(
             "PROPOSE!{}!{}!{}",
             self.oracle,
             self.event_id,
-            base2048::encode(bincode::serialize(&self.payload).unwrap().as_ref())
+            crate::encode::serialize(&self.payload)
         )
     }
 
@@ -41,9 +42,8 @@ impl Proposal {
         }
         let oracle = segments.next().ok_or("missing oralce")?.to_string();
         let event_id = EventId::from_str(segments.next().ok_or("missing event id")?)?;
-        let base2048_encoded = segments.next().ok_or("missing base2048 encoded data")?;
-        let binary = base2048::decode(base2048_encoded).ok_or("invalid base2048 encoding")?;
-        let payload = bincode::deserialize::<Payload>(&binary[..])?;
+        let base2048_encoded_payload = segments.next().ok_or("missing base2048 encoded data")?;
+        let payload = crate::encode::deserialize(base2048_encoded_payload)?;
 
         Ok(Proposal {
             oracle,

@@ -8,3 +8,4 @@ pub use magical::{bitcoin, reqwest};
 mod change;
 pub mod ecdh;
 //pub mod offer;
+pub mod encode;
