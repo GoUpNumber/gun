@@ -1,4 +1,4 @@
-use magical::bitcoin::Script;
+use bdk::bitcoin::Script;
 
 #[derive(Debug, Clone, PartialEq)]
 struct BinScript(Script);
@@ -33,6 +33,14 @@ impl Change {
             value,
             script_pubkey: script_pubkey.into(),
         }
+    }
+
+    pub fn value(&self) -> u64 {
+        self.value
+    }
+
+    pub fn script(&self) -> &Script {
+        &self.script_pubkey.0
     }
 }
 

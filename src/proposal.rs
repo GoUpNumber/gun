@@ -1,34 +1,42 @@
 use crate::{
-    bitcoin::{hashes::Hash, OutPoint, Script, Txid},
+    bitcoin::{Amount, Script},
     change::Change,
+    keychain::Keychain,
 };
-use core::str::FromStr;
-use magical::{
-    blockchain::Blockchain, database::BatchDatabase, reqwest,
+use anyhow::anyhow;
+use bdk::{
+    bitcoin::Denomination, blockchain::Blockchain, database::BatchDatabase, reqwest,
     wallet::coin_selection::DumbCoinSelection, FeeRate, TxBuilder, Wallet,
 };
+use core::str::FromStr;
 use olivia_core::{http::EventResponse, EventId};
-use olivia_secp256k1::{schnorr_fun::fun::XOnly, Secp256k1};
+use olivia_secp256k1::{
+    schnorr_fun::fun::{marker::*, Point},
+    Secp256k1,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proposal {
     pub oracle: String,
     pub event_id: EventId,
+    pub value: Amount,
     pub payload: Payload,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Payload {
-    pub inputs: Vec<magical::bitcoin::OutPoint>,
-    pub public_key: XOnly,
+    pub inputs: Vec<bdk::bitcoin::OutPoint>,
+    pub public_key: Point<EvenY>,
     pub change: Option<Change>,
 }
-
 
 impl Proposal {
     pub fn to_string(&self) -> String {
         format!(
-            "PROPOSE!{}!{}!{}",
+            "PROPOSE#{}#{}#{}#{}",
+            self.value
+                .to_string_in(Denomination::Bitcoin)
+                .trim_end_matches('0'),
             self.oracle,
             self.event_id,
             crate::encode::serialize(&self.payload)
@@ -36,10 +44,14 @@ impl Proposal {
     }
 
     pub fn from_str(string: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut segments = string.split("!");
+        let mut segments = string.split("#");
         if segments.next() != Some("PROPOSE") {
             return Err("not a proposal")?;
         }
+        let value = Amount::from_str_in(
+            segments.next().ok_or("missing amount")?,
+            Denomination::Bitcoin,
+        )?;
         let oracle = segments.next().ok_or("missing oralce")?.to_string();
         let event_id = EventId::from_str(segments.next().ok_or("missing event id")?)?;
         let base2048_encoded_payload = segments.next().ok_or("missing base2048 encoded data")?;
@@ -47,35 +59,36 @@ impl Proposal {
 
         Ok(Proposal {
             oracle,
+            value,
             event_id,
             payload,
         })
     }
 }
 
-pub async fn make_proposalment(
-    seed: &[u8; 64],
+pub async fn make_proposal(
+    keychain: &Keychain,
     wallet: &Wallet<impl Blockchain, impl BatchDatabase>,
     url: reqwest::Url,
-    value: u64,
-) -> Result<Proposal, Box<dyn std::error::Error>> {
+    value: Amount,
+) -> anyhow::Result<Proposal> {
     let event_response = reqwest::get(url.clone())
         .await?
         .json::<EventResponse<Secp256k1>>()
         .await
         .map_err(|_e| {
-            format!(
+            anyhow!(
                 "URL ({}) did not return a valid JSON event description",
                 &url
             )
         })?;
     let event_id = event_response.id;
 
-    let keypair = crate::kdf::kdf(seed, &event_id, value, 0);
+    let keypair = keychain.keypair_for_proposal(&event_id, 0);
 
     let builder = TxBuilder::default()
         .fee_rate(FeeRate::from_sat_per_vb(0.0))
-        .add_recipient(Script::default(), value);
+        .add_recipient(Script::default(), value.as_sat());
 
     let (psbt, txdetails) = wallet.create_tx::<DumbCoinSelection>(builder)?;
     assert_eq!(txdetails.fees, 0);
@@ -88,8 +101,25 @@ pub async fn make_proposalment(
         .iter()
         .map(|txin| txin.previous_output.clone())
         .collect();
-    let change_script = if outputs.len() == 2 {
-        Some(outputs[1].script_pubkey.clone())
+    let change = if outputs.len() > 1 {
+        if outputs.len() != 2 {
+            return Err(anyhow!(
+                "wallet produced psbt with too many outputs: {:?}",
+                psbt
+            ));
+        }
+        Some(
+            outputs
+                .iter()
+                .find_map(|output| {
+                    if output.script_pubkey != Script::default() {
+                        Some(Change::new(output.value, output.script_pubkey.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap(),
+        )
     } else {
         None
     };
@@ -97,10 +127,11 @@ pub async fn make_proposalment(
     Ok(Proposal {
         oracle: url.host().unwrap().to_string(),
         event_id,
+        value: value,
         payload: Payload {
             inputs,
             public_key: keypair.public_key,
-            change: change_script.map(|script| Change::new(value, script)),
+            change,
         },
     })
 }
@@ -108,17 +139,18 @@ pub async fn make_proposalment(
 #[cfg(test)]
 mod test {
     use super::*;
-    use magical::bitcoin::Address;
-    use olivia_secp256k1::schnorr_fun::fun::{s, G};
+    use bdk::bitcoin::{hashes::Hash, Address, OutPoint, Txid};
+    use olivia_secp256k1::schnorr_fun::fun::{s, XOnly, G};
 
     #[test]
     fn to_and_from_str() {
-        let forty_two = XOnly::from_scalar_mul(G, &mut s!(42));
+        let forty_two = Point::<EvenY>::from_scalar_mul(G, &mut s!(42));
         let change_address =
             Address::from_str("bc1qwqdg6squsna38e46795at95yu9atm8azzmyvckulcc7kytlcckxswvvzej")
                 .unwrap();
         let mut proposal = Proposal {
             oracle: "h00.ooo".into(),
+            value: Amount::from_str("0.1 BTC").unwrap(),
             event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails?left-win")
                 .unwrap(),
             payload: Payload {
@@ -142,6 +174,5 @@ mod test {
         dbg!(&encoded);
         let decoded = Proposal::from_str(&encoded).unwrap();
         assert_eq!(decoded, proposal);
-        panic!()
     }
 }
