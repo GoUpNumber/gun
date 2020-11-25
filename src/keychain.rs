@@ -4,7 +4,7 @@ use crate::{
         util::bip32::ExtendedPrivKey,
         Network,
     },
-    proposal::Proposal,
+    party::Proposal,
 };
 use olivia_core::EventId;
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
@@ -15,6 +15,7 @@ pub struct Keychain {
     offer_hmac: HmacEngine<sha512::Hash>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeyPair {
     pub public_key: Point<EvenY>,
     pub secret_key: Scalar,
@@ -23,14 +24,14 @@ pub struct KeyPair {
 impl Keychain {
     pub fn new(seed: [u8; 64]) -> Self {
         let proposal_hmac = {
-            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-proposal-key");
+            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-proposal");
             hmac.input(&seed[..]);
             let res = Hmac::from_engine(hmac);
             HmacEngine::<sha512::Hash>::new(&res[..])
         };
 
         let offer_hmac = {
-            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-offer-key");
+            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-offer");
             hmac.input(&seed[..]);
             let res = Hmac::from_engine(hmac);
             HmacEngine::<sha512::Hash>::new(&res[..])
