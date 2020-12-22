@@ -45,7 +45,6 @@ impl JointOutput {
         let (r1, r2) = (Scalar::random(rng), Scalar::random(rng));
         let (left, right) = (&anticipated_signatures[0], &anticipated_signatures[1]);
         let (proposal_key, offer_key) = (&public_keys[0], &public_keys[1]);
-        dbg!(&left, &right);
 
         let mut output_keys = match offer_choose_right {
             true => vec![
@@ -156,7 +155,7 @@ impl JointOutput {
         };
 
         wallet.add_signer(
-            bdk::ScriptType::External,
+            bdk::KeychainKind::External,
             SignerId::PkHash(public_key.pubkey_hash().into()),
             SignerOrdering(1),
             Arc::new(priv_key),

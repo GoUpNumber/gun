@@ -6,7 +6,7 @@ mod take_offer;
 mod tx_tracker;
 
 use bdk::{
-    bitcoin::{secp256k1, util::bip32::ChildNumber},
+    bitcoin::{secp256k1, util::bip32::ChildNumber, OutPoint, TxOut},
     blockchain::EsploraBlockchain,
 };
 pub use joint_output::*;
@@ -123,6 +123,27 @@ where
 
     pub fn new_blockchain(&self) -> EsploraBlockchain {
         EsploraBlockchain::new(&self.esplora_url, None)
+    }
+
+    pub async fn get_txout(&self, outpoint: OutPoint) -> anyhow::Result<TxOut> {
+        let tx = self
+            .wallet
+            .client()
+            .unwrap()
+            .get_tx(&outpoint.txid)
+            .await?
+            .ok_or(anyhow!("txid not found {}", outpoint.txid))?;
+
+        let txout = tx
+            .output
+            .get(outpoint.vout as usize)
+            .ok_or(anyhow!(
+                "vout {} doesn't exist on txid {}",
+                outpoint.vout,
+                outpoint.txid
+            ))?
+            .clone();
+        Ok(txout)
     }
 
     // pub async fn advance_state(&self) -> anyhow::Result<()> {

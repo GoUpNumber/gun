@@ -22,7 +22,7 @@ serde = { version = "1.0" }
 bincode = "1.3.1"
 anyhow = "1"
 thiserror = "1.0"
-tiny-bip39 = { version = "^0.7" }
+tiny-bip39 = { version = "^0.8" }
 miniscript = { version = "4", features = ["serde"] }
 
 

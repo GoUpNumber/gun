@@ -10,13 +10,13 @@ use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         util::{amount, psbt::PartiallySignedTransaction as PSBT},
-        Amount, Script, Transaction, Txid,
+        Amount, Script, Transaction, TxIn, Txid,
     },
     blockchain::Blockchain,
     database::BatchDatabase,
     descriptor::ExtendedDescriptor,
     wallet::{tx_builder::TxOrdering, ForeignUtxo},
-    TxBuilder, Wallet,
+    TxBuilder,
 };
 type DefaultCoinSelectionAlgorithm = bdk::wallet::coin_selection::LargestFirstCoinSelection;
 
@@ -37,6 +37,16 @@ pub struct SignedInput {
     pub witness: Vec<Vec<u8>>,
 }
 
+impl SignedInput {
+    fn to_txin(&self) -> TxIn {
+        TxIn {
+            previous_output: self.outpoint,
+            witness: self.witness.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Payload {
     #[serde(with = "amount::serde::as_sat")]
@@ -44,12 +54,14 @@ struct Payload {
     pub inputs: Vec<SignedInput>,
     pub change: Option<Change>,
     pub choose_right: bool,
+    pub fee: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Offer {
     #[serde(with = "amount::serde::as_sat")]
     pub value: Amount,
+    pub fee: u32,
     pub inputs: Vec<SignedInput>,
     pub change: Option<Change>,
     pub public_key: Point<EvenY>,
@@ -72,6 +84,7 @@ impl Offer {
             inputs: self.inputs,
             change: self.change,
             choose_right: self.choose_right,
+            fee: self.fee,
         };
         let mut ciphertext = crate::encode::serialize(&payload);
         cipher.encrypt(&mut ciphertext);
@@ -83,6 +96,17 @@ impl Offer {
 
     pub fn id(&self) -> OfferId {
         self.public_key.to_xonly()
+    }
+
+    pub fn fee_rate(&self) -> bdk::FeeRate {
+        let template_tx = Transaction {
+            input: self.inputs.iter().map(|input| input.to_txin()).collect(),
+            // TODO: put dummy txout here,
+            output: vec![],
+            lock_time: 0,
+            version: 0,
+        };
+        bdk::FeeRate::from_sat_per_vb((self.fee as f32) / (template_tx.get_weight() as f32 / 4.0))
     }
 }
 
@@ -106,6 +130,7 @@ impl EncryptedOffer {
             change: payload.change,
             public_key: self.public_key,
             choose_right: payload.choose_right,
+            fee: payload.fee,
         })
     }
 }
@@ -213,7 +238,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             output_value,
         );
 
-        let psbt = generate_tx(&self.wallet, &proposal, output).await?;
+        let (psbt, fee) = self.make_offer_generate_tx(&proposal, output).await?;
 
         let inputs: Vec<SignedInput> = psbt
             .inputs
@@ -245,65 +270,106 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             change,
             inputs,
             choose_right,
+            fee,
             value: local_value,
         };
 
         Ok((offer, joint_output, txid))
     }
-}
 
-pub async fn generate_tx(
-    wallet: &Wallet<impl Blockchain, impl BatchDatabase>,
-    proposal: &Proposal,
-    output: (Script, Amount),
-) -> anyhow::Result<PSBT> {
-    let mut builder = TxBuilder::default()
-        .add_recipient(output.0, output.1.as_sat())
-        .ordering(TxOrdering::Untouched);
-    let mut required_input_value = proposal.value.as_sat();
-    let mut input_value = 0;
-    for proposal_input in &proposal.payload.inputs {
-        let tx = wallet
-            .client()
-            .unwrap()
-            .get_tx(&proposal_input.txid)
-            .await?
-            .ok_or(anyhow!(
-                "Proposal input txid not found {}",
-                proposal_input.txid
-            ))?;
+    pub async fn make_offer_generate_tx(
+        &self,
+        proposal: &Proposal,
+        output: (Script, Amount),
+    ) -> anyhow::Result<(PSBT, u32)> {
+        let mut builder = TxBuilder::default()
+            .add_recipient(output.0, output.1.as_sat())
+            .ordering(TxOrdering::Untouched);
+        let mut required_input_value = proposal.value.as_sat();
+        let mut input_value = 0;
+        for proposal_input in &proposal.payload.inputs {
+            let txout = self
+                .get_txout(*proposal_input)
+                .await
+                .context("Failed to find proposal input")?;
+            input_value += txout.value;
+            builder = builder.add_foreign_utxo(ForeignUtxo {
+                txout,
+                outpoint: *proposal_input,
+                // p2wpkh wieght
+                satisfaction_weight: 4 + 1 + 73 + 33,
+            });
+        }
 
-        let txin = tx.output[proposal_input.vout as usize].clone();
-        input_value += txin.value;
-        builder = builder.add_foreign_utxo(
-            ForeignUtxo::from_pubkey_outpoint_onchain(*proposal_input, wallet.client().unwrap())
-                .await?
-                .ok_or(anyhow!("proposal input {} does not exist", proposal_input))?,
+        if let Some(change) = &proposal.payload.change {
+            builder = builder.add_recipient(change.script().clone(), change.value());
+            required_input_value += change.value();
+        }
+
+        if input_value != required_input_value {
+            return Err(anyhow!(
+                "input value was {} but we need {}",
+                input_value,
+                required_input_value
+            ));
+        }
+
+        let (psbt, tx_details) = self
+            .wallet
+            .create_tx::<DefaultCoinSelectionAlgorithm>(builder)
+            .context("Unable to create offer transaction")?;
+        let (psbt, is_final) = self
+            .wallet
+            .sign(psbt, None)
+            .context("Unable to sign offer transaction")?;
+        assert!(
+            !is_final,
+            "we haven't got the other party's signature so it can't be final here"
         );
+        Ok((psbt, tx_details.fees as u32))
     }
-
-    if let Some(change) = &proposal.payload.change {
-        builder = builder.add_recipient(change.script().clone(), change.value());
-        required_input_value += change.value();
-    }
-
-    if input_value != required_input_value {
-        return Err(anyhow!(
-            "input value was {} but we need {}",
-            input_value,
-            required_input_value
-        ));
-    }
-
-    let (psbt, _tx_details) = wallet
-        .create_tx::<DefaultCoinSelectionAlgorithm>(builder)
-        .context("Unable to create offer transaction")?;
-    let (psbt, is_final) = wallet
-        .sign(psbt, None)
-        .context("Unable to sign offer transaction")?;
-    assert!(
-        !is_final,
-        "we haven't got the other party's signature so it can't be final here"
-    );
-    Ok(psbt)
 }
+
+// /// Creates a foreign UTXO by guessing the weight of the witness by the fact that it's a public
+// /// key output.
+// ///
+// /// # Examples
+// /// ```
+// /// ForeignUtxo::from_
+// /// ```
+// #[maybe_async]
+// pub fn from_onchain_(
+//     outpoint: OutPoint,
+//     blockchain: &impl Blockchain,
+// ) -> Result<Option<Self>, Error> {
+//     let tx =
+//         maybe_await!(blockchain.get_tx(&outpoint.txid))?.ok_or(Error::TransactionNotFound)?;
+//     let output = tx
+//         .output
+//         .get(outpoint.vout as usize)
+//         .ok_or(Error::InvalidOutpoint(outpoint))?;
+//     let script_pubkey = output.script_pubkey.clone();
+
+//     // at the worst we assume it's a uncmopressed public key on chain.
+//     let max_satisfaction_weight = if script_pubkey.is_p2pk() {
+//         4 * (1 + 73)
+//     } else if script_pubkey.is_p2pkh() {
+//         // conservatively assume uncompressed public key
+//         4 * (1 + 73 + 65)
+//     } else if script_pubkey.is_v0_p2wpkh() {
+//         // XXX: Technically, public keys could be uncompressed here as well, but this is would
+//         // only occur if a miner was intentionally trying fool you since in BIP143 nodes will
+//         // not allow uncompressed public keys in the witness
+//         4 + 1 + 73 + 33
+//     } else {
+//         // FIXME: Add taproot here?
+//         return Ok(None);
+//     };
+
+//     Ok(Some(Self {
+//         value: output.value,
+//         outpoint,
+//         script_pubkey,
+//         max_satisfaction_weight,
+//     }))
+// }

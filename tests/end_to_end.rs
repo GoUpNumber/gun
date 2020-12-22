@@ -1,10 +1,7 @@
-use std::str::FromStr;
-
 use anyhow::Context;
-use bdk::blockchain::noop_progress;
 use bdk::{
     bitcoin::Network,
-    blockchain::{Blockchain, EsploraBlockchain},
+    blockchain::{noop_progress, Blockchain, EsploraBlockchain},
     database::BatchDatabase,
     Wallet,
 };
@@ -16,6 +13,7 @@ use bweet::{
 };
 use olivia_core::{Event, EventId, OracleEvent, OracleInfo, Schnorr};
 use olivia_secp256k1::{fun::Scalar, Secp256k1};
+use std::{str::FromStr, time::Duration};
 
 async fn create_party(
     id: u8,
@@ -23,7 +21,7 @@ async fn create_party(
     let keychain = Keychain::new([id; 64]);
     let descriptor = bdk::template::BIP84(
         keychain.main_wallet_xprv(Network::Regtest),
-        bdk::ScriptType::External,
+        bdk::KeychainKind::External,
     );
     let db = bdk::database::MemoryDatabase::new();
     let esplora_url = "http://localhost:3000".to_string();
@@ -31,19 +29,23 @@ async fn create_party(
     let wallet = Wallet::new(descriptor, None, Network::Regtest, db, esplora)
         .await
         .context("Initializing wallet failed")?;
-    wallet.sync(noop_progress(), None).await?;
+    wallet
+        .sync(noop_progress(), None)
+        .await
+        .context("syncing wallet failed")?;
 
     let bet_db = bet_database::InMemory::default();
 
     while wallet.get_balance()? < 100_000 {
         fund_wallet(&wallet).await?;
+        tokio::time::delay_for(Duration::from_millis(1_000)).await;
         wallet.sync(noop_progress(), None).await?;
+        println!("syncing done on party {} -- checking balance", id);
     }
 
     let party = Party::new(wallet, bet_db, keychain, esplora_url);
     Ok(party)
 }
-
 
 async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> anyhow::Result<()> {
     let new_address = wallet.get_new_address()?;
@@ -134,11 +136,7 @@ pub async fn end_to_end() {
     )
     .into();
 
-    use olivia_secp256k1::fun::G;
-    dbg!(olivia_secp256k1::fun::g!(attestation * G));
-
     party_1.claim(p1_bet_id, attestation).await.unwrap();
-    party_1.wallet().sync(noop_progress(),None).await.unwrap();
+    party_1.wallet().sync(noop_progress(), None).await.unwrap();
     assert!(party_1.wallet().get_balance().unwrap() > p1_initial_balance);
-
 }
