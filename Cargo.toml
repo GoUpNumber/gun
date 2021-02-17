@@ -9,11 +9,12 @@ edition = "2018"
 [dependencies]
 dirs = "3.0"
 clap = "2.33"
-bdk = {  path = "../bdk", features = ["cli-utils", "key-value-db", "esplora", "compiler", "keys-bip39", "async-interface"], default-features = false }
+bdk = {  path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "async-interface"], default-features = false }
+bdk-cli = { path = "../bdk-cli", features = ["clap", "async-trait", "async-interface"] }
 serde_json = "1.0"
 olivia_core = { path = "../olivia/olivia_core", features = ["std"] }
 olivia_secp256k1 = { path = "../olivia/olivia_secp256k1", features = ["libsecp_compat"] }
-tokio = { version = "0.2", features = ["rt-core", "macros"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "rt-multi-thread"] }
 sha2 = "0.9"
 base2048 = "0.2"
 byteorder = "1.3"
@@ -23,7 +24,10 @@ bincode = "1.3.1"
 anyhow = "1"
 thiserror = "1.0"
 tiny-bip39 = { version = "^0.8" }
-miniscript = { version = "4", features = ["serde"] }
+miniscript = { version = "5", features = ["serde"] }
+
+[patch.crates-io]
+miniscript = { path = "../rust-miniscript" }
 
 
 [dev-dependencies]

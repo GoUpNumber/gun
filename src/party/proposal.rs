@@ -8,12 +8,11 @@ use crate::{
 use anyhow::anyhow;
 use bdk::{
     bitcoin,
-    bitcoin::{util::psbt, Denomination},
+    bitcoin::{Denomination},
     blockchain::Blockchain,
     database::BatchDatabase,
-    reqwest, FeeRate, TxBuilder,
+    reqwest, FeeRate,
 };
-type DefaultCoinSelectionAlgorithm = bdk::wallet::coin_selection::LargestFirstCoinSelection;
 use core::str::FromStr;
 use olivia_core::{EventId, OracleEvent, OracleInfo};
 use olivia_secp256k1::{
@@ -36,7 +35,6 @@ pub struct LocalProposal {
     pub oracle_event: OracleEvent<Secp256k1>,
     pub oracle_info: OracleInfo<Secp256k1>,
     pub keypair: KeyPair,
-    pub psbt_inputs: Vec<psbt::Input>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -109,13 +107,12 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         }
         let keypair = self.keychain.keypair_for_proposal(&event_id, 0);
 
-        let builder = TxBuilder::default()
+        let mut builder = self.wallet.build_tx();
+        builder
             .fee_rate(FeeRate::from_sat_per_vb(0.0))
             .add_recipient(Script::default(), value.as_sat());
 
-        let (psbt, txdetails) = self
-            .wallet
-            .create_tx::<DefaultCoinSelectionAlgorithm>(builder)?;
+        let (psbt, txdetails) = builder.finish()?;
 
         assert_eq!(txdetails.fees, 0);
 
@@ -127,8 +124,6 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             .iter()
             .map(|txin| txin.previous_output.clone())
             .collect();
-
-        let psbt_inputs = psbt.inputs.clone();
 
         let change = if outputs.len() > 1 {
             if outputs.len() != 2 {
@@ -169,7 +164,6 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             oracle_event,
             oracle_info,
             keypair,
-            psbt_inputs,
         };
 
         let bet_id = self

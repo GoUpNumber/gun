@@ -38,7 +38,7 @@ async fn create_party(
 
     while wallet.get_balance()? < 100_000 {
         fund_wallet(&wallet).await?;
-        tokio::time::delay_for(Duration::from_millis(1_000)).await;
+        tokio::time::sleep(Duration::from_millis(1_000)).await;
         wallet.sync(noop_progress(), None).await?;
         println!("syncing done on party {} -- checking balance", id);
     }
@@ -104,15 +104,17 @@ pub async fn end_to_end() {
     let (local_proposal, decrypted_offer) =
         party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
 
+    let offer_inputs = party_1.lookup_offer_inputs(&decrypted_offer.offer).await.unwrap();
+
     let joint_output_1 = party_1
-        .take_offer(p1_bet_id, local_proposal, decrypted_offer)
+        .take_offer(p1_bet_id, local_proposal, decrypted_offer, offer_inputs)
         .await
         .unwrap();
 
     assert_eq!(joint_output_1.descriptor(), joint_output_2.descriptor());
     let tracker = TxTracker::new(
         txid_2,
-        joint_output_2.descriptor(),
+        joint_output_2.wallet_descriptor(),
         EsploraBlockchain::new("http://localhost:3000", None),
         party_2.wallet().network(),
     )

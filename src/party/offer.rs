@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 use crate::{
     bet_database::{Bet, BetDatabase, BetId, BetState},
     change::Change,
@@ -9,16 +7,16 @@ use crate::{
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
-        util::{amount, psbt::PartiallySignedTransaction as PSBT},
+        util::{psbt, psbt::PartiallySignedTransaction as PSBT},
         Amount, Script, Transaction, TxIn, Txid,
     },
     blockchain::Blockchain,
     database::BatchDatabase,
     descriptor::ExtendedDescriptor,
-    wallet::{tx_builder::TxOrdering, ForeignUtxo},
-    TxBuilder,
+    miniscript::DescriptorTrait,
+    wallet::tx_builder::TxOrdering,
 };
-type DefaultCoinSelectionAlgorithm = bdk::wallet::coin_selection::LargestFirstCoinSelection;
+use std::convert::TryInto;
 
 use chacha20::stream_cipher::StreamCipher;
 use olivia_core::{OracleEvent, OracleInfo};
@@ -49,8 +47,6 @@ impl SignedInput {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Payload {
-    #[serde(with = "amount::serde::as_sat")]
-    pub value: Amount,
     pub inputs: Vec<SignedInput>,
     pub change: Option<Change>,
     pub choose_right: bool,
@@ -59,13 +55,11 @@ struct Payload {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Offer {
-    #[serde(with = "amount::serde::as_sat")]
-    pub value: Amount,
-    pub fee: u32,
     pub inputs: Vec<SignedInput>,
     pub change: Option<Change>,
     pub public_key: Point<EvenY>,
     pub choose_right: bool,
+    pub fee: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,7 +74,6 @@ pub struct LocalOffer {
 impl Offer {
     pub fn encrypt(self, cipher: &mut impl StreamCipher) -> EncryptedOffer {
         let payload = Payload {
-            value: self.value,
             inputs: self.inputs,
             change: self.change,
             choose_right: self.choose_right,
@@ -125,7 +118,6 @@ impl EncryptedOffer {
         cipher.decrypt(&mut plaintext);
         let payload = crate::encode::deserialize::<Payload>(&plaintext)?;
         Ok(Offer {
-            value: payload.value,
             inputs: payload.inputs,
             change: payload.change,
             public_key: self.public_key,
@@ -231,12 +223,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             .checked_add(proposal.value)
             .ok_or(anyhow!("BTC amount overflow"))?;
 
-        let output = (
-            joint_output
-                .descriptor()
-                .script_pubkey(self.descriptor_derp_ctx()),
-            output_value,
-        );
+        let output = (joint_output.descriptor().script_pubkey(), output_value);
 
         let (psbt, fee) = self.make_offer_generate_tx(&proposal, output).await?;
 
@@ -271,7 +258,6 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             inputs,
             choose_right,
             fee,
-            value: local_value,
         };
 
         Ok((offer, joint_output, txid))
@@ -282,9 +268,11 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         proposal: &Proposal,
         output: (Script, Amount),
     ) -> anyhow::Result<(PSBT, u32)> {
-        let mut builder = TxBuilder::default()
+        let mut builder = self.wallet.build_tx();
+        builder
             .add_recipient(output.0, output.1.as_sat())
-            .ordering(TxOrdering::Untouched);
+            .ordering(TxOrdering::BIP69Lexicographic);
+
         let mut required_input_value = proposal.value.as_sat();
         let mut input_value = 0;
         for proposal_input in &proposal.payload.inputs {
@@ -293,16 +281,21 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
                 .await
                 .context("Failed to find proposal input")?;
             input_value += txout.value;
-            builder = builder.add_foreign_utxo(ForeignUtxo {
-                txout,
-                outpoint: *proposal_input,
+            let psbt_input = psbt::Input {
+                witness_utxo: Some(txout),
+                ..Default::default()
+            };
+            dbg!(&proposal_input);
+            builder.add_foreign_utxo(
+                *proposal_input,
+                psbt_input,
                 // p2wpkh wieght
-                satisfaction_weight: 4 + 1 + 73 + 33,
-            });
+                4 + 1 + 73 + 33,
+            )?;
         }
 
         if let Some(change) = &proposal.payload.change {
-            builder = builder.add_recipient(change.script().clone(), change.value());
+            builder.add_recipient(change.script().clone(), change.value());
             required_input_value += change.value();
         }
 
@@ -314,10 +307,10 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             ));
         }
 
-        let (psbt, tx_details) = self
-            .wallet
-            .create_tx::<DefaultCoinSelectionAlgorithm>(builder)
+        let (psbt, tx_details) = builder
+            .finish()
             .context("Unable to create offer transaction")?;
+        dbg!("offer", &psbt);
         let (psbt, is_final) = self
             .wallet
             .sign(psbt, None)

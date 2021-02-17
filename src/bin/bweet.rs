@@ -1,9 +1,10 @@
 #![feature(backtrace)]
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::Network, blockchain::EsploraBlockchain, cli, cli::structopt::StructOpt,
-    descriptor::Segwitv0, keys::GeneratedKey, reqwest, sled, Wallet,
+    bitcoin::Network, blockchain::EsploraBlockchain, descriptor::Segwitv0, keys::GeneratedKey,
+    reqwest, sled, Wallet,
 };
+use bdk_cli::structopt::StructOpt;
 use bweet::{
     bitcoin::Amount,
     keychain::Keychain,
@@ -18,7 +19,7 @@ macro_rules! cli_app {
         default_dir.push(&dirs::home_dir().unwrap());
         default_dir.push(".bweet");
 
-        let $app = cli::WalletOpt::clap()
+        let $app = bdk_cli::CliSubCommand::clap()
             .subcommand(
                 SubCommand::with_name("bet")
                     .about("Bets")
@@ -110,13 +111,16 @@ async fn main() -> anyhow::Result<()> {
             unreachable!()
         }
     } else {
-        serde_json::to_string(
-            &cli::handle_wallet_subcommand(
-                party.wallet(),
-                cli::WalletSubCommand::from_clap(&matches),
-            )
-            .await?,
-        )?
+        let wallet_command = bdk_cli::WalletSubCommand::from_clap(&matches);
+        let result = match wallet_command {
+            bdk_cli::WalletSubCommand::OnlineWalletSubCommand(online_command) => {
+                bdk_cli::handle_online_wallet_subcommand(party.wallet(), online_command).await?
+            }
+            bdk_cli::WalletSubCommand::OfflineWalletSubCommand(offline_command) => {
+                bdk_cli::handle_offline_wallet_subcommand(party.wallet(), offline_command)?
+            }
+        };
+        serde_json::to_string(&result).unwrap()
     };
 
     println!("{}", result);

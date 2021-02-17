@@ -5,7 +5,6 @@ use bdk::{
     bitcoin::Transaction,
     blockchain::{noop_progress, Blockchain},
     database::BatchDatabase,
-    TxBuilder,
 };
 use olivia_secp256k1::fun::{marker::*, Scalar};
 
@@ -40,11 +39,14 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
                     ));
                 }
 
-                let (psbt, _) = wallet.create_tx(
-                    TxBuilder::new()
+                let (psbt, _) = {
+                    let mut builder = wallet.build_tx();
+                    builder
                         .set_single_recipient(self.wallet.get_new_address()?.script_pubkey())
-                        .drain_wallet(),
-                )?;
+                        .drain_wallet();
+                    builder.finish()?
+                };
+
                 let (psbt, is_final) = wallet.sign(psbt, None)?;
                 if !is_final {
                     return Err(anyhow!("Failed to sign calim transaction"));

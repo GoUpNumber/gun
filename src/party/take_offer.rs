@@ -1,14 +1,13 @@
 use crate::bet_database::{BetDatabase, BetId, BetState};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{
-        util::{psbt, psbt::PartiallySignedTransaction as PSBT},
-        Amount, Script, Transaction, TxIn, TxOut,
-    },
+    bitcoin::{util::psbt, Amount, Script, Transaction},
     blockchain::Blockchain,
     database::BatchDatabase,
+    wallet::tx_builder::TxOrdering,
 };
 use chacha20::ChaCha20Rng;
+use miniscript::DescriptorTrait;
 use std::convert::TryInto;
 
 use super::{Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party, Proposal};
@@ -17,6 +16,12 @@ use super::{Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party, Pr
 pub struct DecryptedOffer {
     pub offer: Offer,
     pub rng: ChaCha20Rng,
+}
+
+#[derive(Debug, Clone)]
+pub struct OfferInputs {
+    pub offer_value: Amount,
+    pub psbt_inputs: Vec<psbt::Input>,
 }
 
 impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
@@ -41,18 +46,47 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         }
     }
 
+    pub async fn lookup_offer_inputs(&self, offer: &Offer) -> anyhow::Result<OfferInputs> {
+        let mut psbt_inputs = vec![];
+        let mut input_value = 0;
+        for input in &offer.inputs {
+            let txout = self
+                .get_txout(input.outpoint)
+                .await
+                .context("Failed to find input for offer")?;
+            input_value += txout.value;
+            let psbt_input = psbt::Input {
+                witness_utxo: Some(txout),
+                final_script_witness: Some(input.witness.clone()),
+                ..Default::default()
+            };
+            psbt_inputs.push(psbt_input);
+        }
+
+        let offer_value = input_value
+            .checked_sub(offer.change.as_ref().map(|c| c.value()).unwrap_or(0))
+            .ok_or(anyhow!("offer change is absurdly high"))?
+            .checked_sub(offer.fee as u64)
+            .ok_or(anyhow!("fee is absurdly high"))?;
+
+        Ok(OfferInputs {
+            psbt_inputs,
+            offer_value: Amount::from_sat(offer_value),
+        })
+    }
+
     pub async fn take_offer(
         &self,
         bet_id: BetId,
         local_proposal: LocalProposal,
         offer: DecryptedOffer,
+        offer_inputs: OfferInputs,
     ) -> anyhow::Result<JointOutput> {
         let DecryptedOffer { offer, mut rng } = offer;
         let LocalProposal {
             oracle_event,
             oracle_info,
             proposal,
-            psbt_inputs,
             ..
         } = local_proposal;
 
@@ -69,20 +103,16 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             &mut rng,
         );
 
-        let output_value = proposal
-            .value
-            .checked_add(offer.value)
-            .ok_or(anyhow!("BTC value overflow"))?;
-
         let output = (
-            joint_output
-                .descriptor()
-                .script_pubkey(self.descriptor_derp_ctx()),
-            output_value,
+            joint_output.descriptor().script_pubkey(),
+            offer_inputs
+                .offer_value
+                .checked_add(proposal.value)
+                .expect("we've checked the offer value on the chain"),
         );
 
         let tx = self
-            .take_offer_generate_tx(proposal.clone(), psbt_inputs, offer.clone(), output)
+            .take_offer_generate_tx(proposal.clone(), offer, offer_inputs, output)
             .await?;
 
         self.bets_db
@@ -99,112 +129,36 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
     pub async fn take_offer_generate_tx(
         &self,
         proposal: Proposal,
-        my_inputs: Vec<psbt::Input>,
         offer: Offer,
+        offer_inputs: OfferInputs,
         output: (Script, Amount),
     ) -> anyhow::Result<Transaction> {
-        let proposal_inputs = proposal.payload.inputs;
-        let offer_inputs = offer.inputs.iter().map(|i| i.outpoint.clone());
-        let mut input_value = 0;
-        let mut output_value = output.1.as_sat();
-        let mut real_offer_value = 0;
+        let mut builder = self.wallet.build_tx();
 
-        for input in &offer.inputs {
-            let txout = self
-                .get_txout(input.outpoint)
-                .await
-                .context("Failed to find input for offer")?;
-            real_offer_value += txout.value;
-            input_value += txout.value;
+        builder
+            .manually_selected_only()
+            .ordering(TxOrdering::BIP69Lexicographic)
+            .fee_absolute(offer.fee as u64);
+
+        for proposal_input in proposal.payload.inputs {
+            builder.add_utxo(proposal_input)?;
         }
 
-        for input in &my_inputs {
-            input_value += input
-                .witness_utxo
-                .as_ref()
-                .expect("we only make proposals with segwit inputs")
-                .value;
+        for (input, psbt_input) in offer.inputs.iter().zip(offer_inputs.psbt_inputs) {
+            builder.add_foreign_utxo(input.outpoint, psbt_input, 4 + 1 + 73 + 33)?;
         }
-
-        let mut tx = Transaction {
-            input: proposal_inputs
-                .clone()
-                .into_iter()
-                .chain(offer_inputs.clone().into_iter())
-                .map(|previous_output| TxIn {
-                    previous_output,
-                    ..Default::default()
-                })
-                .collect(),
-            version: 1,
-            lock_time: 0,
-            output: vec![TxOut {
-                script_pubkey: output.0,
-                value: output.1.as_sat(),
-            }],
-        };
 
         if let Some(change) = proposal.payload.change {
-            output_value = output_value
-                .checked_add(change.value())
-                .ok_or(anyhow!("Proposal change value is absurdly high"))?;
-            tx.output.push(TxOut {
-                script_pubkey: change.script().clone(),
-                value: change.value(),
-            });
+            builder.add_recipient(change.script().clone(), change.value());
         }
 
         if let Some(change) = offer.change {
-            output_value = output_value
-                .checked_add(change.value())
-                .ok_or(anyhow!("Offer change value is absurdly large"))?;
-            real_offer_value = real_offer_value
-                .checked_sub(change.value())
-                .ok_or(anyhow!("Offer change value is incoherently large"))?;
-            tx.output.push(TxOut {
-                script_pubkey: change.script().clone(),
-                value: change.value(),
-            });
+            builder.add_recipient(change.script().clone(), change.value());
         }
 
-        let mut psbt = PSBT::from_unsigned_tx(tx)?;
-        let mut input_idx = 0;
+        builder.add_recipient(output.0, output.1.as_sat());
 
-        for my_input in my_inputs {
-            psbt.inputs[input_idx] = my_input;
-            input_idx += 1;
-        }
-
-        for offer_input in offer.inputs.into_iter() {
-            psbt.inputs[input_idx].final_script_witness = Some(offer_input.witness);
-            input_idx += 1;
-        }
-
-        let real_fee = input_value.checked_sub(output_value).ok_or(anyhow!(
-            "Value provided by inputs ({}) was less than output amount ({})",
-            input_value,
-            output_value
-        ))?;
-
-        if real_fee < offer.fee.into() {
-            return Err(anyhow!(
-                "The offer pays lower fee ({}) than stated ({})",
-                real_fee,
-                offer.fee
-            ));
-        }
-
-        real_offer_value = real_offer_value
-            .checked_sub(real_fee)
-            .ok_or(anyhow!("Fee isn't covered by offered inputs"))?;
-
-        if real_offer_value != offer.value.as_sat() {
-            return Err(anyhow!(
-                "The offer's inputs do ({}) not sum up to the value in the offer ({})",
-                real_offer_value,
-                offer.value
-            ));
-        }
+        let (psbt, _tx_details) = builder.finish()?;
 
         let (psbt, is_final) = self
             .wallet

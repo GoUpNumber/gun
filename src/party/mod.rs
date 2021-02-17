@@ -6,14 +6,12 @@ mod take_offer;
 mod tx_tracker;
 
 use bdk::{
-    bitcoin::{secp256k1, util::bip32::ChildNumber, OutPoint, TxOut},
+    bitcoin::{OutPoint, TxOut},
     blockchain::EsploraBlockchain,
 };
 pub use joint_output::*;
 pub use proposal::*;
 pub use tx_tracker::*;
-
-use miniscript::DescriptorPublicKeyCtx;
 
 use crate::{
     bet_database::{BetDatabase, BetId},
@@ -61,13 +59,6 @@ where
 
     pub fn bet_db(&self) -> &BD {
         &self.bets_db
-    }
-
-    pub(crate) fn descriptor_derp_ctx(&self) -> DescriptorPublicKeyCtx<secp256k1::All> {
-        DescriptorPublicKeyCtx::new(
-            self.wallet.secp_ctx(),
-            ChildNumber::Normal { index: 0xdeadbeef },
-        )
     }
 
     pub async fn save_oracle_info(
@@ -129,7 +120,6 @@ where
         let tx = self
             .wallet
             .client()
-            .unwrap()
             .get_tx(&outpoint.txid)
             .await?
             .ok_or(anyhow!("txid not found {}", outpoint.txid))?;

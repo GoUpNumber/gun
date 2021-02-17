@@ -1,17 +1,19 @@
 use anyhow::anyhow;
 use bdk::{
-    bitcoin::{secp256k1::SecretKey, Network, PrivateKey, PublicKey},
+    bitcoin::{self, Network, PrivateKey, PublicKey},
     blockchain::Blockchain,
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
     keys::DescriptorSinglePub,
-    miniscript::policy::concrete::Policy,
-    signer::{SignerId, SignerOrdering},
+    signer::SignerOrdering,
     Wallet,
 };
-use miniscript::{Descriptor, DescriptorPublicKey};
+use miniscript::{descriptor::Wsh, policy::concrete::Policy, Descriptor, DescriptorPublicKey};
 use olivia_secp256k1::fun::{g, marker::*, rand_core::RngCore, s, Point, Scalar, G};
-use std::{convert::TryInto, sync::Arc};
+use std::{
+    convert::{Infallible, TryInto},
+    sync::Arc,
+};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
 pub enum Either<T> {
@@ -95,26 +97,21 @@ impl JointOutput {
         }
     }
 
-    pub fn descriptor(&self) -> ExtendedDescriptor {
-        let policy = Policy::<DescriptorPublicKey>::Or(
+    pub fn policy(&self) -> Policy<bitcoin::PublicKey> {
+        Policy::<bitcoin::PublicKey>::Or(
             self.output_keys
                 .iter()
                 .map(|key| {
                     (
                         1,
-                        Policy::Key(DescriptorPublicKey::SinglePub(DescriptorSinglePub {
-                            origin: None,
-                            key: PublicKey {
-                                compressed: true,
-                                key: (*key).into(),
-                            },
-                        })),
+                        Policy::Key(PublicKey {
+                            compressed: true,
+                            key: (*key).into(),
+                        }),
                     )
                 })
                 .collect(),
-        );
-
-        Descriptor::Wsh(policy.compile().unwrap())
+        )
     }
 
     pub async fn claim<B: Blockchain>(
@@ -122,8 +119,9 @@ impl JointOutput {
         blockchain: B,
         sig_scalar: Scalar<Public, Zero>,
     ) -> anyhow::Result<Wallet<B, MemoryDatabase>> {
+        let descriptor = self.wallet_descriptor();
         let mut wallet = Wallet::new(
-            self.descriptor(),
+            descriptor,
             None,
             Network::Regtest,
             MemoryDatabase::default(),
@@ -139,27 +137,42 @@ impl JointOutput {
             return Err(anyhow!("oracle's scalar does not much what was expected"));
         }
 
-        let secret_key = SecretKey::from(
-            completed_key
-                .mark::<NonZero>()
-                .expect("must not be zero since it was equal to the output key"),
-        );
+        let secret_key = completed_key
+            .mark::<NonZero>()
+            .expect("must not be zero since it was equal to the output key")
+            .into();
+
         let priv_key = PrivateKey {
             compressed: true,
             network: Network::Regtest,
             key: secret_key,
         };
-        let public_key = PublicKey {
-            key: public_key.into(),
-            compressed: true,
-        };
 
         wallet.add_signer(
             bdk::KeychainKind::External,
-            SignerId::PkHash(public_key.pubkey_hash().into()),
             SignerOrdering(1),
             Arc::new(priv_key),
         );
         Ok(wallet)
+    }
+
+    pub fn wallet_descriptor(&self) -> ExtendedDescriptor {
+        let compiled_policy = self
+            .policy()
+            .translate_pk(&mut |pk: &bitcoin::PublicKey| -> Result<_, Infallible> {
+                Ok(DescriptorPublicKey::SinglePub(DescriptorSinglePub {
+                    origin: None,
+                    key: *pk,
+                }))
+            })
+            .unwrap()
+            .compile()
+            .unwrap();
+        let descriptor = Descriptor::Wsh(Wsh::new(compiled_policy).unwrap());
+        descriptor
+    }
+
+    pub fn descriptor(&self) -> Descriptor<bitcoin::PublicKey> {
+        Descriptor::Wsh(Wsh::new(self.policy().compile().unwrap()).unwrap())
     }
 }
