@@ -5,7 +5,14 @@ pub fn serialize_base2048<S: serde::Serialize>(thing: &S) -> String {
 }
 
 pub fn serialize<S: serde::Serialize>(thing: &S) -> Vec<u8> {
-    bincode::options().serialize(thing).unwrap()
+    let res = bincode::options().serialize(thing);
+    match res {
+        Ok(res) => res,
+            Err(e) => {
+                dbg!(e.to_string());
+                unimplemented!()
+            }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

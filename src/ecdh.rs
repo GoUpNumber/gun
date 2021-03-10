@@ -1,5 +1,5 @@
 use crate::{keychain::KeyPair, rand_core::SeedableRng};
-use chacha20::{stream_cipher::*, ChaCha20, ChaCha20Rng};
+use chacha20::{cipher::*, ChaCha20, ChaCha20Rng};
 use olivia_secp256k1::schnorr_fun::fun::{g, marker::*, Point};
 use sha2::{
     digest::{

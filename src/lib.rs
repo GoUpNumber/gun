@@ -10,5 +10,5 @@ pub mod keychain;
 pub mod offer;
 pub mod party;
 
-pub use chacha20::stream_cipher;
+pub use chacha20::cipher;
 pub use olivia_secp256k1::schnorr_fun::fun::rand_core;

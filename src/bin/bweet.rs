@@ -11,7 +11,7 @@ use bweet::{
     party::{Party, Proposal},
 };
 use clap::{Arg, SubCommand};
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
 macro_rules! cli_app {
     ($app:ident) => {
@@ -19,13 +19,15 @@ macro_rules! cli_app {
         default_dir.push(&dirs::home_dir().unwrap());
         default_dir.push(".bweet");
 
-        let $app = bdk_cli::CliSubCommand::clap()
+        let $app = bdk_cli::WalletSubCommand::clap()
             .subcommand(
                 SubCommand::with_name("bet")
-                    .about("Bets")
+                    .about("Make or take a bet")
                     .subcommand(
                         SubCommand::with_name("propose")
-                            .arg(Arg::with_name("event-url").required(true)),
+                            .about("Propose a bet")
+                            .arg(Arg::with_name("event-url").required(true).help("The url where the oracle is publishing the event"))
+                            .arg(Arg::with_name("value").required(true).help("The value of the bet"))
                     )
                     .subcommand(
                         SubCommand::with_name("offer")
@@ -47,6 +49,7 @@ macro_rules! cli_app {
     };
 }
 
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     cli_app!(app);
@@ -55,8 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let (db_file, seed) = prepare_db(wallet_dir)?;
     let database = sled::open(db_file.to_str().unwrap())?;
     let wallet_db = database.open_tree("wallet")?;
-    // let bets_db = database.open_tree("bets")?;
-    let bets_db = bweet::bet_database::InMemory::default();
+    let bets_db = database.open_tree("bets")?;
     let esplora_url = "http://localhost:3000".to_string();
     let esplora = EsploraBlockchain::new(&esplora_url, None);
     let keychain = Keychain::new(seed);
@@ -64,37 +66,47 @@ async fn main() -> anyhow::Result<()> {
         keychain.main_wallet_xprv(Network::Regtest),
         bdk::KeychainKind::External,
     );
+
     let wallet = Wallet::new(descriptor, None, Network::Regtest, wallet_db, esplora)
         .await
         .context("Initializing wallet failed")?;
 
     let party = Party::new(wallet, bets_db, keychain, esplora_url);
 
-    let result = if let Some(sub_matches) = matches.subcommand_matches("bet") {
-        if let Some(propose_args) = sub_matches.subcommand_matches("propose") {
-            let event_url = reqwest::Url::parse(propose_args.value_of("event-url").unwrap())?;
-            let (_bet_id, proposal) = party
-                .make_proposal_from_url(event_url, Amount::from_str_with_denomination("0.01 BTC")?)
-                .await?;
+    let result = match matches.subcommand() {
+        ("bet", Some(matches)) => {
+            match matches.subcommand() {
+                ("propose", Some(args)) => {
+                    let event_url = reqwest::Url::parse(args.value_of("event-url").unwrap())?;
+                    let value = match args.value_of("value") {
+                        Some("all") => Amount::from_sat(party.wallet().get_balance()?),
+                        Some(value) => Amount::from_str(value)?,
+                        _ => {
+                            return Err(anyhow!("{}", args.usage()))
+                        }
+                    };
+                    let (_bet_id, proposal) = party.make_proposal_from_url(event_url, value)
+                        .await?;
 
-            proposal.to_string()
-        } else if let Some(offer_args) = sub_matches.subcommand_matches("offer") {
-            let proposal = Proposal::from_str(offer_args.value_of("proposal").unwrap())
-                .map_err(|e| anyhow!("inlvaid proposal: {}", e))?;
-            let (_bet_id, offer, _, _) = party
-                .make_offer(
-                    proposal,
-                    true,
-                    Amount::from_str_with_denomination("0.02 BTC").unwrap(),
-                )
-                .await
-                .context("failed to generate offer")?;
-            offer.to_string()
-        } else {
-            unreachable!()
+                    proposal.to_string()
+                }
+                ("offer", Some(args)) => {
+                    let proposal = Proposal::from_str(args.value_of("proposal").unwrap())
+                        .map_err(|e| anyhow!("inlvaid proposal: {}", e))?;
+                    let (_bet_id, offer) = party
+                        .make_offer(
+                            proposal,
+                            true,
+                            Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                        )
+                        .await
+                        .context("failed to generate offer")?;
+                    offer.to_string()
+                }
+                _ => matches.usage().into(),
+            }
         }
-    } else if let Some(sub_matches) = matches.subcommand_matches("test") {
-        if let Some(_) = sub_matches.subcommand_matches("fund_wallet") {
+        ("test", _) => {
             let wallet = party.wallet();
             let old_balance = wallet.get_balance()?;
             bweet::cmd::fund_wallet(&wallet).await?;
@@ -107,22 +119,20 @@ async fn main() -> anyhow::Result<()> {
 
             let new_balance = wallet.get_balance()?;
             format!("old balance: {}\nnew balance: {}", old_balance, new_balance)
-        } else {
-            unreachable!()
         }
-    } else {
-        let wallet_command = bdk_cli::WalletSubCommand::from_clap(&matches);
-        let result = match wallet_command {
-            bdk_cli::WalletSubCommand::OnlineWalletSubCommand(online_command) => {
-                bdk_cli::handle_online_wallet_subcommand(party.wallet(), online_command).await?
-            }
-            bdk_cli::WalletSubCommand::OfflineWalletSubCommand(offline_command) => {
-                bdk_cli::handle_offline_wallet_subcommand(party.wallet(), offline_command)?
-            }
-        };
-        serde_json::to_string(&result).unwrap()
+        _ => {
+            let wallet_command = bdk_cli::WalletSubCommand::from_clap(&matches);
+            let result = match wallet_command {
+                bdk_cli::WalletSubCommand::OnlineWalletSubCommand(online_command) => {
+                    bdk_cli::handle_online_wallet_subcommand(party.wallet(), online_command).await?
+                }
+                bdk_cli::WalletSubCommand::OfflineWalletSubCommand(offline_command) => {
+                    bdk_cli::handle_offline_wallet_subcommand(party.wallet(), offline_command)?
+                }
+            };
+            serde_json::to_string(&result).unwrap()
+        }
     };
-
     println!("{}", result);
     Ok(())
 }

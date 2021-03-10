@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         util::{psbt, psbt::PartiallySignedTransaction as PSBT},
-        Amount, Script, Transaction, TxIn, Txid,
+        Amount, OutPoint, Script, Transaction, TxIn,
     },
     blockchain::Blockchain,
     database::BatchDatabase,
@@ -16,16 +16,15 @@ use bdk::{
     miniscript::DescriptorTrait,
     wallet::tx_builder::TxOrdering,
 };
-use std::convert::TryInto;
-
-use chacha20::stream_cipher::StreamCipher;
+use chacha20::cipher::StreamCipher;
 use olivia_core::{OracleEvent, OracleInfo};
 use olivia_secp256k1::{
     fun::{marker::*, Point, XOnly},
     Secp256k1,
 };
+use std::convert::TryInto;
 
-use super::Either;
+use super::{randomize::Randomize, Either};
 
 pub type OfferId = XOnly;
 
@@ -80,7 +79,7 @@ impl Offer {
             fee: self.fee,
         };
         let mut ciphertext = crate::encode::serialize(&payload);
-        cipher.encrypt(&mut ciphertext);
+        cipher.apply_keystream(&mut ciphertext);
         EncryptedOffer {
             public_key: self.public_key,
             ciphertext,
@@ -115,7 +114,7 @@ impl EncryptedOffer {
 
     pub fn decrypt(self, cipher: &mut impl StreamCipher) -> anyhow::Result<Offer> {
         let mut plaintext = self.ciphertext;
-        cipher.decrypt(&mut plaintext);
+        cipher.apply_keystream(&mut plaintext);
         let payload = crate::encode::deserialize::<Payload>(&plaintext)?;
         Ok(Offer {
             inputs: payload.inputs,
@@ -133,7 +132,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         proposal: Proposal,
         choose_right: bool,
         local_value: Amount,
-    ) -> anyhow::Result<(BetId, EncryptedOffer, JointOutput, Txid)> {
+    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
         let url = crate::reqwest::Url::parse(&format!(
             "http://{}{}",
             proposal.oracle, proposal.event_id
@@ -157,7 +156,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         local_value: Amount,
         oracle_event: OracleEvent<Secp256k1>,
         oracle_info: OracleInfo<Secp256k1>,
-    ) -> anyhow::Result<(BetId, EncryptedOffer, JointOutput, Txid)> {
+    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
         let remote_public_key = &proposal.payload.public_key;
         let event_id = &oracle_event.event.id;
         if !event_id.is_binary() {
@@ -174,8 +173,11 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
 
         let local_keypair = self.keychain.keypair_for_offer(&proposal);
         let (mut cipher, mut rng) = crate::ecdh::ecdh(&local_keypair, remote_public_key);
+        let output_value = local_value
+            .checked_add(proposal.value)
+            .ok_or(anyhow!("BTC amount overflow"))?;
 
-        let (offer, joint_output, txid) = self
+        let (offer, joint_output, outpoint) = self
             .generate_offer(
                 proposal,
                 local_value,
@@ -187,45 +189,42 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             .await?;
 
         let bet = Bet {
-            funding_txid: txid,
-            vout: 0,
+            outpoint,
             joint_output: joint_output.clone(),
             oracle_info,
             oracle_event,
+            value: output_value,
         };
 
         let bet_id = self.bets_db.insert_bet(BetState::Offered { bet })?;
         let encrypted_offer = offer.encrypt(&mut cipher);
 
-        Ok((bet_id, encrypted_offer, joint_output, txid))
+        Ok((bet_id, encrypted_offer))
     }
 
     async fn generate_offer(
         &self,
         proposal: Proposal,
-        local_value: Amount,
+        output_value: Amount,
         anticipated_signatures: [Point<Jacobian, Public, Zero>; 2],
         local_keypair: KeyPair,
         choose_right: bool,
         rng: &mut chacha20::ChaCha20Rng,
-    ) -> anyhow::Result<(Offer, JointOutput, Txid)> {
+    ) -> anyhow::Result<(Offer, JointOutput, OutPoint)> {
         let remote_public_key = proposal.payload.public_key;
+        let randomize = Randomize::new(rng);
 
         let joint_output = JointOutput::new(
             [remote_public_key, local_keypair.public_key],
             Either::Right(local_keypair.secret_key),
             anticipated_signatures,
             choose_right,
-            rng,
+            randomize,
         );
-
-        let output_value = local_value
-            .checked_add(proposal.value)
-            .ok_or(anyhow!("BTC amount overflow"))?;
 
         let output = (joint_output.descriptor().script_pubkey(), output_value);
 
-        let (psbt, fee) = self.make_offer_generate_tx(&proposal, output).await?;
+        let (psbt, vout, fee) = self.make_offer_generate_tx(&proposal, output).await?;
 
         let inputs: Vec<SignedInput> = psbt
             .inputs
@@ -260,17 +259,17 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             fee,
         };
 
-        Ok((offer, joint_output, txid))
+        Ok((offer, joint_output, OutPoint { txid, vout }))
     }
 
     pub async fn make_offer_generate_tx(
         &self,
         proposal: &Proposal,
         output: (Script, Amount),
-    ) -> anyhow::Result<(PSBT, u32)> {
+    ) -> anyhow::Result<(PSBT, u32, u32)> {
         let mut builder = self.wallet.build_tx();
         builder
-            .add_recipient(output.0, output.1.as_sat())
+            .add_recipient(output.0.clone(), output.1.as_sat())
             .ordering(TxOrdering::BIP69Lexicographic);
 
         let mut required_input_value = proposal.value.as_sat();
@@ -285,7 +284,6 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
                 witness_utxo: Some(txout),
                 ..Default::default()
             };
-            dbg!(&proposal_input);
             builder.add_foreign_utxo(
                 *proposal_input,
                 psbt_input,
@@ -310,7 +308,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         let (psbt, tx_details) = builder
             .finish()
             .context("Unable to create offer transaction")?;
-        dbg!("offer", &psbt);
+
         let (psbt, is_final) = self
             .wallet
             .sign(psbt, None)
@@ -319,7 +317,15 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             !is_final,
             "we haven't got the other party's signature so it can't be final here"
         );
-        Ok((psbt, tx_details.fees as u32))
+        let (vout, _) = psbt
+            .global
+            .unsigned_tx
+            .output
+            .iter()
+            .enumerate()
+            .find(|(_i, txout)| txout.script_pubkey == output.0)
+            .expect("The output must be in there");
+        Ok((psbt, vout as u32, tx_details.fees as u32))
     }
 }
 

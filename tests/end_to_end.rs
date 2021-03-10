@@ -9,7 +9,7 @@ use bweet::{
     bet_database,
     bitcoin::Amount,
     keychain::Keychain,
-    party::{Party, TxTracker},
+    party::{Either, Party},
 };
 use olivia_core::{Event, EventId, OracleEvent, OracleInfo, Schnorr};
 use olivia_secp256k1::{fun::Scalar, Secp256k1};
@@ -90,7 +90,7 @@ pub async fn end_to_end() {
         )
         .unwrap();
 
-    let (p2_bet_id, encrypted_offer, joint_output_2, txid_2) = party_2
+    let (p2_bet_id, encrypted_offer) = party_2
         .make_offer_with_oracle_event(
             proposal.clone(),
             true,
@@ -101,44 +101,47 @@ pub async fn end_to_end() {
         .await
         .unwrap();
 
-    let (local_proposal, decrypted_offer) =
-        party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
+    let decrypted_offer = party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
 
-    let offer_inputs = party_1.lookup_offer_inputs(&decrypted_offer.offer).await.unwrap();
-
-    let joint_output_1 = party_1
-        .take_offer(p1_bet_id, local_proposal, decrypted_offer, offer_inputs)
+    let offer_inputs = party_1
+        .lookup_offer_inputs(&decrypted_offer.offer)
         .await
         .unwrap();
 
-    assert_eq!(joint_output_1.descriptor(), joint_output_2.descriptor());
-    let tracker = TxTracker::new(
-        txid_2,
-        joint_output_2.wallet_descriptor(),
-        EsploraBlockchain::new("http://localhost:3000", None),
-        party_2.wallet().network(),
-    )
-    .await
-    .unwrap();
-
-    let tx_details = tracker.wait_confirmed().await.unwrap();
-
     party_1
-        .bet_confirmed(p1_bet_id, tx_details.height.unwrap())
+        .take_offer(p1_bet_id, decrypted_offer, offer_inputs)
         .unwrap();
-    party_2
-        .bet_confirmed(p2_bet_id, tx_details.height.unwrap())
-        .unwrap();
+
+    while party_1.take_next_action(p1_bet_id).await.unwrap() == false {}
+    while party_2.take_next_action(p2_bet_id).await.unwrap() == false {}
 
     let outcome = event_id.fragments(0).nth(0).unwrap();
-    let attestation: Scalar<_, _> = Secp256k1::reveal_signature_s(
-        &oracle_keypair,
-        oracle_nonce_keypair.into(),
-        outcome.to_string().as_bytes(),
-    )
-    .into();
+    let attestation = Either::Left(
+        Secp256k1::reveal_signature_s(
+            &oracle_keypair,
+            oracle_nonce_keypair.into(),
+            outcome.to_string().as_bytes(),
+        )
+        .into(),
+    );
 
-    party_1.claim(p1_bet_id, attestation).await.unwrap();
+    party_1
+        .learn_outcome(p1_bet_id, attestation.clone())
+        .unwrap();
+    party_2.learn_outcome(p2_bet_id, attestation).unwrap();
+
+    let p1_claim = party_1
+        .claim_to(None)
+        .unwrap()
+        .expect("p1 won so should return a tx here");
+    assert!(
+        party_2.claim_to(None).unwrap().is_none(),
+        "p2 lost so should no have claim tx"
+    );
+
+    assert_eq!(p1_claim.bets, vec![p1_bet_id]);
+    party_1.wallet().broadcast(p1_claim.tx).await.unwrap();
     party_1.wallet().sync(noop_progress(), None).await.unwrap();
+
     assert!(party_1.wallet().get_balance().unwrap() > p1_initial_balance);
 }

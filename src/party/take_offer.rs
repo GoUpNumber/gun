@@ -1,7 +1,7 @@
-use crate::bet_database::{BetDatabase, BetId, BetState};
+use crate::bet_database::{Bet, BetDatabase, BetId, BetState};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, Amount, Script, Transaction},
+    bitcoin::{util::psbt, Amount, OutPoint, Script, Transaction},
     blockchain::Blockchain,
     database::BatchDatabase,
     wallet::tx_builder::TxOrdering,
@@ -10,9 +10,12 @@ use chacha20::ChaCha20Rng;
 use miniscript::DescriptorTrait;
 use std::convert::TryInto;
 
-use super::{Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party, Proposal};
+use super::{
+    randomize::Randomize, Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party,
+    Proposal,
+};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DecryptedOffer {
     pub offer: Offer,
     pub rng: ChaCha20Rng,
@@ -29,7 +32,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         &self,
         bet_id: BetId,
         encrypted_offer: EncryptedOffer,
-    ) -> anyhow::Result<(LocalProposal, DecryptedOffer)> {
+    ) -> anyhow::Result<DecryptedOffer> {
         let local_proposal = self
             .bets_db
             .get_bet(bet_id)?
@@ -40,7 +43,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
                 let (mut cipher, rng) =
                     crate::ecdh::ecdh(&local_proposal.keypair, &encrypted_offer.public_key);
                 let offer = encrypted_offer.decrypt(&mut cipher)?;
-                Ok((local_proposal, DecryptedOffer { offer, rng }))
+                Ok(DecryptedOffer { offer, rng })
             }
             _ => Err(anyhow!("Offer has been taken for this proposal already")),
         }
@@ -75,64 +78,81 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         })
     }
 
-    pub async fn take_offer(
+    pub fn take_offer(
         &self,
         bet_id: BetId,
-        local_proposal: LocalProposal,
         offer: DecryptedOffer,
         offer_inputs: OfferInputs,
-    ) -> anyhow::Result<JointOutput> {
+    ) -> anyhow::Result<()> {
         let DecryptedOffer { offer, mut rng } = offer;
-        let LocalProposal {
-            oracle_event,
-            oracle_info,
-            proposal,
-            ..
-        } = local_proposal;
+        let randomize = Randomize::new(&mut rng);
 
-        let anticipated_signatures = oracle_event
-            .anticipate_signatures(&oracle_info.public_key, 0)
-            .try_into()
-            .map_err(|_| anyhow!("wrong number of signatures"))?;
+        self.bets_db.update_bet(bet_id, move |bet_state| {
+            let local_proposal = match bet_state {
+                BetState::Proposed { local_proposal } => local_proposal,
+                _ => return Err(anyhow!("was not in proposed state")),
+            };
 
-        let joint_output = JointOutput::new(
-            [local_proposal.keypair.public_key, offer.public_key],
-            Either::Left(local_proposal.keypair.secret_key),
-            anticipated_signatures,
-            offer.choose_right,
-            &mut rng,
-        );
+            let LocalProposal {
+                oracle_event,
+                oracle_info,
+                proposal,
+                ..
+            } = local_proposal;
 
-        let output = (
-            joint_output.descriptor().script_pubkey(),
-            offer_inputs
+            let anticipated_signatures = oracle_event
+                .anticipate_signatures(&oracle_info.public_key, 0)
+                .try_into()
+                .map_err(|_| anyhow!("wrong number of signatures"))?;
+
+            let joint_output = JointOutput::new(
+                [local_proposal.keypair.public_key, offer.public_key],
+                Either::Left(local_proposal.keypair.secret_key),
+                anticipated_signatures,
+                offer.choose_right,
+                randomize.clone(),
+            );
+
+            let output_value = offer_inputs
                 .offer_value
                 .checked_add(proposal.value)
-                .expect("we've checked the offer value on the chain"),
-        );
+                .expect("we've checked the offer value on the chain");
 
-        let tx = self
-            .take_offer_generate_tx(proposal.clone(), offer, offer_inputs, output)
-            .await?;
+            let output = (joint_output.descriptor().script_pubkey(), output_value);
 
-        self.bets_db
-            .take_offer(bet_id, tx.clone(), 0, joint_output.clone())?;
+            let (tx, vout) = self.take_offer_generate_tx(
+                proposal.clone(),
+                offer.clone(),
+                offer_inputs.clone(),
+                output,
+            )?;
 
-        self.wallet
-            .broadcast(tx)
-            .await
-            .context("Failed to broadcast funding transaction")?;
+            Ok(BetState::Unconfirmed {
+                bet: Bet {
+                    outpoint: OutPoint {
+                        txid: tx.txid(),
+                        vout,
+                    },
+                    oracle_info,
+                    oracle_event,
+                    joint_output,
+                    value: output_value,
+                },
+                funding_transaction: tx,
+                has_broadcast: false
+            })
+        })?;
 
-        Ok(joint_output)
+        Ok(())
     }
 
-    pub async fn take_offer_generate_tx(
+    pub fn take_offer_generate_tx(
         &self,
         proposal: Proposal,
         offer: Offer,
         offer_inputs: OfferInputs,
         output: (Script, Amount),
-    ) -> anyhow::Result<Transaction> {
+    ) -> anyhow::Result<(Transaction, u32)> {
         let mut builder = self.wallet.build_tx();
 
         builder
@@ -156,7 +176,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             builder.add_recipient(change.script().clone(), change.value());
         }
 
-        builder.add_recipient(output.0, output.1.as_sat());
+        builder.add_recipient(output.0.clone(), output.1.as_sat());
 
         let (psbt, _tx_details) = builder.finish()?;
 
@@ -170,6 +190,19 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         }
 
         let tx = psbt.extract_tx();
-        Ok(tx)
+        let vout = tx
+            .output
+            .iter()
+            .enumerate()
+            .find_map(|(i, txout)| {
+                if txout.script_pubkey == output.0 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .expect("our joint outpoint will always exist");
+
+        Ok((tx, vout as u32))
     }
 }

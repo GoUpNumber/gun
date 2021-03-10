@@ -7,11 +7,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use bdk::{
-    bitcoin,
-    bitcoin::{Denomination},
-    blockchain::Blockchain,
-    database::BatchDatabase,
-    reqwest, FeeRate,
+    bitcoin, bitcoin::Denomination, blockchain::Blockchain, database::BatchDatabase, reqwest,
+    FeeRate,
 };
 use core::str::FromStr;
 use olivia_core::{EventId, OracleEvent, OracleInfo};

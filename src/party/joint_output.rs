@@ -1,19 +1,15 @@
 use anyhow::anyhow;
 use bdk::{
-    bitcoin::{self, Network, PrivateKey, PublicKey},
+    bitcoin::{self, secp256k1::SecretKey, PublicKey},
     blockchain::Blockchain,
-    database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
     keys::DescriptorSinglePub,
-    signer::SignerOrdering,
-    Wallet,
 };
 use miniscript::{descriptor::Wsh, policy::concrete::Policy, Descriptor, DescriptorPublicKey};
-use olivia_secp256k1::fun::{g, marker::*, rand_core::RngCore, s, Point, Scalar, G};
-use std::{
-    convert::{Infallible, TryInto},
-    sync::Arc,
-};
+use olivia_secp256k1::fun::{g, marker::*, s, Point, Scalar, G};
+use std::convert::{Infallible, TryInto};
+
+use super::randomize::Randomize;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
 pub enum Either<T> {
@@ -34,6 +30,7 @@ impl<T> Either<T> {
 pub struct JointOutput {
     pub output_keys: [Point; 2],
     pub my_key: Either<Scalar>,
+    pub swapped: bool,
 }
 
 impl JointOutput {
@@ -42,24 +39,37 @@ impl JointOutput {
         my_key: Either<Scalar>,
         anticipated_signatures: [Point<impl PointType, Public, Zero>; 2],
         offer_choose_right: bool,
-        rng: &mut chacha20::ChaCha20Rng,
+        Randomize {
+            r1,
+            r2,
+            swap_points,
+        }: Randomize,
     ) -> Self {
-        let (r1, r2) = (Scalar::random(rng), Scalar::random(rng));
-        let (left, right) = (&anticipated_signatures[0], &anticipated_signatures[1]);
+        let (left, right) = (anticipated_signatures[0], anticipated_signatures[1]);
         let (proposal_key, offer_key) = (&public_keys[0], &public_keys[1]);
 
+        // These unwraps are safe -- we added r1 and r2 to the sum which are both functions of offer_key and
+        // proposal_key it will never add up to zero.
         let mut output_keys = match offer_choose_right {
             true => vec![
-                g!(proposal_key + left + r1 * G),
-                g!(offer_key + right + r2 * G),
+                g!(proposal_key + left + r1 * G)
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap(),
+                g!(offer_key + right + r2 * G)
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap(),
             ],
             false => vec![
-                g!(proposal_key + right + r1 * G),
-                g!(offer_key + left + r2 * G),
+                g!(proposal_key + right + r1 * G)
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap(),
+                g!(offer_key + left + r2 * G)
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap(),
             ],
         };
 
-        let mut my_key = match my_key {
+        let my_key = match my_key {
             Either::Left(key) => {
                 debug_assert!(&g!(key * G) == proposal_key, "secret key wasn't correct");
                 Either::Left(s!(key + r1).mark::<NonZero>().unwrap())
@@ -70,37 +80,23 @@ impl JointOutput {
             }
         };
 
-        let swap = {
-            let mut byte = [0u8; 1];
-            rng.fill_bytes(&mut byte);
-            (byte[0] & 0x01) == 1
-        };
-
-        if swap {
-            my_key = my_key.swap()
-        };
-
-        output_keys.rotate_right(swap as usize);
-
-        // Since we added r1 and r2 to the sum which are both functions of offer_key and proposal_key it will never add up to zero
-        let output_keys = output_keys
-            .into_iter()
-            .map(|k| {
-                k.mark::<(Normal, NonZero)>()
-                    .expect("computionally unreachable")
-            })
-            .collect::<Vec<_>>();
+        output_keys.rotate_right(swap_points as usize);
 
         Self {
             output_keys: output_keys.try_into().unwrap(),
             my_key,
+            swapped: swap_points,
         }
     }
 
     pub fn policy(&self) -> Policy<bitcoin::PublicKey> {
+        let keys = &match self.swapped {
+            false => self.output_keys,
+            true => [self.output_keys[1], self.output_keys[0]],
+        };
+
         Policy::<bitcoin::PublicKey>::Or(
-            self.output_keys
-                .iter()
+            keys.iter()
                 .map(|key| {
                     (
                         1,
@@ -114,20 +110,10 @@ impl JointOutput {
         )
     }
 
-    pub async fn claim<B: Blockchain>(
+    pub async fn compute_privkey<B: Blockchain>(
         &self,
-        blockchain: B,
         sig_scalar: Scalar<Public, Zero>,
-    ) -> anyhow::Result<Wallet<B, MemoryDatabase>> {
-        let descriptor = self.wallet_descriptor();
-        let mut wallet = Wallet::new(
-            descriptor,
-            None,
-            Network::Regtest,
-            MemoryDatabase::default(),
-            blockchain,
-        )
-        .await?;
+    ) -> anyhow::Result<SecretKey> {
         let (completed_key, public_key) = match &self.my_key {
             Either::Left(key) => (s!(key + sig_scalar), self.output_keys[0]),
             Either::Right(key) => (s!(key + sig_scalar), self.output_keys[1]),
@@ -137,23 +123,17 @@ impl JointOutput {
             return Err(anyhow!("oracle's scalar does not much what was expected"));
         }
 
-        let secret_key = completed_key
+        Ok(completed_key
             .mark::<NonZero>()
             .expect("must not be zero since it was equal to the output key")
-            .into();
+            .into())
+    }
 
-        let priv_key = PrivateKey {
-            compressed: true,
-            network: Network::Regtest,
-            key: secret_key,
-        };
-
-        wallet.add_signer(
-            bdk::KeychainKind::External,
-            SignerOrdering(1),
-            Arc::new(priv_key),
-        );
-        Ok(wallet)
+    pub fn my_point(&self) -> &Point {
+        match self.my_key {
+            Either::Left(_) => &self.output_keys[0],
+            Either::Right(_) => &self.output_keys[1],
+        }
     }
 
     pub fn wallet_descriptor(&self) -> ExtendedDescriptor {
