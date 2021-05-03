@@ -1,36 +1,23 @@
-use anyhow::anyhow;
-use bdk::{
-    bitcoin::{self, secp256k1::SecretKey, Amount, OutPoint, Transaction, Txid},
-    sled::{transaction::ConflictableTransactionError, Tree},
+use crate::{
+    bet::Bet,
+    party::LocalProposal,
+    OracleInfo,
 };
-use olivia_core::{OracleEvent, OracleId, OracleInfo};
+use anyhow::{anyhow, Context};
+use bdk::{
+    bitcoin::{secp256k1::SecretKey, Transaction, Txid},
+    sled::{
+        self,
+        transaction::{ConflictableTransactionError, TransactionalTree},
+    },
+};
+use olivia_core::{Attestation, OracleId};
 use olivia_secp256k1::Secp256k1;
-use serde::de::DeserializeOwned;
-use std::{cell::RefCell, collections::HashMap};
 
-use crate::party::{JointOutput, LocalProposal};
-
+pub const DB_VERSION: u8 = 0;
 pub type BetId = u32;
 
-pub trait BetDatabase {
-    fn get_bet(&self, bet_id: BetId) -> anyhow::Result<Option<BetState>>;
-    fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId>;
-
-    fn update_bet<F>(&self, bet_id: BetId, f: F) -> anyhow::Result<()>
-    where
-        F: Fn(BetState) -> anyhow::Result<BetState>;
-
-    fn get_oracle_info(
-        &self,
-        oracle_id: &OracleId,
-    ) -> anyhow::Result<Option<OracleInfo<Secp256k1>>>;
-    fn insert_oracle_info(&self, oracle_info: OracleInfo<Secp256k1>) -> anyhow::Result<()>;
-
-    fn list_bets(&self) -> anyhow::Result<Vec<BetId>>;
-    fn add_claim_tx(&self, bets: Vec<BetId>, tx: Transaction) -> anyhow::Result<()>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MapKey {
     BetId,
     OracleInfo(OracleId),
@@ -38,9 +25,28 @@ pub enum MapKey {
     ClaimTx(Txid),
 }
 
-impl MapKey {
-    fn to_bytes(&self) -> Vec<u8> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct VersionedKey {
+    pub version: u8,
+    pub key: MapKey,
+}
+
+impl VersionedKey {
+    pub fn to_bytes(&self) -> Vec<u8> {
         crate::encode::serialize(self)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        crate::encode::deserialize::<VersionedKey>(bytes).unwrap()
+    }
+}
+
+impl From<MapKey> for VersionedKey {
+    fn from(key: MapKey) -> Self {
+        VersionedKey {
+            version: DB_VERSION,
+            key,
+        }
     }
 }
 
@@ -53,88 +59,8 @@ pub enum KeyKind {
 }
 
 impl KeyKind {
-    fn to_bytes(&self) -> Vec<u8> {
-        crate::encode::serialize(self)
-    }
-}
-
-#[derive(Default)]
-pub struct InMemory {
-    inner: RefCell<HashMap<MapKey, Box<dyn std::any::Any + 'static>>>,
-}
-
-impl BetDatabase for InMemory {
-    fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
-        let mut inner = self.inner.borrow_mut();
-        let bet_id = {
-            let i = inner
-                .entry(MapKey::BetId)
-                .and_modify(|i| *i.downcast_mut::<BetId>().unwrap() += 1)
-                .or_insert(Box::new(BetId::default()));
-            *i.downcast_ref::<BetId>().unwrap()
-        };
-        inner.insert(MapKey::Bet(bet_id), Box::new(bet));
-        Ok(bet_id)
-    }
-
-    fn get_bet(&self, bet_id: BetId) -> anyhow::Result<Option<BetState>> {
-        Ok(self
-            .inner
-            .borrow()
-            .get(&MapKey::Bet(bet_id))
-            .map(|boxany| boxany.downcast_ref::<BetState>().unwrap().clone()))
-    }
-
-    fn get_oracle_info(
-        &self,
-        oracle_id: &OracleId,
-    ) -> anyhow::Result<Option<OracleInfo<Secp256k1>>> {
-        Ok(self
-            .inner
-            .borrow()
-            .get(&MapKey::OracleInfo(oracle_id.clone()))
-            .map(|i| i.downcast_ref::<OracleInfo<Secp256k1>>().unwrap().clone()))
-    }
-
-    fn insert_oracle_info(&self, oracle_info: OracleInfo<Secp256k1>) -> anyhow::Result<()> {
-        self.inner.borrow_mut().insert(
-            MapKey::OracleInfo(oracle_info.id.clone()),
-            Box::new(oracle_info),
-        );
-        Ok(())
-    }
-
-    fn update_bet<F>(&self, bet_id: BetId, f: F) -> anyhow::Result<()>
-    where
-        F: Fn(BetState) -> anyhow::Result<BetState>,
-    {
-        let old_state = self
-            .get_bet(bet_id)?
-            .ok_or(anyhow!("Bet {} does not exist", bet_id))?;
-        let new_state = f(old_state)?;
-        self.inner
-            .borrow_mut()
-            .insert(MapKey::Bet(bet_id), Box::new(new_state));
-        Ok(())
-    }
-
-    fn list_bets(&self) -> anyhow::Result<Vec<BetId>> {
-        Ok(self
-            .inner
-            .borrow()
-            .keys()
-            .filter_map(|key| match key {
-                MapKey::Bet(bet_id) => Some(*bet_id),
-                _ => None,
-            })
-            .collect())
-    }
-
-    fn add_claim_tx(&self, bets: Vec<BetId>, tx: Transaction) -> anyhow::Result<()> {
-        self.inner
-            .borrow_mut()
-            .insert(MapKey::ClaimTx(tx.txid()), Box::new(Claim { bets, tx }));
-        Ok(())
+    pub fn prefix(&self) -> Vec<u8> {
+        crate::encode::serialize(&(DB_VERSION, self))
     }
 }
 
@@ -144,15 +70,6 @@ pub struct Claim {
     pub tx: Transaction,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct Bet {
-    pub outpoint: OutPoint,
-    pub joint_output: JointOutput,
-    pub oracle_info: OracleInfo<Secp256k1>,
-    pub oracle_event: OracleEvent<Secp256k1>,
-    #[serde(with = "bitcoin::util::amount::serde::as_sat")]
-    pub value: Amount,
-}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BetState {
@@ -174,96 +91,245 @@ pub enum BetState {
     Won {
         bet: Bet,
         secret_key: SecretKey,
+        attestation: Attestation<Secp256k1>,
     },
     Lost {
         bet: Bet,
+        attestation: Attestation<Secp256k1>,
     },
 }
 
-fn get<O: DeserializeOwned>(tree: &Tree, key: MapKey) -> anyhow::Result<Option<O>> {
-    Ok(tree
-        .get(key.to_bytes())?
-        .map(|bytes| crate::encode::deserialize(&bytes))
-        .transpose()?)
+impl BetState {
+    pub fn name(&self) -> &'static str {
+        use BetState::*;
+        match self {
+            Proposed { .. } => "proposed",
+            Offered { .. } => "offered",
+            Unconfirmed { .. } => "unconfirmed",
+            Confirmed { .. } => "confirmed",
+            Won { .. } => "won",
+            Lost { .. } => "lost",
+        }
+    }
 }
 
-fn insert<O: serde::Serialize>(tree: &Tree, key: MapKey, value: O) -> anyhow::Result<()> {
-    tree.insert(key.to_bytes(), crate::encode::serialize(&value))?;
+pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {
+    type Key: Clone;
+    fn key_kind() -> KeyKind;
+    fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key>;
+    fn extract_key(key: MapKey) -> Option<Self::Key>;
+    fn to_map_key(key: Self::Key) -> MapKey;
+    fn name() -> &'static str;
+}
+
+macro_rules! impl_entity {
+    ($key_name:ident, $type:ty, $type_name:ident) => {
+        impl Entity for $type {
+            type Key = $key_name;
+            fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key> {
+                let versioned_key = $crate::encode::deserialize::<VersionedKey>(bytes)?;
+                if let MapKey::$type_name(inner) = versioned_key.key {
+                    Ok(inner)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Could not deserialize key {}",
+                        stringify!($type_name)
+                    ))
+                }
+            }
+
+            fn key_kind() -> KeyKind {
+                KeyKind::$type_name
+            }
+
+            fn extract_key(key: MapKey) -> Option<Self::Key> {
+                if let MapKey::$type_name(key) = key {
+                    Some(key)
+                } else {
+                    None
+                }
+            }
+
+            fn to_map_key(key: Self::Key) -> MapKey {
+                MapKey::$type_name(key)
+            }
+
+            fn name() -> &'static str {
+                stringify!($type_name)
+            }
+        }
+    };
+}
+
+impl_entity!(OracleId, OracleInfo, OracleInfo);
+impl_entity!(BetId, BetState, Bet);
+
+pub struct BetDatabase(sled::Tree);
+
+fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyhow::Result<()> {
+    tree.insert(
+        VersionedKey::from(key).to_bytes(),
+        serde_json::to_string(&value).unwrap().into_bytes(),
+    )?;
     Ok(())
 }
 
-impl BetDatabase for Tree {
-    fn get_bet(&self, bet_id: BetId) -> anyhow::Result<Option<BetState>> {
-        get(self, MapKey::Bet(bet_id))
+impl BetDatabase {
+    pub fn new(tree: sled::Tree) -> Self {
+        BetDatabase(tree)
     }
 
-    fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
+    pub fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
         use std::convert::TryFrom;
         let i = self
-            .update_and_fetch(MapKey::BetId.to_bytes(), |prev| match prev {
-                Some(prev) => Some(
-                    (u32::from_be_bytes(<[u8; 4]>::try_from(prev).unwrap()) + 1)
-                        .to_be_bytes()
-                        .to_vec(),
-                ),
-                None => Some(0u32.to_be_bytes().to_vec()),
-            })?
+            .0
+            .update_and_fetch(
+                VersionedKey::from(MapKey::BetId).to_bytes(),
+                |prev| match prev {
+                    Some(prev) => Some(
+                        (u32::from_be_bytes(<[u8; 4]>::try_from(prev).unwrap()) + 1)
+                            .to_be_bytes()
+                            .to_vec(),
+                    ),
+                    None => Some(0u32.to_be_bytes().to_vec()),
+                },
+            )?
             .unwrap();
         let i = u32::from_be_bytes(<[u8; 4]>::try_from(i.to_vec()).unwrap());
 
-        insert(self, MapKey::Bet(i), bet)?;
+        insert(&self.0, MapKey::Bet(i), bet)?;
 
         Ok(i)
     }
 
-    fn get_oracle_info(
-        &self,
-        oracle_id: &OracleId,
-    ) -> anyhow::Result<Option<OracleInfo<Secp256k1>>> {
-        let key = MapKey::OracleInfo(oracle_id.clone());
-        get(self, key)
-    }
-
-    fn insert_oracle_info(&self, oracle_info: OracleInfo<Secp256k1>) -> anyhow::Result<()> {
+    pub fn insert_oracle_info(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
         let key = MapKey::OracleInfo(oracle_info.id.clone());
-        insert(self, key, oracle_info)
+        insert(&self.0, key, oracle_info)
     }
 
-    fn update_bet<F>(&self, bet_id: BetId, f: F) -> anyhow::Result<()>
-    where
-        F: Fn(BetState) -> anyhow::Result<BetState>,
-    {
-        let key = MapKey::Bet(bet_id);
-
-        self.transaction(move |db| {
-            let key = key.to_bytes();
-            let old_state = db
-                .remove(key.clone())?
-                .ok_or(ConflictableTransactionError::Abort(anyhow!(
-                    "bet {} does not exist",
-                    bet_id
-                )))?;
-            let old_state = crate::encode::deserialize(&old_state)
-                .expect("it's in the DB so it should be deserializable");
-            let new_state = f(old_state).map_err(ConflictableTransactionError::Abort)?;
-            db.insert(key, crate::encode::serialize(&new_state))?;
-            Ok(())
-        })
-        .map_err(|e| match e {
-            bdk::sled::transaction::TransactionError::Abort(e) => e,
-            bdk::sled::transaction::TransactionError::Storage(e) => e.into(),
-        })
-    }
-
-    fn list_bets(&self) -> anyhow::Result<Vec<BetId>> {
+    pub fn get_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
         Ok(self
-            .scan_prefix(KeyKind::BetId.to_bytes())
-            .keys()
-            .map(|key| crate::encode::deserialize::<BetId>(key.unwrap().as_ref()).unwrap())
-            .collect())
+            .0
+            .get(VersionedKey::from(T::to_map_key(key)).to_bytes())?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?)
     }
 
-    fn add_claim_tx(&self, bets: Vec<BetId>, tx: Transaction) -> anyhow::Result<()> {
-        insert(self, MapKey::ClaimTx(tx.txid()), Claim { bets, tx })
+    pub fn update_bet<F>(&self, bet_id: BetId, f: F) -> anyhow::Result<()>
+    where
+        F: Fn(BetState, TxDb) -> anyhow::Result<BetState>,
+    {
+        let key = VersionedKey::from(MapKey::Bet(bet_id));
+
+        self.0
+            .transaction(move |db| {
+                let key = key.to_bytes();
+                let old_state =
+                    db.remove(key.clone())?
+                        .ok_or(ConflictableTransactionError::Abort(anyhow!(
+                            "bet {} does not exist",
+                            bet_id
+                        )))?;
+                let old_state = serde_json::from_slice(&old_state[..])
+                    .expect("it's in the DB so it should be deserializable");
+                let new_state = f(old_state, TxDb(db)).map_err(ConflictableTransactionError::Abort)?;
+                db.insert(key, serde_json::to_vec(&new_state).unwrap())?;
+                Ok(())
+            })
+            .map_err(|e| match e {
+                bdk::sled::transaction::TransactionError::Abort(e) => e,
+                bdk::sled::transaction::TransactionError::Storage(e) => e.into(),
+            })
+    }
+
+    pub fn add_claim_tx(&self, bets: Vec<BetId>, tx: Transaction) -> anyhow::Result<()> {
+        insert(&self.0, MapKey::ClaimTx(tx.txid()), Claim { bets, tx })
+    }
+
+    pub fn list_entities<T: Entity>(&self) -> impl Iterator<Item = anyhow::Result<(T::Key, T)>> {
+        self.0.scan_prefix(T::key_kind().prefix()).map(|item| {
+            let (key, value) = item?;
+            Ok((
+                T::deserialize_key(&key[..])
+                    .with_context(|| format!("Error Deserializing key for {}", T::name()))?,
+                serde_json::from_slice(&value[..])
+                    .with_context(|| format!("Error Deserialzing {}", T::name()))?,
+            ))
+        })
+    }
+
+    pub fn list_entities_print_error<T: Entity>(&self) -> impl Iterator<Item = (T::Key, T)> {
+        self.list_entities().filter_map(|entity| match entity {
+            Ok(entity) => Some(entity),
+            Err(e) => {
+                eprintln!("Error retreiving an {}: {}", T::name(), e);
+                None
+            }
+        })
+    }
+
+    pub fn test_new() -> Self {
+        BetDatabase::new(
+            bdk::sled::Config::new()
+                .temporary(true)
+                .flush_every_ms(None)
+                .open()
+                .unwrap()
+                .open_tree("test")
+                .unwrap(),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TxDb<'a>(&'a TransactionalTree);
+
+impl<'a> TxDb<'a> {
+    pub fn get_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
+        Ok(self
+            .0
+            .get(VersionedKey::from(T::to_map_key(key)).to_bytes())?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn insert_and_list_oracles() {
+        let db = BetDatabase::new(
+            sled::Config::new()
+                .temporary(true)
+                .flush_every_ms(None)
+                .open()
+                .unwrap()
+                .open_tree("test")
+                .unwrap(),
+        );
+
+        let info1 = OracleInfo::test_oracle_info();
+        let info2 = {
+            let mut info2 = OracleInfo::test_oracle_info();
+            info2.id = "oracle2.test".into();
+            info2
+        };
+        db.insert_oracle_info(info1.clone()).unwrap();
+        let oracle_list = db
+            .list_entities::<OracleInfo>()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(oracle_list, vec![(info1.id.clone(), info1.clone())]);
+        db.insert_oracle_info(info2.clone()).unwrap();
+        let mut oracle_list = db
+            .list_entities::<OracleInfo>()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        oracle_list.sort_by_key(|(id, _)| id.clone());
+        assert_eq!(
+            oracle_list,
+            vec![(info1.id.clone(), info1), (info2.id.clone(), info2)]
+        );
     }
 }

@@ -1,24 +1,30 @@
 #![feature(backtrace)]
 use anyhow::{anyhow, Context};
-use bdk::{
-    bitcoin::Network, blockchain::EsploraBlockchain, descriptor::Segwitv0, keys::GeneratedKey,
-    reqwest, sled, Wallet,
-};
+use bdk::{Wallet, bitcoin::Network, blockchain::{AnyBlockchain, Blockchain, ConfigurableBlockchain, Progress}, database::BatchDatabase, reqwest, sled};
 use bdk_cli::structopt::StructOpt;
 use bweet::{
+    amount_ext::FromCliStr,
+    bet_database::{BetDatabase, BetState},
     bitcoin::Amount,
+    cmd,
+    config::Config,
     keychain::Keychain,
     party::{Party, Proposal},
 };
 use clap::{Arg, SubCommand};
-use std::{path::PathBuf, str::FromStr};
+use std::{fs, path::PathBuf, str::FromStr};
 
 macro_rules! cli_app {
     ($app:ident) => {
-        let mut default_dir = PathBuf::new();
-        default_dir.push(&dirs::home_dir().unwrap());
-        default_dir.push(".bweet");
-
+        let default_dir = match std::env::var("BWEET_DIR") {
+            Ok(bweet_dir) => PathBuf::from(bweet_dir),
+            Err(_) => {
+                let mut default_dir = PathBuf::new();
+                default_dir.push(&dirs::home_dir().unwrap());
+                default_dir.push(".bweet");
+                default_dir
+            }
+        };
         let $app = bdk_cli::WalletSubCommand::clap()
             .subcommand(
                 SubCommand::with_name("bet")
@@ -26,22 +32,96 @@ macro_rules! cli_app {
                     .subcommand(
                         SubCommand::with_name("propose")
                             .about("Propose a bet")
-                            .arg(Arg::with_name("event-url").required(true).help("The url where the oracle is publishing the event"))
-                            .arg(Arg::with_name("value").required(true).help("The value of the bet"))
+                            .arg(
+                                Arg::with_name("value")
+                                    .required(true)
+                                    .help("The value of the bet"),
+                            )
+                            .arg(
+                                Arg::with_name("event-url")
+                                    .required(true)
+                                    .help("The url where the oracle is publishing the event"),
+                            ),
                     )
+                    .subcommand(SubCommand::with_name("list").about("List outstanding bets"))
                     .subcommand(
                         SubCommand::with_name("offer")
                             .about("Make an offer in response to a proposal")
-                            .arg(Arg::with_name("proposal").required(true)),
+                            .arg(
+                                Arg::with_name("value")
+                                    .required(true)
+                                    .help("The value of the bet"),
+                            )
+                            .arg(Arg::with_name("proposal").required(true).help(""))
+                            .arg(Arg::with_name("choose").required(true).short("c").takes_value(true).help("which outcome to choose"))
+                    )
+                    .subcommand(
+                        SubCommand::with_name("take")
+                            .about("Take an offer to one of your proposals")
+                            .arg(
+                                Arg::with_name("id")
+                                    .help("The id of the proposal this offer was made for")
+                                    .required(true),
+                            )
+                            .arg(
+                                Arg::with_name("offer")
+                                    .help("The offer you want to take")
+                                    .required(true),
+                            ),
+                    )
+                    .subcommand(
+                        SubCommand::with_name("show")
+                            .about("View a proposal or offer")
+                            .arg(
+                                Arg::with_name("message")
+                                    .required(true)
+                                    .help("The proposal or offer string"),
+                            ),
+                    )
+                    .subcommand(
+                        SubCommand::with_name("oracle")
+                            .alias("oracles")
+                            .about("Modify/view list of trusted oracles")
+                            .subcommand(SubCommand::with_name("list").about("list trusted oracles"))
+                            .subcommand(SubCommand::with_name("add").about("Trust an oracle")),
                     ),
             )
             .subcommand(
-                SubCommand::with_name("test")
-                    .about("Test utilities")
-                    .subcommand(SubCommand::with_name("fund_wallet")),
+                SubCommand::with_name("init")
+                    .about("Initialize the wallet")
+                    .arg(
+                        Arg::with_name("network")
+                            .required(true)
+                            .help("The network name (bitcoin|regtest|testnet)"),
+                    ),
+            )
+            .subcommand(
+                SubCommand::with_name("dev")
+                    .about("Development utilities")
+                    .subcommand(
+                        SubCommand::with_name("nigiri")
+                            .about("Interact with nigiri")
+                            .subcommand(SubCommand::with_name("start").about("runs nigiri start"))
+                            .subcommand(
+                                SubCommand::with_name("reset").about("runs nigiri stop --delete"),
+                            )
+                            .subcommand(
+                                SubCommand::with_name("fund")
+                                    .about("funds the wallet using the nigiri faucet"),
+                            ),
+                    )
+                    .subcommand(
+                        SubCommand::with_name("reset")
+                            .about("Deletes the wallet's database (keeping the seedwords)"),
+                    ),
+            )
+            .subcommand(
+                SubCommand::with_name("config")
+                    .about("Configuration utilities")
+                    .subcommand(SubCommand::with_name("show")),
             )
             .arg(
-                Arg::with_name("wallet-dir")
+                Arg::with_name("bweet-dir")
                     .short("d")
                     .value_name("DIRECTORY")
                     .default_value_os(default_dir.as_os_str()),
@@ -49,131 +129,303 @@ macro_rules! cli_app {
     };
 }
 
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     cli_app!(app);
     let matches = app.get_matches();
-    let wallet_dir = PathBuf::from(&matches.value_of_os("wallet-dir").unwrap());
-    let (db_file, seed) = prepare_db(wallet_dir)?;
-    let database = sled::open(db_file.to_str().unwrap())?;
-    let wallet_db = database.open_tree("wallet")?;
-    let bets_db = database.open_tree("bets")?;
-    let esplora_url = "http://localhost:3000".to_string();
-    let esplora = EsploraBlockchain::new(&esplora_url, None);
-    let keychain = Keychain::new(seed);
-    let descriptor = bdk::template::BIP84(
-        keychain.main_wallet_xprv(Network::Regtest),
-        bdk::KeychainKind::External,
-    );
+    let wallet_dir = PathBuf::from(&matches.value_of_os("bweet-dir").unwrap());
 
-    let wallet = Wallet::new(descriptor, None, Network::Regtest, wallet_db, esplora)
-        .await
-        .context("Initializing wallet failed")?;
-
-    let party = Party::new(wallet, bets_db, keychain, esplora_url);
-
-    let result = match matches.subcommand() {
-        ("bet", Some(matches)) => {
-            match matches.subcommand() {
-                ("propose", Some(args)) => {
-                    let event_url = reqwest::Url::parse(args.value_of("event-url").unwrap())?;
-                    let value = match args.value_of("value") {
-                        Some("all") => Amount::from_sat(party.wallet().get_balance()?),
-                        Some(value) => Amount::from_str(value)?,
-                        _ => {
-                            return Err(anyhow!("{}", args.usage()))
-                        }
-                    };
-                    let (_bet_id, proposal) = party.make_proposal_from_url(event_url, value)
-                        .await?;
-
-                    proposal.to_string()
-                }
-                ("offer", Some(args)) => {
-                    let proposal = Proposal::from_str(args.value_of("proposal").unwrap())
-                        .map_err(|e| anyhow!("inlvaid proposal: {}", e))?;
-                    let (_bet_id, offer) = party
-                        .make_offer(
-                            proposal,
-                            true,
-                            Amount::from_str_with_denomination("0.02 BTC").unwrap(),
-                        )
-                        .await
-                        .context("failed to generate offer")?;
-                    offer.to_string()
-                }
-                _ => matches.usage().into(),
+    match matches.subcommand() {
+        ("init", Some(args)) => {
+            let sw_file = get_seed_words_file(&wallet_dir);
+            if sw_file.exists() {
+                return Err(anyhow!(
+                    "A seed words file already exists at {}.",
+                    sw_file.as_path().display()
+                ));
             }
+            cmd::init(
+                wallet_dir,
+                Network::from_str(args.value_of("network").unwrap())?,
+            )?;
+            let seed_words = fs::read_to_string(sw_file.clone())
+                .context("unable to read seed words after writing them")?;
+            println!("Writing seed words to {}", sw_file.as_path().display());
+            println!("===== BIP39 seed words =====");
+            println!("{}", seed_words);
         }
-        ("test", _) => {
-            let wallet = party.wallet();
-            let old_balance = wallet.get_balance()?;
-            bweet::cmd::fund_wallet(&wallet).await?;
-            while {
-                let new_balance = wallet.get_balance()?;
-                new_balance == old_balance
-            } {
-                wallet.sync(bdk::blockchain::log_progress(), None).await?;
+        ("config", Some(matches)) => match matches.subcommand() {
+            ("show", _) => {
+                let config = cmd::get_config(&wallet_dir)?;
+                println!("{}", serde_json::to_string_pretty(&config).unwrap());
             }
+            _ => println!("{}", matches.usage()),
+        },
+        ("bet", Some(matches)) => match matches.subcommand() {
+            ("oracles", Some(matches)) => match matches.subcommand() {
+                ("list", _) => {
+                    let bet_db = get_bet_db(&wallet_dir)?;
+                    let table = cmd::bet::list_oracles(&bet_db);
+                    println!("{}", table.render());
+                }
+                _ => println!("{}", matches.usage()),
+            },
+            ("propose", Some(args)) => {
+                let party = load_party(&wallet_dir).await?;
+                let value = match args.value_of("value") {
+                    Some("all") => Amount::from_sat(party.wallet().get_balance()?),
+                    Some(value) => Amount::from_cli_str(value)?,
+                    None => {
+                        return Err(anyhow!(
+                            "requires a value of BTC with denomination e.g. 0.01BTC"
+                        ));
+                    }
+                };
+                let event_url = reqwest::Url::parse(args.value_of("event-url").unwrap())?;
+                let proposal = cmd::bet::propose(party, event_url, value).await?;
+                println!("{}", proposal.to_string());
+            }
+            ("list", _) => {
+                {
+                    let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
+                    let party = Party::new(wallet, bet_db, keychain, config.blockchain);
+                    poke_bets(&party).await;
+                }
+                let bet_db = get_bet_db(&wallet_dir)?;
+                let table = cmd::bet::list_bets(&bet_db);
+                println!("{}", table.render());
+            }
+            ("offer", Some(args)) => {
+                let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
+                let party = Party::new(wallet, bet_db, keychain, config.blockchain);
+                let proposal = Proposal::from_str(args.value_of("proposal").unwrap())
+                    .map_err(|e| anyhow!("inlvaid proposal: {}", e))?;
+                let value = match args.value_of("value") {
+                    Some("all") => Amount::from_sat(party.wallet().get_balance()?),
+                    Some(value) => Amount::from_cli_str(value)?,
+                    None => {
+                        return Err(anyhow!(
+                            "requires a value of BTC with denomination e.g. 0.01BTC"
+                        ));
+                    }
+                };
+                let choice = args.value_of("choose").unwrap();
+                let (bet, offer, cipher) = cmd::bet::generate_offer(&party, proposal, value, choice).await?;
+                println!("{}", bet.prompt());
+                if read_answer() {
+                    let (_bet_id, encrypted_offer) = party.save_and_encrypt_offer(bet, offer, cipher)?;
+                    println!("{}", encrypted_offer.to_string());
+                }
+            }
+            ("take", Some(args)) => {
+                let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
+                let party = Party::new(wallet, bet_db, keychain, config.blockchain);
+                let bet_id =
+                    u32::from_str(args.value_of("id").unwrap()).context("Invalid bet id")?;
+                let encrypted_offer =
+                    bweet::party::EncryptedOffer::from_str(args.value_of("offer").unwrap())
+                        .context("Decoding encrypted offer")?;
 
-            let new_balance = wallet.get_balance()?;
-            format!("old balance: {}\nnew balance: {}", old_balance, new_balance)
-        }
+                let validated_offer =
+                    party.decrypt_and_validate_offer(bet_id, encrypted_offer).await?;
+
+                println!("{}", validated_offer.bet.prompt());
+
+                if read_answer() {
+                    let tx = party.take_offer(validated_offer)?;
+                    println!(
+                        "The funding transaction txid is {}. Attempting to broadcast...",
+                        tx.txid()
+                    );
+                }
+                party.take_next_action(bet_id).await?;
+            }
+            ("show", Some(args)) => {
+                let message = args.value_of("message").unwrap();
+                if let Ok(proposal) = Proposal::from_str(message) {
+                    println!("{}", serde_json::to_string_pretty(&proposal).unwrap());
+                    return Ok(());
+                }
+            }
+            _ => {
+                println!("{}", matches.usage());
+            }
+        },
+        ("dev", Some(matches)) => match matches.subcommand() {
+            ("nigiri", Some(matches)) => match matches.subcommand() {
+                ("start", _) => {
+                    bweet::cmd::dev::nigiri_start()?;
+                }
+                ("stop", _) => {
+                    bweet::cmd::dev::nigiri_stop()?;
+                }
+                ("reset", _) => {
+                    bweet::cmd::dev::reset(&wallet_dir)?;
+                    bweet::cmd::dev::nigiri_stop()?;
+                    bweet::cmd::dev::nigiri_start()?;
+                }
+                ("fund", _) => {
+                    let (wallet, _, _, _) = load_wallet(&wallet_dir).await?;
+                    if wallet.network() != Network::Regtest {
+                        return Err(anyhow!("dev fund only works on regtest"));
+                    }
+                    let old_balance = wallet.get_balance()?;
+                    bweet::cmd::dev::nigiri_fund(&wallet).await?;
+                    while {
+                        let new_balance = wallet.get_balance()?;
+                        new_balance == old_balance
+                    } {
+                        wallet.sync(SyncProgress, None).await?;
+                    }
+                    let new_balance = wallet.get_balance()?;
+                    println!("old balance: {}\nnew balance: {}", old_balance, new_balance)
+                }
+                _ => {
+                    println!("{}", matches.usage());
+                }
+            },
+            ("reset", _) => {
+                bweet::cmd::dev::reset(&wallet_dir)?;
+            }
+            _ => {
+                println!("{}", matches.usage());
+            }
+        },
         _ => {
+            let (wallet, _, _, _) = load_wallet(&wallet_dir).await?;
             let wallet_command = bdk_cli::WalletSubCommand::from_clap(&matches);
             let result = match wallet_command {
                 bdk_cli::WalletSubCommand::OnlineWalletSubCommand(online_command) => {
-                    bdk_cli::handle_online_wallet_subcommand(party.wallet(), online_command).await?
+                    bdk_cli::handle_online_wallet_subcommand(&wallet, online_command).await?
                 }
                 bdk_cli::WalletSubCommand::OfflineWalletSubCommand(offline_command) => {
-                    bdk_cli::handle_offline_wallet_subcommand(party.wallet(), offline_command)?
+                    bdk_cli::handle_offline_wallet_subcommand(&wallet, offline_command)?
                 }
             };
-            serde_json::to_string(&result).unwrap()
+
+            println!("{}", serde_json::to_string(&result).unwrap());
         }
     };
-    println!("{}", result);
     Ok(())
 }
 
-fn prepare_db(wallet_dir: PathBuf) -> anyhow::Result<(PathBuf, [u8; 64])> {
-    use bdk::keys::GeneratableKey;
-    use bip39::{Language, Mnemonic, MnemonicType, Seed};
-    use std::fs;
+fn read_answer() -> bool {
+    use std::io::{self, BufRead};
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    println!("[y/n]?");
+    lines
+        .find_map(
+            |line| match line.unwrap().trim_end().to_lowercase().as_str() {
+                "y" => Some(true),
+                "n" => Some(false),
+                _ => {
+                    println!("[y/n]?");
+                    None
+                }
+            },
+        )
+        .unwrap_or(false)
+}
 
+fn get_seed_words_file(wallet_dir: &PathBuf) -> PathBuf {
     let mut seed_words_file = wallet_dir.clone();
     seed_words_file.push("seed.txt");
+    seed_words_file
+}
+
+fn get_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
+    let mut db_file = wallet_dir.clone();
+    db_file.push("database.sled");
+    let database = sled::open(db_file.to_str().unwrap())?;
+    let bet_db = BetDatabase::new(database.open_tree("bets")?);
+    Ok(bet_db)
+}
+
+async fn load_party(wallet_dir: &PathBuf) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase>> {
+    let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
+    let party = Party::new(wallet, bet_db, keychain, config.blockchain);
+    Ok(party)
+}
+
+async fn load_wallet(
+    wallet_dir: &PathBuf,
+) -> anyhow::Result<(
+    Wallet<impl Blockchain, impl BatchDatabase>,
+    BetDatabase,
+    Keychain,
+    Config,
+)> {
+    use bip39::{Language, Mnemonic, Seed};
 
     if !wallet_dir.exists() {
-        println!("Creating database in {}", wallet_dir.as_path().display());
-        std::fs::create_dir(&wallet_dir)?;
-
-        let seed_words: GeneratedKey<_, Segwitv0> =
-            Mnemonic::generate((MnemonicType::Words12, Language::English))
-                .map_err(|_| anyhow!("generating seed phrase failed"))?;
-        let seed_words = &*seed_words;
-
-        println!(
-            "Creating seed words in {}",
-            seed_words_file.as_path().display()
-        );
-        println!("==== BIP39 SEED WORDS ====\n{}", seed_words.phrase());
-        fs::write(seed_words_file.clone(), seed_words.phrase())?;
+        return Err(anyhow!(
+            "No wallet found at {}. Run `bweet init` to set a new one up or set --bweet-dir.",
+            wallet_dir.as_path().display()
+        ));
     }
 
-    let mut db_dir = wallet_dir.clone();
-    db_dir.push("database.sled");
+    let config = cmd::get_config(&wallet_dir)?;
+    let keychain = {
+        let sw_file = get_seed_words_file(&wallet_dir);
+        let seed_words = fs::read_to_string(sw_file.clone())?;
+        let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
+            anyhow!(
+                "parsing seed phrase in '{}' failed: {}",
+                sw_file.as_path().display(),
+                e
+            )
+        })?;
+        let mut seed_bytes = [0u8; 64];
+        let seed = Seed::new(&mnemonic, "");
+        seed_bytes.copy_from_slice(seed.as_bytes());
+        Keychain::new(seed_bytes)
+    };
 
-    let seed_words = fs::read_to_string(seed_words_file.clone())?;
-    let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|_| {
-        anyhow!(
-            "parsing seed phrase in '{}' failed",
-            seed_words_file.as_path().display()
+    let database = {
+        let mut db_file = wallet_dir.clone();
+        db_file.push("database.sled");
+        sled::open(db_file.to_str().unwrap())?
+    };
+
+    let wallet = {
+        let wallet_db = database.open_tree("wallet")?;
+        let descriptor = bdk::template::Bip84(
+            keychain.main_wallet_xprv(config.network),
+            bdk::KeychainKind::External,
+        );
+        Wallet::new(
+            descriptor,
+            None,
+            config.network,
+            wallet_db,
+            AnyBlockchain::from_config(&config.blockchain)?,
         )
-    })?;
-    let mut seed_bytes = [0u8; 64];
-    let seed = Seed::new(&mnemonic, "");
-    seed_bytes.copy_from_slice(seed.as_bytes());
-    Ok((wallet_dir, seed_bytes))
+        .await
+        .context("Initializing wallet failed")?
+    };
+
+    let bet_db = BetDatabase::new(database.open_tree("bets")?);
+
+    Ok((wallet, bet_db, keychain, config))
+}
+
+async fn poke_bets<B: Blockchain, D: BatchDatabase>(
+    party: &Party<B, D>,
+) {
+    for (bet_id, _) in party.bet_db().list_entities_print_error::<BetState>() {
+        match party.take_next_action(bet_id).await {
+            Ok(_updated) => {}
+            Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),
+        }
+    }
+}
+
+struct SyncProgress;
+
+impl Progress for SyncProgress {
+    fn update(&self, progress: f32, message: Option<String>) -> Result<(), bdk::Error> {
+        println!("progress {}, {:?}", progress, message);
+        Ok(())
+    }
 }

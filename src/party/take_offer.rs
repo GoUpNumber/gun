@@ -1,4 +1,8 @@
-use crate::bet_database::{Bet, BetDatabase, BetId, BetState};
+use crate::{
+    bet_database::{BetId, BetState},
+    bet::Bet,
+    OracleInfo,
+};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{util::psbt, Amount, OutPoint, Script, Transaction},
@@ -15,27 +19,26 @@ use super::{
     Proposal,
 };
 
-#[derive(Clone)]
 pub struct DecryptedOffer {
     pub offer: Offer,
     pub rng: ChaCha20Rng,
 }
 
-#[derive(Debug, Clone)]
-pub struct OfferInputs {
-    pub offer_value: Amount,
-    pub psbt_inputs: Vec<psbt::Input>,
+pub struct ValidatedOffer {
+    pub bet_id: BetId,
+    pub bet: Bet,
+    pub tx: Transaction
 }
 
-impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
+impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
     pub fn decrypt_offer(
         &self,
         bet_id: BetId,
         encrypted_offer: EncryptedOffer,
     ) -> anyhow::Result<DecryptedOffer> {
         let local_proposal = self
-            .bets_db
-            .get_bet(bet_id)?
+            .bet_db
+            .get_entity(bet_id)?
             .ok_or(anyhow!("Proposal does not exist"))?;
 
         match local_proposal {
@@ -49,7 +52,10 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         }
     }
 
-    pub async fn lookup_offer_inputs(&self, offer: &Offer) -> anyhow::Result<OfferInputs> {
+    async fn lookup_offer_inputs(
+        &self,
+        offer: &Offer,
+    ) -> anyhow::Result<(Vec<psbt::Input>, Amount)> {
         let mut psbt_inputs = vec![];
         let mut input_value = 0;
         for input in &offer.inputs {
@@ -72,99 +78,127 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             .checked_sub(offer.fee as u64)
             .ok_or(anyhow!("fee is absurdly high"))?;
 
-        Ok(OfferInputs {
+        Ok((psbt_inputs,
+            Amount::from_sat(offer_value)))
+    }
+
+    pub async fn decrypt_and_validate_offer(
+        &self,
+        bet_id: BetId,
+        encrypted_offer: EncryptedOffer,
+    ) -> anyhow::Result<ValidatedOffer> {
+        let decrypted_offer = self.decrypt_offer(bet_id, encrypted_offer)?;
+        let (psbt_inputs, offer_value) = self.lookup_offer_inputs(&decrypted_offer.offer).await?;
+        let DecryptedOffer { offer, mut rng } = decrypted_offer;
+        let randomize = Randomize::new(&mut rng);
+
+        let bet_state = self
+            .bet_db
+            .get_entity::<BetState>(bet_id)?
+            .ok_or(anyhow!("Bet {} doesn't exist"))?;
+        let local_proposal = match bet_state {
+            BetState::Proposed { local_proposal } => local_proposal,
+            _ => return Err(anyhow!("was not in proposed state")),
+        };
+
+        let LocalProposal {
+            oracle_event,
+            proposal,
+            ..
+        } = local_proposal;
+        let oracle_id = &proposal.oracle;
+
+        let oracle_info = self
+            .bet_db
+            .get_entity::<OracleInfo>(oracle_id.clone())?
+            .ok_or(anyhow!("Oracle {} isn't in the database", oracle_id))?;
+
+        let anticipated_attestations = oracle_event
+            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0)
+            .try_into()
+            .map_err(|_| anyhow!("wrong number of attestations"))?;
+        let joint_output = JointOutput::new(
+            [local_proposal.keypair.public_key, offer.public_key],
+            Either::Left(local_proposal.keypair.secret_key),
+            anticipated_attestations,
+            offer.choose_right,
+            randomize.clone(),
+        );
+        let joint_output_value =
+            offer_value
+            .checked_add(proposal.value)
+            .expect("we've checked the offer value on the chain");
+
+        let output = (
+            joint_output.descriptor().script_pubkey(),
+            joint_output_value,
+        );
+
+        let (tx, vout) = self.take_offer_generate_tx(
+            proposal.clone(),
+            offer.clone(),
             psbt_inputs,
-            offer_value: Amount::from_sat(offer_value),
+            output,
+        )?;
+        let bet = Bet {
+            outpoint: OutPoint {
+                txid: tx.txid(),
+                vout,
+            },
+            oracle_id: oracle_info.id.clone(),
+            oracle_event: oracle_event.clone(),
+            joint_output: joint_output.clone(),
+            local_value: proposal.value,
+            joint_output_value,
+            i_chose_right: !offer.choose_right,
+        };
+        Ok(ValidatedOffer {
+            bet_id,
+            bet,
+            tx
         })
     }
 
     pub fn take_offer(
         &self,
-        bet_id: BetId,
-        offer: DecryptedOffer,
-        offer_inputs: OfferInputs,
-    ) -> anyhow::Result<()> {
-        let DecryptedOffer { offer, mut rng } = offer;
-        let randomize = Randomize::new(&mut rng);
+        ValidatedOffer {
+            bet_id,
+            bet,
+            tx
+        }: ValidatedOffer,
+    ) -> anyhow::Result<Transaction> {
+        self.bet_db
+            .update_bet(bet_id, |bet_state, _| match bet_state {
+                BetState::Proposed { .. } => Ok(BetState::Unconfirmed {
+                    bet: bet.clone(),
+                    funding_transaction: tx.clone(),
+                    has_broadcast: false,
+                }),
+                _ => Ok(bet_state),
+            })?;
 
-        self.bets_db.update_bet(bet_id, move |bet_state| {
-            let local_proposal = match bet_state {
-                BetState::Proposed { local_proposal } => local_proposal,
-                _ => return Err(anyhow!("was not in proposed state")),
-            };
-
-            let LocalProposal {
-                oracle_event,
-                oracle_info,
-                proposal,
-                ..
-            } = local_proposal;
-
-            let anticipated_signatures = oracle_event
-                .anticipate_signatures(&oracle_info.public_key, 0)
-                .try_into()
-                .map_err(|_| anyhow!("wrong number of signatures"))?;
-
-            let joint_output = JointOutput::new(
-                [local_proposal.keypair.public_key, offer.public_key],
-                Either::Left(local_proposal.keypair.secret_key),
-                anticipated_signatures,
-                offer.choose_right,
-                randomize.clone(),
-            );
-
-            let output_value = offer_inputs
-                .offer_value
-                .checked_add(proposal.value)
-                .expect("we've checked the offer value on the chain");
-
-            let output = (joint_output.descriptor().script_pubkey(), output_value);
-
-            let (tx, vout) = self.take_offer_generate_tx(
-                proposal.clone(),
-                offer.clone(),
-                offer_inputs.clone(),
-                output,
-            )?;
-
-            Ok(BetState::Unconfirmed {
-                bet: Bet {
-                    outpoint: OutPoint {
-                        txid: tx.txid(),
-                        vout,
-                    },
-                    oracle_info,
-                    oracle_event,
-                    joint_output,
-                    value: output_value,
-                },
-                funding_transaction: tx,
-                has_broadcast: false
-            })
-        })?;
-
-        Ok(())
+        Ok(tx)
     }
 
     pub fn take_offer_generate_tx(
         &self,
         proposal: Proposal,
         offer: Offer,
-        offer_inputs: OfferInputs,
+        offer_psbt_inputs: Vec<psbt::Input>,
         output: (Script, Amount),
     ) -> anyhow::Result<(Transaction, u32)> {
         let mut builder = self.wallet.build_tx();
 
         builder
             .manually_selected_only()
-            .ordering(TxOrdering::BIP69Lexicographic)
+            .ordering(TxOrdering::Bip69Lexicographic)
             .fee_absolute(offer.fee as u64);
 
         for proposal_input in proposal.payload.inputs {
             builder.add_utxo(proposal_input)?;
         }
 
-        for (input, psbt_input) in offer.inputs.iter().zip(offer_inputs.psbt_inputs) {
+        for (input, psbt_input) in offer.inputs.iter().zip(offer_psbt_inputs) {
             builder.add_foreign_utxo(input.outpoint, psbt_input, 4 + 1 + 73 + 33)?;
         }
 
@@ -178,11 +212,11 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
 
         builder.add_recipient(output.0.clone(), output.1.as_sat());
 
-        let (psbt, _tx_details) = builder.finish()?;
+        let (mut psbt, _tx_details) = builder.finish()?;
 
-        let (psbt, is_final) = self
+        let is_final = self
             .wallet
-            .sign(psbt, None)
+            .sign(&mut psbt, None)
             .context("Failed to sign transaction")?;
 
         if !is_final {

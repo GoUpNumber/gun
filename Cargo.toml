@@ -25,6 +25,7 @@ anyhow = "1"
 thiserror = "1.0"
 tiny-bip39 = { version = "^0.8" }
 miniscript = { version = "5", features = ["serde"] }
+term-table = {  version = "1", default-features = false }
 
 [patch.crates-io]
 miniscript = { path = "../rust-miniscript" }

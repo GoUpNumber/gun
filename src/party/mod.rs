@@ -6,58 +6,57 @@ mod randomize;
 mod take_offer;
 mod tx_tracker;
 
+use crate::{OracleInfo, bet::Bet, bet_database::{BetDatabase, BetId, BetState, Claim}, keychain::Keychain, reqwest};
+use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{util::psbt, OutPoint, PrivateKey, Script, TxOut, Txid},
-    blockchain::EsploraBlockchain,
+    blockchain::{AnyBlockchain, AnyBlockchainConfig, ConfigurableBlockchain},
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
-    signer::Signer,
+    signer::SignerOrdering,
+    wallet::{AddressIndex, Wallet},
+    KeychainKind,
 };
-pub use joint_output::*;
-use miniscript::DescriptorTrait;
-pub use proposal::*;
-pub use tx_tracker::*;
-
-use crate::{
-    bet_database::{BetDatabase, BetId, BetState, Claim},
-    keychain::Keychain,
-    reqwest,
-};
-use anyhow::{anyhow, Context};
-use bdk::wallet::Wallet;
-use core::borrow::Borrow;
-pub use offer::*;
-use olivia_core::{
-    http::{EventResponse, RootResponse},
-    OracleEvent, OracleId, OracleInfo,
-};
+use olivia_core::{Attestation, OracleEvent, OracleId, Outcome, http::{EventResponse, RootResponse}};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
     Secp256k1,
 };
+use std::sync::Arc;
+use miniscript::DescriptorTrait;
+use core::borrow::Borrow;
 
-pub struct Party<B, D, BD> {
+pub use joint_output::*;
+pub use offer::*;
+pub use take_offer::*;
+pub use proposal::*;
+pub use tx_tracker::*;
+
+pub struct Party<B, D> {
     wallet: Wallet<B, D>,
     keychain: Keychain,
     client: crate::reqwest::Client,
-    bets_db: BD,
-    #[allow(dead_code)]
-    esplora_url: String,
+    bet_db: BetDatabase,
+    blockchain_config: AnyBlockchainConfig,
 }
 
-impl<B, D, BD> Party<B, D, BD>
+impl<B, D> Party<B, D>
 where
-    BD: BetDatabase,
     B: bdk::blockchain::Blockchain,
     D: bdk::database::BatchDatabase,
 {
-    pub fn new(wallet: Wallet<B, D>, bets_db: BD, keychain: Keychain, esplora_url: String) -> Self {
+    pub fn new(
+        wallet: Wallet<B, D>,
+        bet_db: BetDatabase,
+        keychain: Keychain,
+        blockchain_config: AnyBlockchainConfig,
+    ) -> Self {
         Self {
             wallet,
             keychain,
-            bets_db,
+            bet_db,
             client: crate::reqwest::Client::new(),
-            esplora_url,
+            blockchain_config,
         }
     }
 
@@ -65,19 +64,15 @@ where
         &self.wallet
     }
 
-    pub fn bet_db(&self) -> &BD {
-        &self.bets_db
+    pub fn bet_db(&self) -> &BetDatabase {
+        &self.bet_db
     }
 
-    pub async fn save_oracle_info(
-        &self,
-        oracle_id: OracleId,
-    ) -> anyhow::Result<OracleInfo<Secp256k1>> {
-        dbg!(&oracle_id);
-        match self.bets_db.borrow().get_oracle_info(&oracle_id)? {
+    pub async fn save_oracle_info(&self, oracle_id: OracleId) -> anyhow::Result<OracleInfo> {
+        match self.bet_db.borrow().get_entity(oracle_id.clone())? {
             Some(oracle_info) => Ok(oracle_info),
             None => {
-                let root_resposne = self
+                let root_response = self
                     .client
                     .get(&format!("https://{}", &oracle_id))
                     .send()
@@ -88,13 +83,17 @@ where
 
                 let oracle_info = OracleInfo {
                     id: oracle_id,
-                    public_key: root_resposne.public_key,
+                    oracle_keys: root_response.public_keys,
                 };
 
-                self.bets_db.insert_oracle_info(oracle_info.clone())?;
+                self.bet_db.insert_oracle_info(oracle_info.clone())?;
                 Ok(oracle_info)
             }
         }
+    }
+
+    pub fn trust_oracle(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
+        self.bet_db.insert_oracle_info(oracle_info)
     }
 
     pub async fn get_oracle_event_from_url(
@@ -117,8 +116,8 @@ where
             .ok_or(anyhow!("unable to decode oracle event at {}", url))?)
     }
 
-    pub fn new_blockchain(&self) -> EsploraBlockchain {
-        EsploraBlockchain::new(&self.esplora_url, None)
+    pub fn new_blockchain(&self) -> anyhow::Result<AnyBlockchain> {
+        Ok(AnyBlockchain::from_config(&self.blockchain_config)?)
     }
 
     pub async fn get_txout(&self, outpoint: OutPoint) -> anyhow::Result<TxOut> {
@@ -145,15 +144,28 @@ where
         let mut took_any_action = false;
 
         let bet_state = self
-            .bets_db
-            .get_bet(bet_id)?
+            .bet_db
+            .get_entity(bet_id)?
             .ok_or(anyhow!("Bet {} does not exist"))?;
+
         match bet_state {
             BetState::Proposed { .. }
-            | BetState::Offered { .. } // offered needs to be its own thing
-            | BetState::Confirmed { .. }
             | BetState::Won { .. }
             | BetState::Lost { .. } => {}
+            BetState::Offered { bet } => {
+                let txid = bet.outpoint.txid;
+                if let Some(height) = self
+                    .is_confirmed(txid, bet.joint_output.wallet_descriptor())
+                    .await?
+                {
+                    self.bet_db
+                        .update_bet(bet_id, move |old_state, _| match old_state {
+                            BetState::Offered { bet } => Ok(BetState::Confirmed { bet, height }),
+                            _ => Ok(old_state),
+                        })?;
+                    took_any_action = true;
+                }
+            }
             BetState::Unconfirmed {
                 funding_transaction,
                 has_broadcast: false,
@@ -167,33 +179,47 @@ where
                         "Failed to broadcast funding transaction with txid {} for bet {}",
                         txid, bet_id
                     ))?;
-                self.bets_db.update_bet(bet_id, move |old_state| match old_state {
-                    BetState::Unconfirmed { bet, funding_transaction, has_broadcast: false } =>  {
-                        Ok(BetState::Unconfirmed { bet, funding_transaction, has_broadcast: true })
-                    },
-                    old_state => Ok(old_state)
-                })?;
-                return Ok(true)
-            },
+                self.bet_db
+                    .update_bet(bet_id, move |old_state, _| match old_state {
+                        BetState::Unconfirmed {
+                            bet,
+                            funding_transaction,
+                            has_broadcast: false,
+                        } => Ok(BetState::Unconfirmed {
+                            bet,
+                            funding_transaction,
+                            has_broadcast: true,
+                        }),
+                        old_state => Ok(old_state),
+                    })?;
+                return Ok(true);
+            }
             BetState::Unconfirmed {
                 funding_transaction,
                 bet,
-                has_broadcast: true
+                has_broadcast: true,
             } => {
                 let txid = funding_transaction.txid();
                 if let Some(height) = self
                     .is_confirmed(txid, bet.joint_output.wallet_descriptor())
                     .await?
                 {
-                    self.bets_db
-                        .update_bet(bet_id, move |old_state| match old_state {
+                    self.bet_db
+                        .update_bet(bet_id, move |old_state, _| match old_state {
                             BetState::Unconfirmed { bet, .. } => {
                                 Ok(BetState::Confirmed { bet, height })
                             }
                             _ => Ok(old_state),
                         })?;
+                    self.wallet.sync(bdk::blockchain::noop_progress(), None).await?;
                     took_any_action = true;
                 }
+            }
+            BetState::Confirmed {
+                bet,
+                height: _,
+            } => {
+                self.try_get_outcome(bet_id, bet).await?;
             }
         }
         Ok(took_any_action)
@@ -201,16 +227,17 @@ where
 
     pub fn claim_to(&self, dest: Option<Script>) -> anyhow::Result<Option<Claim>> {
         let claimable_bets = self
-            .bets_db
-            .list_bets()?
-            .into_iter()
-            .map(|bet_id| -> anyhow::Result<_> {
-                Ok((bet_id, self.bets_db.get_bet(bet_id)?.unwrap()))
+            .bet_db
+            .list_entities::<BetState>()
+            .filter_map(|result| match result {
+                Ok(ok) => Some(ok),
+                Err(e) => {
+                    eprintln!("Eror with entry in database: {}", e);
+                    None
+                }
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
             .filter_map(|(bet_id, bet_state)| match bet_state {
-                BetState::Won { bet, secret_key } => Some((bet_id, bet, secret_key)),
+                BetState::Won { bet, secret_key, ..  } => Some((bet_id, bet, secret_key)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -227,15 +254,18 @@ where
         let mut builder = self.wallet.build_tx();
         builder
             .manually_selected_only()
-            .set_single_recipient(dest.unwrap_or(self.wallet.get_new_address()?.script_pubkey()))
+            .set_single_recipient(
+                dest.unwrap_or(self.wallet.get_address(AddressIndex::New)?.script_pubkey()),
+            )
             .enable_rbf();
 
         for (_, bet, _) in &claimable_bets {
             let psbt_input = psbt::Input {
                 witness_utxo: Some(TxOut {
-                    value: bet.value.as_sat(),
+                    value: bet.joint_output_value.as_sat(),
                     script_pubkey: bet.joint_output.descriptor().script_pubkey(),
                 }),
+                witness_script: Some(bet.joint_output.descriptor().script_code()),
                 ..Default::default()
             };
             builder
@@ -258,21 +288,23 @@ where
                 network: self.wallet.network(),
                 key: secret_key,
             };
-            let (i, _) = psbt
-                .inputs
-                .iter_mut()
-                .enumerate()
-                .find(|(_i, psbt_input)| {
-                    psbt_input.witness_utxo.as_ref().unwrap().script_pubkey
-                        == bet.joint_output.descriptor().script_pubkey()
-                })
-                .unwrap();
-            signer
-                .sign(&mut psbt, Some(i), self.wallet.secp_ctx())
-                .expect("it has already been checked that this is the correct key for this input");
+            let output_descriptor = bet.joint_output.wallet_descriptor();
+            let mut tmp_wallet = Wallet::new_offline(
+                output_descriptor,
+                None,
+                self.wallet.network(),
+                MemoryDatabase::default(),
+            )
+            .expect("nothing can go wrong here");
+            tmp_wallet.add_signer(
+                KeychainKind::External,
+                SignerOrdering::default(),
+                Arc::new(signer),
+            );
+            tmp_wallet.sign(&mut psbt, None)?;
         }
 
-        let (psbt, finalized) = self.wallet.finalize_psbt(psbt, None)?;
+        let finalized = self.wallet.finalize_psbt(&mut psbt, None)?;
         assert!(
             finalized,
             "since we have signed each input is must be finalized"
@@ -288,30 +320,65 @@ where
     pub fn learn_outcome(
         &self,
         bet_id: BetId,
-        attestation: Either<Scalar<Public>>,
+        attestation: Attestation<Secp256k1>,
     ) -> anyhow::Result<()> {
-        self.bets_db
-            .update_bet(bet_id, move |old_state| match old_state {
+
+
+        self.bet_db
+            .update_bet(bet_id, move |old_state, txdb| match old_state {
                 BetState::Confirmed { bet, .. } => {
-                    let joint_output = &bet.joint_output;
-                    match (&attestation, &joint_output.my_key) {
-                        (Either::Left(att), Either::Left(my_key))
-                        | (Either::Right(att), Either::Right(my_key)) => {
-                            let secret_key = s!(att + my_key);
-                            if &g!(secret_key * G) != joint_output.my_point() {
-                                return Err(anyhow!("Oracle gave wrong attestation"));
-                            }
-                            let secret_key = secret_key
-                                .mark::<NonZero>()
-                                .expect("it matches the output key")
-                                .into();
-                            Ok(BetState::Won { bet, secret_key })
+                    let event_id = bet.oracle_event.event.id.clone();
+                    let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome).context("parsing oracle outcome")?;
+                    let attest_scalar = Scalar::from(attestation.scalars[0].clone());
+                    if let Some(oracle_info) =  txdb.get_entity::<OracleInfo>(bet.oracle_id.clone())? {
+                        let anticipated_attestations = bet.oracle_event
+                            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0);
+
+                        if !attestation.verify_attestation(&bet.oracle_event, &oracle_info.oracle_keys.attestation_key) {
+                            return Err(anyhow!("Oracle gave wrong attestation"));
                         }
-                        _ => Ok(BetState::Lost { bet }),
+                    }
+
+                    let joint_output = &bet.joint_output;
+                    match (outcome.value, bet.i_chose_right) {
+                        (0, false) | (1, true) => {
+                                let my_key = match &joint_output.my_key {
+                                    Either::Left(my_key) => my_key,
+                                    Either::Right(my_key) => my_key,
+                                };
+                                let secret_key = s!(attest_scalar + my_key);
+                                assert_eq!(&g!(secret_key * G), joint_output.my_point(), "redundant check to make sure we have right key" );
+
+                                let secret_key = secret_key
+                                    .mark::<NonZero>()
+                                    .expect("it matches the output key")
+                                    .into();
+
+                                Ok(BetState::Won { bet, secret_key, attestation: attestation.clone()  })
+                            }
+                        _ => Ok(BetState::Lost { bet, attestation: attestation.clone() }),
                     }
                 }
                 old_state => Ok(old_state),
             })?;
+        Ok(())
+    }
+
+    async fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
+        let event_id = bet.oracle_event.event.id;
+        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
+        let event_response = self.client.get(event_url)
+                   .send()
+                   .await?
+        .error_for_status()?
+        .json::<EventResponse<Secp256k1>>()
+            .await?;
+
+
+        if let Some(attestation)  = event_response.attestation {
+            self.learn_outcome(bet_id, attestation)?;
+        }
+
         Ok(())
     }
 
@@ -320,7 +387,7 @@ where
         txid: Txid,
         descriptor: ExtendedDescriptor,
     ) -> anyhow::Result<Option<u32>> {
-        let blockchain = self.new_blockchain();
+        let blockchain = self.new_blockchain()?;
         let wallet = Wallet::new(
             descriptor,
             None,

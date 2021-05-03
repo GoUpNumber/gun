@@ -1,7 +1,5 @@
-use anyhow::anyhow;
 use bdk::{
-    bitcoin::{self, secp256k1::SecretKey, PublicKey},
-    blockchain::Blockchain,
+    bitcoin::{self,  PublicKey},
     descriptor::ExtendedDescriptor,
     keys::DescriptorSinglePub,
 };
@@ -22,6 +20,13 @@ impl<T> Either<T> {
         match self {
             Either::Left(t) => Either::Right(t),
             Either::Right(t) => Either::Left(t),
+        }
+    }
+
+    pub fn unwrap(&self) -> &T {
+        match &self {
+            Either::Left(t) => t,
+            Either::Right(t) => t,
         }
     }
 }
@@ -50,15 +55,7 @@ impl JointOutput {
 
         // These unwraps are safe -- we added r1 and r2 to the sum which are both functions of offer_key and
         // proposal_key it will never add up to zero.
-        let mut output_keys = match offer_choose_right {
-            true => vec![
-                g!(proposal_key + left + r1 * G)
-                    .mark::<(Normal, NonZero)>()
-                    .unwrap(),
-                g!(offer_key + right + r2 * G)
-                    .mark::<(Normal, NonZero)>()
-                    .unwrap(),
-            ],
+        let output_keys = match offer_choose_right {
             false => vec![
                 g!(proposal_key + right + r1 * G)
                     .mark::<(Normal, NonZero)>()
@@ -66,6 +63,17 @@ impl JointOutput {
                 g!(offer_key + left + r2 * G)
                     .mark::<(Normal, NonZero)>()
                     .unwrap(),
+            ],
+            true => vec![
+                g!(proposal_key + left + r1 * G)
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap(),
+                {
+                    let point = g!(offer_key + right + r2 * G);
+                    point
+                    .mark::<(Normal, NonZero)>()
+                    .unwrap()
+                }
             ],
         };
 
@@ -79,8 +87,6 @@ impl JointOutput {
                 Either::Right(s!(key + r2).mark::<NonZero>().unwrap())
             }
         };
-
-        output_keys.rotate_right(swap_points as usize);
 
         Self {
             output_keys: output_keys.try_into().unwrap(),
@@ -110,24 +116,24 @@ impl JointOutput {
         )
     }
 
-    pub async fn compute_privkey<B: Blockchain>(
-        &self,
-        sig_scalar: Scalar<Public, Zero>,
-    ) -> anyhow::Result<SecretKey> {
-        let (completed_key, public_key) = match &self.my_key {
-            Either::Left(key) => (s!(key + sig_scalar), self.output_keys[0]),
-            Either::Right(key) => (s!(key + sig_scalar), self.output_keys[1]),
-        };
+    // pub async fn compute_privkey<B: Blockchain>(
+    //     &self,
+    //     sig_scalar: Either,
+    // ) -> anyhow::Result<SecretKey> {
+    //     let (completed_key, public_key) = match &self.my_key {
+    //         Either::Left(key) => (s!(key + sig_scalar), self.output_keys[0]),
+    //         Either::Right(key) => (s!(key + sig_scalar), self.output_keys[1]),
+    //     };
 
-        if g!(completed_key * G) != public_key {
-            return Err(anyhow!("oracle's scalar does not much what was expected"));
-        }
+    //     if g!(completed_key * G) != public_key {
+    //         return Err(anyhow!("oracle's scalar does not much what was expected"));
+    //     }
 
-        Ok(completed_key
-            .mark::<NonZero>()
-            .expect("must not be zero since it was equal to the output key")
-            .into())
-    }
+    //     Ok(completed_key
+    //         .mark::<NonZero>()
+    //         .expect("must not be zero since it was equal to the output key")
+    //         .into())
+    // }
 
     pub fn my_point(&self) -> &Point {
         match self.my_key {

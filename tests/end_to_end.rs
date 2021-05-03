@@ -1,25 +1,28 @@
 use anyhow::Context;
 use bdk::{
     bitcoin::Network,
-    blockchain::{noop_progress, Blockchain, EsploraBlockchain},
+    blockchain::{
+        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Blockchain,
+        EsploraBlockchain,
+    },
     database::BatchDatabase,
+    wallet::AddressIndex,
     Wallet,
 };
+use bet_database::BetState;
 use bweet::{
     bet_database,
     bitcoin::Amount,
     keychain::Keychain,
-    party::{Either, Party},
+    party::{Party},
 };
-use olivia_core::{Event, EventId, OracleEvent, OracleInfo, Schnorr};
-use olivia_secp256k1::{fun::Scalar, Secp256k1};
+use olivia_core::{Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys, Attestation};
+use olivia_secp256k1::{Secp256k1};
 use std::{str::FromStr, time::Duration};
 
-async fn create_party(
-    id: u8,
-) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase, impl bet_database::BetDatabase>> {
+async fn create_party(id: u8) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase>> {
     let keychain = Keychain::new([id; 64]);
-    let descriptor = bdk::template::BIP84(
+    let descriptor = bdk::template::Bip84(
         keychain.main_wallet_xprv(Network::Regtest),
         bdk::KeychainKind::External,
     );
@@ -34,7 +37,7 @@ async fn create_party(
         .await
         .context("syncing wallet failed")?;
 
-    let bet_db = bet_database::InMemory::default();
+    let bet_db = bet_database::BetDatabase::test_new();
 
     while wallet.get_balance()? < 100_000 {
         fund_wallet(&wallet).await?;
@@ -43,12 +46,20 @@ async fn create_party(
         println!("syncing done on party {} -- checking balance", id);
     }
 
-    let party = Party::new(wallet, bet_db, keychain, esplora_url);
+    let party = Party::new(
+        wallet,
+        bet_db,
+        keychain,
+        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
+            base_url: esplora_url,
+            concurrency: None,
+        }),
+    );
     Ok(party)
 }
 
 async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> anyhow::Result<()> {
-    let new_address = wallet.get_new_address()?;
+    let new_address = wallet.get_address(AddressIndex::New)?;
     println!("funding: {}", new_address);
     bweet::reqwest::Client::new()
         .post("http://localhost:3000/faucet")
@@ -60,19 +71,25 @@ async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> an
 
 #[tokio::test]
 pub async fn end_to_end() {
+    use olivia_secp256k1::fun::s;
     let party_1 = create_party(1).await.unwrap();
-    let p1_initial_balance = party_1.wallet().get_balance().unwrap();
     let party_2 = create_party(2).await.unwrap();
-    let secret_key = Scalar::random(&mut rand::thread_rng());
-    let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
-    let oracle_keypair = olivia_secp256k1::SCHNORR.new_keypair(secret_key);
+    let nonce_secret_key = s!(7);
+    let announce_keypair = olivia_secp256k1::SCHNORR.new_keypair(s!(8));
+    let attest_keypair = olivia_secp256k1::SCHNORR.new_keypair(s!(10));
     let oracle_nonce_keypair = olivia_secp256k1::SCHNORR.new_keypair(nonce_secret_key);
     let event_id = EventId::from_str("/test/red_blue?left-win").unwrap();
     let oracle_id = "oracle.com".to_string();
     let oracle_info = OracleInfo {
-        id: oracle_id,
-        public_key: oracle_keypair.public_key().clone().into(),
+        id: oracle_id.clone(),
+        oracle_keys: OracleKeys {
+            attestation_key: attest_keypair.public_key().clone().into(),
+            announcement_key: announce_keypair.public_key().clone().into(),
+        },
     };
+
+    party_1.trust_oracle(oracle_info.clone()).unwrap();
+    party_2.trust_oracle(oracle_info.clone()).unwrap();
 
     let oracle_event = OracleEvent::<Secp256k1> {
         event: Event {
@@ -84,64 +101,88 @@ pub async fn end_to_end() {
 
     let (p1_bet_id, proposal) = party_1
         .make_proposal(
-            oracle_info.clone(),
+            oracle_id.clone(),
             oracle_event.clone(),
             Amount::from_str_with_denomination("0.01 BTC").unwrap(),
         )
         .unwrap();
 
-    let (p2_bet_id, encrypted_offer) = party_2
-        .make_offer_with_oracle_event(
-            proposal.clone(),
-            true,
-            Amount::from_str_with_denomination("0.02 BTC").unwrap(),
-            oracle_event,
-            oracle_info,
-        )
-        .await
-        .unwrap();
+    let (p2_bet_id, encrypted_offer) = {
+        let (bet, offer, cipher) = party_2
+            .generate_offer_with_oracle_event(
+                proposal.clone(),
+                true,
+                Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                oracle_event,
+                oracle_info,
+            )
+            .await
+            .unwrap();
+        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+    };
 
-    let decrypted_offer = party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
-
-    let offer_inputs = party_1
-        .lookup_offer_inputs(&decrypted_offer.offer)
-        .await
-        .unwrap();
+    let validated_offer = party_1.decrypt_and_validate_offer(p1_bet_id, encrypted_offer).await.unwrap();
 
     party_1
-        .take_offer(p1_bet_id, decrypted_offer, offer_inputs)
+        .take_offer(validated_offer)
         .unwrap();
 
-    while party_1.take_next_action(p1_bet_id).await.unwrap() == false {}
-    while party_2.take_next_action(p2_bet_id).await.unwrap() == false {}
+    while party_1
+        .bet_db()
+        .get_entity::<BetState>(p1_bet_id)
+        .unwrap()
+        .unwrap()
+        .name()
+        != "confirmed"
+    {
+        party_1.take_next_action(p1_bet_id).await.unwrap();
+    }
+    while party_2
+        .bet_db()
+        .get_entity::<BetState>(p2_bet_id)
+        .unwrap()
+        .unwrap()
+        .name()
+        != "confirmed"
+    {
+        party_2.take_next_action(p2_bet_id).await.unwrap();
+    }
 
-    let outcome = event_id.fragments(0).nth(0).unwrap();
-    let attestation = Either::Left(
-        Secp256k1::reveal_signature_s(
-            &oracle_keypair,
-            oracle_nonce_keypair.into(),
-            outcome.to_string().as_bytes(),
-        )
-        .into(),
-    );
+    party_1.bet_db().get_entity::<BetState>(p1_bet_id).unwrap();
+    party_2.bet_db().get_entity::<BetState>(p2_bet_id).unwrap();
 
-    party_1
-        .learn_outcome(p1_bet_id, attestation.clone())
+    let (outcome, index, winner, winner_id, loser, loser_id) = match rand::random() {
+        false => ("red_win", 0, &party_1, p1_bet_id, party_2, p2_bet_id),
+        true  => ("blue_win", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
+    };
+
+
+    let winner_initial_balance = winner.wallet().get_balance().unwrap();
+
+    let attestation =
+        Attestation {
+            outcome: outcome.into(),
+            scalars: vec![Secp256k1::reveal_attest_scalar(&attest_keypair, oracle_nonce_keypair.into(), index).into()],
+            time: olivia_core::chrono::Utc::now().naive_utc(),
+        };
+
+    winner
+        .learn_outcome(winner_id, attestation.clone())
         .unwrap();
-    party_2.learn_outcome(p2_bet_id, attestation).unwrap();
+   loser.learn_outcome(loser_id, attestation).unwrap();
 
-    let p1_claim = party_1
+    let winner_claim = winner
         .claim_to(None)
         .unwrap()
-        .expect("p1 won so should return a tx here");
+        .expect("winner should return a tx here");
     assert!(
-        party_2.claim_to(None).unwrap().is_none(),
-        "p2 lost so should no have claim tx"
+        loser.claim_to(None).unwrap().is_none(),
+        "loser should not have claim tx"
     );
 
-    assert_eq!(p1_claim.bets, vec![p1_bet_id]);
-    party_1.wallet().broadcast(p1_claim.tx).await.unwrap();
-    party_1.wallet().sync(noop_progress(), None).await.unwrap();
+    assert_eq!(winner_claim.bets, vec![winner_id]);
+    winner.wallet().broadcast(winner_claim.tx).await.unwrap();
+    winner.wallet().sync(noop_progress(), None).await.unwrap();
 
-    assert!(party_1.wallet().get_balance().unwrap() > p1_initial_balance);
+    assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
 }

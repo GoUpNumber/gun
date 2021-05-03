@@ -1,5 +1,6 @@
 use crate::{
-    bet_database::{Bet, BetDatabase, BetId, BetState},
+    bet_database::{BetId, BetState},
+    bet::Bet,
     change::Change,
     keychain::KeyPair,
     party::{proposal::Proposal, JointOutput, Party},
@@ -7,6 +8,7 @@ use crate::{
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
+        self,
         util::{psbt, psbt::PartiallySignedTransaction as PSBT},
         Amount, OutPoint, Script, Transaction, TxIn,
     },
@@ -22,7 +24,7 @@ use olivia_secp256k1::{
     fun::{marker::*, Point, XOnly},
     Secp256k1,
 };
-use std::convert::TryInto;
+use std::{convert::TryInto, str::FromStr};
 
 use super::{randomize::Randomize, Either};
 
@@ -50,6 +52,8 @@ struct Payload {
     pub change: Option<Change>,
     pub choose_right: bool,
     pub fee: u32,
+    #[serde(with = "bitcoin::util::amount::serde::as_sat")]
+    pub value: Amount,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -59,6 +63,8 @@ pub struct Offer {
     pub public_key: Point<EvenY>,
     pub choose_right: bool,
     pub fee: u32,
+    #[serde(with = "bitcoin::util::amount::serde::as_sat")]
+    pub value: Amount,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -77,6 +83,7 @@ impl Offer {
             change: self.change,
             choose_right: self.choose_right,
             fee: self.fee,
+            value: self.value,
         };
         let mut ciphertext = crate::encode::serialize(&payload);
         cipher.apply_keystream(&mut ciphertext);
@@ -100,6 +107,8 @@ impl Offer {
         };
         bdk::FeeRate::from_sat_per_vb((self.fee as f32) / (template_tx.get_weight() as f32 / 4.0))
     }
+
+
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -122,24 +131,33 @@ impl EncryptedOffer {
             public_key: self.public_key,
             choose_right: payload.choose_right,
             fee: payload.fee,
+            value: payload.value,
         })
     }
 }
 
-impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
-    pub async fn make_offer(
+impl FromStr for EncryptedOffer {
+    type Err = crate::encode::DecodeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::encode::deserialize_base2048(s)
+    }
+}
+
+impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
+    pub async fn generate_offer(
         &self,
         proposal: Proposal,
         choose_right: bool,
         local_value: Amount,
-    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
+    ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
         let url = crate::reqwest::Url::parse(&format!(
             "http://{}{}",
             proposal.oracle, proposal.event_id
         ))?;
         let oracle_event = self.get_oracle_event_from_url(url).await?;
         let oracle_info = self.save_oracle_info(proposal.oracle.clone()).await?;
-        self.make_offer_with_oracle_event(
+        self.generate_offer_with_oracle_event(
             proposal,
             choose_right,
             local_value,
@@ -149,14 +167,14 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         .await
     }
 
-    pub async fn make_offer_with_oracle_event(
+    pub async fn generate_offer_with_oracle_event(
         &self,
         proposal: Proposal,
         choose_right: bool,
         local_value: Amount,
         oracle_event: OracleEvent<Secp256k1>,
         oracle_info: OracleInfo<Secp256k1>,
-    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
+    ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
         let remote_public_key = &proposal.payload.public_key;
         let event_id = &oracle_event.event.id;
         if !event_id.is_binary() {
@@ -166,22 +184,19 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             ));
         }
 
-        let anticipated_signatures = oracle_event
-            .anticipate_signatures(&oracle_info.public_key, 0)
+        let anticipated_attestations = oracle_event
+            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0)[..2]
             .try_into()
             .unwrap();
 
         let local_keypair = self.keychain.keypair_for_offer(&proposal);
-        let (mut cipher, mut rng) = crate::ecdh::ecdh(&local_keypair, remote_public_key);
-        let output_value = local_value
-            .checked_add(proposal.value)
-            .ok_or(anyhow!("BTC amount overflow"))?;
+        let (cipher, mut rng) = crate::ecdh::ecdh(&local_keypair, remote_public_key);
 
-        let (offer, joint_output, outpoint) = self
-            .generate_offer(
+        let (offer, joint_output, outpoint, joint_output_value) = self
+            ._generate_offer(
                 proposal,
                 local_value,
-                anticipated_signatures,
+                anticipated_attestations,
                 local_keypair,
                 choose_right,
                 &mut rng,
@@ -191,36 +206,45 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         let bet = Bet {
             outpoint,
             joint_output: joint_output.clone(),
-            oracle_info,
+            oracle_id: oracle_info.id,
             oracle_event,
-            value: output_value,
+            local_value,
+            joint_output_value,
+            i_chose_right: choose_right,
         };
 
-        let bet_id = self.bets_db.insert_bet(BetState::Offered { bet })?;
-        let encrypted_offer = offer.encrypt(&mut cipher);
+        Ok((bet, offer, cipher))
+    }
 
+    pub fn save_and_encrypt_offer(&self, bet: Bet, offer: Offer, mut cipher: impl StreamCipher) -> anyhow::Result<(BetId, EncryptedOffer)> {
+        let bet_id = self.bet_db.insert_bet(BetState::Offered { bet })?;
+        let encrypted_offer = offer.encrypt(&mut cipher);
         Ok((bet_id, encrypted_offer))
     }
 
-    async fn generate_offer(
+    async fn _generate_offer(
         &self,
         proposal: Proposal,
-        output_value: Amount,
-        anticipated_signatures: [Point<Jacobian, Public, Zero>; 2],
+        local_value: Amount,
+        anticipated_attestations: [Point<Jacobian, Public, Zero>; 2],
         local_keypair: KeyPair,
         choose_right: bool,
         rng: &mut chacha20::ChaCha20Rng,
-    ) -> anyhow::Result<(Offer, JointOutput, OutPoint)> {
+    ) -> anyhow::Result<(Offer, JointOutput, OutPoint, Amount)> {
         let remote_public_key = proposal.payload.public_key;
         let randomize = Randomize::new(rng);
 
         let joint_output = JointOutput::new(
             [remote_public_key, local_keypair.public_key],
             Either::Right(local_keypair.secret_key),
-            anticipated_signatures,
+            anticipated_attestations,
             choose_right,
             randomize,
         );
+
+        let output_value = local_value
+            .checked_add(proposal.value)
+            .ok_or(anyhow!("BTC amount overflow"))?;
 
         let output = (joint_output.descriptor().script_pubkey(), output_value);
 
@@ -234,9 +258,11 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
                 input
                     .final_script_witness
                     .clone()
-                    .map(|witness| SignedInput {
-                        outpoint: txin.previous_output,
-                        witness: witness,
+                    .map(|witness| -> SignedInput {
+                        SignedInput {
+                            outpoint: txin.previous_output,
+                            witness,
+                        }
                     })
             })
             .collect();
@@ -257,9 +283,10 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             inputs,
             choose_right,
             fee,
+            value: local_value,
         };
 
-        Ok((offer, joint_output, OutPoint { txid, vout }))
+        Ok((offer, joint_output, OutPoint { txid, vout }, output_value))
     }
 
     pub async fn make_offer_generate_tx(
@@ -270,7 +297,7 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         let mut builder = self.wallet.build_tx();
         builder
             .add_recipient(output.0.clone(), output.1.as_sat())
-            .ordering(TxOrdering::BIP69Lexicographic);
+            .ordering(TxOrdering::Bip69Lexicographic);
 
         let mut required_input_value = proposal.value.as_sat();
         let mut input_value = 0;
@@ -305,13 +332,13 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
             ));
         }
 
-        let (psbt, tx_details) = builder
+        let (mut psbt, tx_details) = builder
             .finish()
             .context("Unable to create offer transaction")?;
 
-        let (psbt, is_final) = self
+        let is_final = self
             .wallet
-            .sign(psbt, None)
+            .sign(&mut psbt, None)
             .context("Unable to sign offer transaction")?;
         assert!(
             !is_final,
@@ -328,47 +355,3 @@ impl<B: Blockchain, D: BatchDatabase, BD: BetDatabase> Party<B, D, BD> {
         Ok((psbt, vout as u32, tx_details.fees as u32))
     }
 }
-
-// /// Creates a foreign UTXO by guessing the weight of the witness by the fact that it's a public
-// /// key output.
-// ///
-// /// # Examples
-// /// ```
-// /// ForeignUtxo::from_
-// /// ```
-// #[maybe_async]
-// pub fn from_onchain_(
-//     outpoint: OutPoint,
-//     blockchain: &impl Blockchain,
-// ) -> Result<Option<Self>, Error> {
-//     let tx =
-//         maybe_await!(blockchain.get_tx(&outpoint.txid))?.ok_or(Error::TransactionNotFound)?;
-//     let output = tx
-//         .output
-//         .get(outpoint.vout as usize)
-//         .ok_or(Error::InvalidOutpoint(outpoint))?;
-//     let script_pubkey = output.script_pubkey.clone();
-
-//     // at the worst we assume it's a uncmopressed public key on chain.
-//     let max_satisfaction_weight = if script_pubkey.is_p2pk() {
-//         4 * (1 + 73)
-//     } else if script_pubkey.is_p2pkh() {
-//         // conservatively assume uncompressed public key
-//         4 * (1 + 73 + 65)
-//     } else if script_pubkey.is_v0_p2wpkh() {
-//         // XXX: Technically, public keys could be uncompressed here as well, but this is would
-//         // only occur if a miner was intentionally trying fool you since in BIP143 nodes will
-//         // not allow uncompressed public keys in the witness
-//         4 + 1 + 73 + 33
-//     } else {
-//         // FIXME: Add taproot here?
-//         return Ok(None);
-//     };
-
-//     Ok(Some(Self {
-//         value: output.value,
-//         outpoint,
-//         script_pubkey,
-//         max_satisfaction_weight,
-//     }))
-// }
