@@ -168,7 +168,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         }: ValidatedOffer,
     ) -> anyhow::Result<Transaction> {
         self.bet_db
-            .update_bet(bet_id, |bet_state, _| match bet_state {
+            .update_bets(&[bet_id], |bet_state, _| match bet_state {
                 BetState::Proposed { .. } => Ok(BetState::Unconfirmed {
                     bet: bet.clone(),
                     funding_transaction: tx.clone(),

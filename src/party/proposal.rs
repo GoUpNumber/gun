@@ -198,7 +198,7 @@ mod test {
         let mut proposal = Proposal {
             oracle: "h00.ooo".into(),
             value: Amount::from_str("0.1 BTC").unwrap(),
-            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails?left-win")
+            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.win")
                 .unwrap(),
             payload: Payload {
                 inputs: vec![

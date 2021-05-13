@@ -97,6 +97,14 @@ pub enum BetState {
         bet: Bet,
         attestation: Attestation<Secp256k1>,
     },
+    Claiming {
+        bet: Bet,
+        claim_txid: Txid,
+        secret_key: SecretKey,
+    },
+    Claimed {
+        bet: Bet,
+    }
 }
 
 impl BetState {
@@ -109,6 +117,8 @@ impl BetState {
             Confirmed { .. } => "confirmed",
             Won { .. } => "won",
             Lost { .. } => "lost",
+            Claiming { .. } => "caliming",
+            Claimed { .. }  => "claimed"
         }
     }
 }
@@ -215,25 +225,27 @@ impl BetDatabase {
             .transpose()?)
     }
 
-    pub fn update_bet<F>(&self, bet_id: BetId, f: F) -> anyhow::Result<()>
+    pub fn update_bets<F>(&self, bet_ids: &[BetId], f: F) -> anyhow::Result<()>
     where
         F: Fn(BetState, TxDb) -> anyhow::Result<BetState>,
     {
-        let key = VersionedKey::from(MapKey::Bet(bet_id));
 
         self.0
             .transaction(move |db| {
-                let key = key.to_bytes();
-                let old_state =
-                    db.remove(key.clone())?
-                        .ok_or(ConflictableTransactionError::Abort(anyhow!(
-                            "bet {} does not exist",
-                            bet_id
-                        )))?;
-                let old_state = serde_json::from_slice(&old_state[..])
-                    .expect("it's in the DB so it should be deserializable");
-                let new_state = f(old_state, TxDb(db)).map_err(ConflictableTransactionError::Abort)?;
-                db.insert(key, serde_json::to_vec(&new_state).unwrap())?;
+                for bet_id in bet_ids {
+                    let key = VersionedKey::from(MapKey::Bet(*bet_id));
+                    let key = key.to_bytes();
+                    let old_state =
+                        db.remove(key.clone())?
+                    .ok_or(ConflictableTransactionError::Abort(anyhow!(
+                        "bet {} does not exist",
+                        bet_id
+                    )))?;
+                    let old_state = serde_json::from_slice(&old_state[..])
+                        .expect("it's in the DB so it should be deserializable");
+                    let new_state = f(old_state, TxDb(db)).map_err(ConflictableTransactionError::Abort)?;
+                    db.insert(key, serde_json::to_vec(&new_state).unwrap())?;
+                }
                 Ok(())
             })
             .map_err(|e| match e {

@@ -8,15 +8,7 @@ mod tx_tracker;
 
 use crate::{OracleInfo, bet::Bet, bet_database::{BetDatabase, BetId, BetState, Claim}, keychain::Keychain, reqwest};
 use anyhow::{anyhow, Context};
-use bdk::{
-    bitcoin::{util::psbt, OutPoint, PrivateKey, Script, TxOut, Txid},
-    blockchain::{AnyBlockchain, AnyBlockchainConfig, ConfigurableBlockchain},
-    database::MemoryDatabase,
-    descriptor::ExtendedDescriptor,
-    signer::SignerOrdering,
-    wallet::{AddressIndex, Wallet},
-    KeychainKind,
-};
+use bdk::{KeychainKind, bitcoin::{Amount, OutPoint, PrivateKey, Script, TxOut, Txid, util::psbt}, blockchain::{AnyBlockchain, AnyBlockchainConfig, ConfigurableBlockchain}, database::MemoryDatabase, descriptor::ExtendedDescriptor, signer::SignerOrdering, wallet::{AddressIndex, Wallet}};
 use olivia_core::{Attestation, OracleEvent, OracleId, Outcome, http::{EventResponse, RootResponse}};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
@@ -120,28 +112,7 @@ where
         Ok(AnyBlockchain::from_config(&self.blockchain_config)?)
     }
 
-    pub async fn get_txout(&self, outpoint: OutPoint) -> anyhow::Result<TxOut> {
-        let tx = self
-            .wallet
-            .client()
-            .get_tx(&outpoint.txid)
-            .await?
-            .ok_or(anyhow!("txid not found {}", outpoint.txid))?;
-
-        let txout = tx
-            .output
-            .get(outpoint.vout as usize)
-            .ok_or(anyhow!(
-                "vout {} doesn't exist on txid {}",
-                outpoint.vout,
-                outpoint.txid
-            ))?
-            .clone();
-        Ok(txout)
-    }
-
-    pub async fn take_next_action(&self, bet_id: BetId) -> anyhow::Result<bool> {
-        let mut took_any_action = false;
+    pub async fn take_next_action(&self, bet_id: BetId) -> anyhow::Result<()> {
 
         let bet_state = self
             .bet_db
@@ -151,6 +122,7 @@ where
         match bet_state {
             BetState::Proposed { .. }
             | BetState::Won { .. }
+            | BetState::Claimed { .. }
             | BetState::Lost { .. } => {}
             BetState::Offered { bet } => {
                 let txid = bet.outpoint.txid;
@@ -159,11 +131,10 @@ where
                     .await?
                 {
                     self.bet_db
-                        .update_bet(bet_id, move |old_state, _| match old_state {
+                        .update_bets(&[bet_id], move |old_state, _| match old_state {
                             BetState::Offered { bet } => Ok(BetState::Confirmed { bet, height }),
                             _ => Ok(old_state),
                         })?;
-                    took_any_action = true;
                 }
             }
             BetState::Unconfirmed {
@@ -180,7 +151,7 @@ where
                         txid, bet_id
                     ))?;
                 self.bet_db
-                    .update_bet(bet_id, move |old_state, _| match old_state {
+                    .update_bets(&[bet_id], move |old_state, _| match old_state {
                         BetState::Unconfirmed {
                             bet,
                             funding_transaction,
@@ -192,7 +163,6 @@ where
                         }),
                         old_state => Ok(old_state),
                     })?;
-                return Ok(true);
             }
             BetState::Unconfirmed {
                 funding_transaction,
@@ -205,14 +175,13 @@ where
                     .await?
                 {
                     self.bet_db
-                        .update_bet(bet_id, move |old_state, _| match old_state {
+                        .update_bets(&[bet_id], move |old_state, _| match old_state {
                             BetState::Unconfirmed { bet, .. } => {
                                 Ok(BetState::Confirmed { bet, height })
                             }
                             _ => Ok(old_state),
                         })?;
                     self.wallet.sync(bdk::blockchain::noop_progress(), None).await?;
-                    took_any_action = true;
                 }
             }
             BetState::Confirmed {
@@ -221,11 +190,84 @@ where
             } => {
                 self.try_get_outcome(bet_id, bet).await?;
             }
+            BetState::Claiming { bet, .. } => {
+                let has_been_claimed = self.outpoint_exists(bet.outpoint, bet.joint_output.wallet_descriptor()).await?;
+                if has_been_claimed {
+                    self.bet_db.update_bets(&[bet_id], move |old_state, _| Ok(match old_state {
+                        BetState::Claiming { bet, .. } => {
+                            BetState::Claimed { bet }
+                        }
+                        _ => old_state
+                    }))?;
+                }
+            }
         }
-        Ok(took_any_action)
+        Ok(())
     }
 
-    pub fn claim_to(&self, dest: Option<Script>) -> anyhow::Result<Option<Claim>> {
+    pub fn learn_outcome(
+        &self,
+        bet_id: BetId,
+        attestation: Attestation<Secp256k1>,
+    ) -> anyhow::Result<()> {
+
+        self.bet_db
+            .update_bets(&[bet_id], move |old_state, txdb| match old_state {
+                BetState::Confirmed { bet, .. } => {
+                    let event_id = bet.oracle_event.event.id.clone();
+                    let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome).context("parsing oracle outcome")?;
+                    let attest_scalar = Scalar::from(attestation.scalars[0].clone());
+                    if let Some(oracle_info) =  txdb.get_entity::<OracleInfo>(bet.oracle_id.clone())? {
+                        if !attestation.verify_attestation(&bet.oracle_event, &oracle_info.oracle_keys.attestation_key) {
+                            return Err(anyhow!("Oracle gave wrong attestation"));
+                        }
+                    }
+
+                    let joint_output = &bet.joint_output;
+                    match (outcome.value, bet.i_chose_right) {
+                        (0, false) | (1, true) => {
+                                let my_key = match &joint_output.my_key {
+                                    Either::Left(my_key) => my_key,
+                                    Either::Right(my_key) => my_key,
+                                };
+                                let secret_key = s!(attest_scalar + my_key);
+                                assert_eq!(&g!(secret_key * G), joint_output.my_point(), "redundant check to make sure we have right key" );
+
+                                let secret_key = secret_key
+                                    .mark::<NonZero>()
+                                    .expect("it matches the output key")
+                                    .into();
+
+                                Ok(BetState::Won { bet, secret_key, attestation: attestation.clone()  })
+                            }
+                        _ => Ok(BetState::Lost { bet, attestation: attestation.clone() }),
+                    }
+                }
+                old_state => Ok(old_state),
+            })?;
+        Ok(())
+    }
+
+    async fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
+        let event_id = bet.oracle_event.event.id;
+        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
+        let event_response = self.client.get(event_url)
+                   .send()
+                   .await?
+        .error_for_status()?
+        .json::<EventResponse<Secp256k1>>()
+            .await?;
+
+
+        if let Some(attestation)  = event_response.attestation {
+            self.learn_outcome(bet_id, attestation)?;
+        }
+
+        Ok(())
+    }
+
+
+    pub fn claim_to(&self, dest: Option<Script>, value: Option<Amount>) -> anyhow::Result<Option<Claim>> {
         let claimable_bets = self
             .bet_db
             .list_entities::<BetState>()
@@ -238,6 +280,7 @@ where
             })
             .filter_map(|(bet_id, bet_state)| match bet_state {
                 BetState::Won { bet, secret_key, ..  } => Some((bet_id, bet, secret_key)),
+                BetState::Claiming { bet, secret_key, .. } => Some((bet_id, bet, secret_key)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -254,10 +297,14 @@ where
         let mut builder = self.wallet.build_tx();
         builder
             .manually_selected_only()
-            .set_single_recipient(
-                dest.unwrap_or(self.wallet.get_address(AddressIndex::New)?.script_pubkey()),
-            )
             .enable_rbf();
+
+        let recipient = dest.unwrap_or(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
+
+        match value {
+            Some(value) => builder.add_recipient(recipient, value.as_sat()),
+            None => builder.set_single_recipient(recipient)
+        };
 
         for (_, bet, _) in &claimable_bets {
             let psbt_input = psbt::Input {
@@ -309,82 +356,29 @@ where
             finalized,
             "since we have signed each input is must be finalized"
         );
-        let tx = psbt.extract_tx();
+        let claim_tx = psbt.extract_tx();
+
+        self.bet_db.update_bets(&claimable_bet_ids[..], |bet_state, _|
+            match bet_state {
+               BetState::Won { bet, secret_key, .. }| BetState::Claiming { bet, secret_key, .. } => Ok(BetState::Claiming {
+                   bet,
+                   claim_txid: claim_tx.txid(),
+                   secret_key,
+               }),
+               _ => Err(anyhow!("bet changed under our nose -- try again"))
+            }
+        )?;
 
         Ok(Some(Claim {
-            tx,
+            tx: claim_tx,
             bets: claimable_bet_ids,
         }))
-    }
-
-    pub fn learn_outcome(
-        &self,
-        bet_id: BetId,
-        attestation: Attestation<Secp256k1>,
-    ) -> anyhow::Result<()> {
-
-
-        self.bet_db
-            .update_bet(bet_id, move |old_state, txdb| match old_state {
-                BetState::Confirmed { bet, .. } => {
-                    let event_id = bet.oracle_event.event.id.clone();
-                    let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome).context("parsing oracle outcome")?;
-                    let attest_scalar = Scalar::from(attestation.scalars[0].clone());
-                    if let Some(oracle_info) =  txdb.get_entity::<OracleInfo>(bet.oracle_id.clone())? {
-                        let anticipated_attestations = bet.oracle_event
-                            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0);
-
-                        if !attestation.verify_attestation(&bet.oracle_event, &oracle_info.oracle_keys.attestation_key) {
-                            return Err(anyhow!("Oracle gave wrong attestation"));
-                        }
-                    }
-
-                    let joint_output = &bet.joint_output;
-                    match (outcome.value, bet.i_chose_right) {
-                        (0, false) | (1, true) => {
-                                let my_key = match &joint_output.my_key {
-                                    Either::Left(my_key) => my_key,
-                                    Either::Right(my_key) => my_key,
-                                };
-                                let secret_key = s!(attest_scalar + my_key);
-                                assert_eq!(&g!(secret_key * G), joint_output.my_point(), "redundant check to make sure we have right key" );
-
-                                let secret_key = secret_key
-                                    .mark::<NonZero>()
-                                    .expect("it matches the output key")
-                                    .into();
-
-                                Ok(BetState::Won { bet, secret_key, attestation: attestation.clone()  })
-                            }
-                        _ => Ok(BetState::Lost { bet, attestation: attestation.clone() }),
-                    }
-                }
-                old_state => Ok(old_state),
-            })?;
-        Ok(())
-    }
-
-    async fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
-        let event_id = bet.oracle_event.event.id;
-        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
-        let event_response = self.client.get(event_url)
-                   .send()
-                   .await?
-        .error_for_status()?
-        .json::<EventResponse<Secp256k1>>()
-            .await?;
-
-
-        if let Some(attestation)  = event_response.attestation {
-            self.learn_outcome(bet_id, attestation)?;
-        }
-
-        Ok(())
     }
 
     pub async fn is_confirmed(
         &self,
         txid: Txid,
+        // output in transaction
         descriptor: ExtendedDescriptor,
     ) -> anyhow::Result<Option<u32>> {
         let blockchain = self.new_blockchain()?;
@@ -404,5 +398,38 @@ where
                 None
             }
         }))
+    }
+
+    pub async fn get_txout(&self, outpoint: OutPoint) -> anyhow::Result<TxOut> {
+        let tx = self
+            .wallet
+            .client()
+            .get_tx(&outpoint.txid)
+            .await?
+            .ok_or(anyhow!("txid not found {}", outpoint.txid))?;
+
+        let txout = tx
+            .output
+            .get(outpoint.vout as usize)
+            .ok_or(anyhow!(
+                "vout {} doesn't exist on txid {}",
+                outpoint.vout,
+                outpoint.txid
+            ))?
+            .clone();
+        Ok(txout)
+    }
+
+    pub async fn outpoint_exists(&self, outpoint: OutPoint, descriptor: ExtendedDescriptor) -> anyhow::Result<bool> {
+        let blockchain = self.new_blockchain()?;
+        let wallet = Wallet::new(
+            descriptor,
+            None,
+            self.wallet.network(),
+            MemoryDatabase::default(),
+            blockchain,
+        ).await?;
+        wallet.sync(bdk::blockchain::noop_progress(), None).await?;
+        Ok(wallet.list_unspent()?.iter().find(|utxo| utxo.outpoint == outpoint).is_some())
     }
 }

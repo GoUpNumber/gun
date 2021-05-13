@@ -1,6 +1,6 @@
 #![feature(backtrace)]
 use anyhow::{anyhow, Context};
-use bdk::{Wallet, bitcoin::Network, blockchain::{AnyBlockchain, Blockchain, ConfigurableBlockchain, Progress}, database::BatchDatabase, reqwest, sled};
+use bdk::{Wallet, bitcoin::Network, bitcoin::Address, blockchain::{AnyBlockchain, Blockchain, ConfigurableBlockchain, Progress}, database::BatchDatabase, reqwest, sled};
 use bdk_cli::structopt::StructOpt;
 use bweet::{
     amount_ext::FromCliStr,
@@ -70,6 +70,12 @@ macro_rules! cli_app {
                             ),
                     )
                     .subcommand(
+                        SubCommand::with_name("claim")
+                            .about("Claim the winnings from your bets")
+                            .arg(Arg::with_name("to").takes_value(true).help("Claim to particular address"))
+                            .arg(Arg::with_name("value").takes_value(true).help("How much to claim (default is claims all)"))
+                    )
+                    .subcommand(
                         SubCommand::with_name("show")
                             .about("View a proposal or offer")
                             .arg(
@@ -102,6 +108,7 @@ macro_rules! cli_app {
                         SubCommand::with_name("nigiri")
                             .about("Interact with nigiri")
                             .subcommand(SubCommand::with_name("start").about("runs nigiri start"))
+                            .subcommand(SubCommand::with_name("stop").about("runs nigiri stop"))
                             .subcommand(
                                 SubCommand::with_name("reset").about("runs nigiri stop --delete"),
                             )
@@ -240,11 +247,23 @@ async fn main() -> anyhow::Result<()> {
                 }
                 party.take_next_action(bet_id).await?;
             }
-            ("show", Some(args)) => {
+            ("decode", Some(args)) => {
                 let message = args.value_of("message").unwrap();
                 if let Ok(proposal) = Proposal::from_str(message) {
                     println!("{}", serde_json::to_string_pretty(&proposal).unwrap());
-                    return Ok(());
+                }
+                // Todo offer
+            }
+            ("claim", Some(args)) => {
+                let party =  load_party(&wallet_dir).await?;
+                let to =  args.value_of("to").map(|addr|Address::from_str(addr).map(|a| a.script_pubkey())).transpose()?;
+                let value = args.value_of("value").map(|value| Amount::from_str(value)).transpose()?;
+                match party.claim_to(to,value)? {
+                    Some(claim) => {
+                        println!("broadcasting claim tx: {}", claim.tx.txid());
+                        party.wallet().broadcast(claim.tx).await?;
+                    },
+                    None => return Err(anyhow!("There are no coins to claim")),
                 }
             }
             _ => {

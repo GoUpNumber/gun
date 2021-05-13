@@ -69,6 +69,8 @@ pub fn list_bets(bet_db: &BetDatabase) -> Table {
             | BetState::Confirmed { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
+            | BetState::Claiming { bet, .. }
+            | BetState::Claimed { bet, .. }
             => table.add_row(Row::new(vec![
                 bet_id.to_string(),
                 name,

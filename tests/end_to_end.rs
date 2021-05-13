@@ -17,7 +17,7 @@ use bweet::{
     party::{Party},
 };
 use olivia_core::{Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys, Attestation};
-use olivia_secp256k1::{Secp256k1};
+use olivia_secp256k1::{Secp256k1, fun::Scalar};
 use std::{str::FromStr, time::Duration};
 
 async fn create_party(id: u8) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase>> {
@@ -71,15 +71,14 @@ async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> an
 
 #[tokio::test]
 pub async fn end_to_end() {
-    use olivia_secp256k1::fun::s;
     let party_1 = create_party(1).await.unwrap();
     let party_2 = create_party(2).await.unwrap();
-    let nonce_secret_key = s!(7);
-    let announce_keypair = olivia_secp256k1::SCHNORR.new_keypair(s!(8));
-    let attest_keypair = olivia_secp256k1::SCHNORR.new_keypair(s!(10));
+    let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
+    let announce_keypair = olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
+    let attest_keypair = olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
     let oracle_nonce_keypair = olivia_secp256k1::SCHNORR.new_keypair(nonce_secret_key);
-    let event_id = EventId::from_str("/test/red_blue?left-win").unwrap();
-    let oracle_id = "oracle.com".to_string();
+    let event_id = EventId::from_str("/test/red_blue.win").unwrap();
+    let oracle_id = "non-existent-oracle.com".to_string();
     let oracle_info = OracleInfo {
         id: oracle_id.clone(),
         oracle_keys: OracleKeys {
@@ -172,11 +171,11 @@ pub async fn end_to_end() {
    loser.learn_outcome(loser_id, attestation).unwrap();
 
     let winner_claim = winner
-        .claim_to(None)
+        .claim_to(None, None)
         .unwrap()
         .expect("winner should return a tx here");
     assert!(
-        loser.claim_to(None).unwrap().is_none(),
+        loser.claim_to(None, None).unwrap().is_none(),
         "loser should not have claim tx"
     );
 
