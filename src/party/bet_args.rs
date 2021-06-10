@@ -1,0 +1,53 @@
+use crate::bet_database::{BetDatabase, BetId, BetState};
+use anyhow::{anyhow, Context};
+use bdk::{
+    bitcoin::Amount,
+    database::BatchDatabase,
+    wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext},
+    TxBuilder,
+};
+
+pub struct BetArgs<'a, 'b> {
+    pub value: Amount,
+    pub may_overlap: &'a [BetId],
+    pub must_overlap: &'b [BetId],
+}
+
+impl Default for BetArgs<'_, '_> {
+    fn default() -> Self {
+        static EMPTY: [BetId; 0] = [];
+        BetArgs {
+            value: Amount::ZERO,
+            may_overlap: &EMPTY,
+            must_overlap: &EMPTY,
+        }
+    }
+}
+
+impl BetArgs<'_, '_> {
+    pub fn apply_args<
+        'a,
+        B,
+        D: BatchDatabase,
+        Cs: CoinSelectionAlgorithm<D>,
+        Ctx: TxBuilderContext,
+    >(
+        &self,
+        bet_db: &BetDatabase,
+        builder: &mut TxBuilder<B, D, Cs, Ctx>,
+    ) -> anyhow::Result<()> {
+        builder.unspendable(bet_db.currently_used_utxos(self.may_overlap)?);
+        for bet_id in self.must_overlap {
+            let bet = bet_db.get_entity::<BetState>(*bet_id)?.ok_or(anyhow!(
+                "bet {} that we must overlap with does not exist",
+                bet_id
+            ))?;
+            for input in bet.reserved_utxos() {
+                builder.add_utxo(input).with_context(|| {
+                    format!("adding utxo {} for 'must_overlap' with {}", input, bet_id)
+                })?;
+            }
+        }
+        Ok(())
+    }
+}

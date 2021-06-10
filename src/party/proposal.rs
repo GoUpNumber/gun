@@ -6,16 +6,20 @@ use crate::{
     party::Party,
 };
 use anyhow::{anyhow, Context};
-use bdk::{
-    bitcoin, bitcoin::Denomination, blockchain::Blockchain, database::BatchDatabase, reqwest,
-    FeeRate,
-};
+use bdk::{bitcoin, bitcoin::Denomination, database::BatchDatabase, reqwest, FeeRate};
 use core::str::FromStr;
 use olivia_core::{EventId, OracleEvent, OracleId};
 use olivia_secp256k1::{
     schnorr_fun::fun::{marker::*, Point},
     Secp256k1,
 };
+
+use super::BetArgs;
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum PayloadVer {
+    One(Payload),
+}
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Proposal {
@@ -43,21 +47,19 @@ pub struct Payload {
 impl Proposal {
     pub fn to_string(&self) -> String {
         format!(
-            "PROPOSE#{}#{}#{}#{}",
+            "📣{}#{}#{}#{}",
             self.value
                 .to_string_in(Denomination::Bitcoin)
                 .trim_end_matches('0'),
             self.oracle,
             self.event_id,
-            crate::encode::serialize_base2048(&self.payload)
+            crate::encode::serialize_base2048(&PayloadVer::One(self.payload.clone()))
         )
     }
 
     pub fn from_str(string: &str) -> anyhow::Result<Self> {
+        let string = string.trim_start_matches("📣");
         let mut segments = string.split("#");
-        if segments.next() != Some("PROPOSE") {
-            return Err(anyhow!("not a proposal"));
-        }
         let value = Amount::from_str_in(
             segments.next().ok_or(anyhow!("missing amount"))?,
             Denomination::Bitcoin,
@@ -70,7 +72,9 @@ impl Proposal {
         let base2048_encoded_payload = segments
             .next()
             .ok_or(anyhow!("missing base2048 encoded data"))?;
-        let payload = crate::encode::deserialize_base2048(base2048_encoded_payload)?;
+        let payload = match crate::encode::deserialize_base2048(base2048_encoded_payload)? {
+            PayloadVer::One(payload) => payload,
+        };
 
         Ok(Proposal {
             oracle,
@@ -88,23 +92,23 @@ impl Proposal {
     }
 }
 
-impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
+impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub async fn make_proposal_from_url(
         &self,
         url: reqwest::Url,
-        value: Amount,
+        args: BetArgs<'_, '_>,
     ) -> anyhow::Result<(BetId, Proposal)> {
         let oracle_id = url.host_str().unwrap().to_string();
         let oracle_event = self.get_oracle_event_from_url(url).await?;
         self.save_oracle_info(oracle_id.clone()).await?;
-        self.make_proposal(oracle_id, oracle_event, value)
+        self.make_proposal(oracle_id, oracle_event, args)
     }
 
     pub fn make_proposal(
         &self,
         oracle_id: OracleId,
         oracle_event: OracleEvent<Secp256k1>,
-        value: Amount,
+        args: BetArgs,
     ) -> anyhow::Result<(BetId, Proposal)> {
         let event_id = &oracle_event.event.id;
         if !event_id.is_binary() {
@@ -118,11 +122,13 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         let mut builder = self.wallet.build_tx();
         builder
             .fee_rate(FeeRate::from_sat_per_vb(0.0))
-            .add_recipient(Script::default(), value.as_sat());
+            .add_recipient(Script::default(), args.value.as_sat());
+
+        args.apply_args(self.bet_db(), &mut builder)?;
 
         let (psbt, txdetails) = builder
             .finish()
-            .context("Failed to generate proposal output")?;
+            .context("Failed to gather proposal outputs")?;
 
         assert_eq!(txdetails.fees, 0);
 
@@ -161,7 +167,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         let proposal = Proposal {
             oracle: oracle_id.clone(),
             event_id: event_id.clone(),
-            value: value,
+            value: args.value,
             payload: Payload {
                 inputs: tx_inputs,
                 public_key: keypair.public_key,
@@ -175,9 +181,8 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             keypair,
         };
 
-        let bet_id = self
-            .bet_db
-            .insert_bet(BetState::Proposed { local_proposal })?;
+        let new_bet = BetState::Proposed { local_proposal };
+        let bet_id = self.bet_db.insert_bet(new_bet)?;
 
         Ok((bet_id, proposal))
     }
@@ -198,8 +203,7 @@ mod test {
         let mut proposal = Proposal {
             oracle: "h00.ooo".into(),
             value: Amount::from_str("0.1 BTC").unwrap(),
-            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.win")
-                .unwrap(),
+            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.win").unwrap(),
             payload: Payload {
                 inputs: vec![
                     OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),

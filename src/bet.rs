@@ -1,11 +1,13 @@
-use bdk::bitcoin::{self, Amount, OutPoint};
-use olivia_secp256k1::Secp256k1;
-use olivia_core::{OracleEvent, OracleId};
 use crate::party::JointOutput;
+use bdk::bitcoin::{self, Amount, OutPoint, Transaction};
+use olivia_core::{OracleEvent, OracleId};
+use olivia_secp256k1::Secp256k1;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bet {
-    pub outpoint: OutPoint,
+    pub tx: Transaction,
+    pub my_input_indexes: Vec<usize>,
+    pub vout: u32,
     pub joint_output: JointOutput,
     pub oracle_id: OracleId,
     pub oracle_event: OracleEvent<Secp256k1>,
@@ -16,15 +18,19 @@ pub struct Bet {
     pub i_chose_right: bool,
 }
 
-
 impl Bet {
     pub fn prompt(&self) -> String {
         use core::fmt::Write;
         let mut res = String::new();
-        let parties = self.oracle_event.event.id.parties().expect("We only do vs type events");
+        let parties = self
+            .oracle_event
+            .event
+            .id
+            .parties()
+            .expect("We only do vs type events");
         let (i_back, they_back) = match self.i_chose_right {
             false => parties,
-            true => (parties.1, parties.0)
+            true => (parties.1, parties.0),
         };
         let i_risk = self.local_value;
         let i_gain = self.joint_output_value - self.local_value;
@@ -37,8 +43,13 @@ impl Bet {
         write!(&mut res, "You risk {} to gain {}.", i_risk, i_gain).unwrap();
         write!(&mut res, "\n").unwrap();
         write!(&mut res, "The outcome is decided by {}.", oracle).unwrap();
-        if let Some(time) =  expected_outcome_time {
-            write!(&mut res, "\nThe outcome is expected to be known at {}", time).unwrap();
+        if let Some(time) = expected_outcome_time {
+            write!(
+                &mut res,
+                "\nThe outcome is expected to be known at {}",
+                time
+            )
+            .unwrap();
         }
         res
     }
@@ -46,5 +57,12 @@ impl Bet {
     /// Get a mutable reference to the bet's joint output value.
     pub fn joint_output_value_mut(&mut self) -> &mut Amount {
         &mut self.joint_output_value
+    }
+
+    pub fn outpoint(&self) -> OutPoint {
+        OutPoint {
+            txid: self.tx.txid(),
+            vout: self.vout,
+        }
     }
 }

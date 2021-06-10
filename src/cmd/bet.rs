@@ -1,8 +1,13 @@
-use crate::{OracleInfo, bet::Bet, bet_database::{BetDatabase, BetState}, party::{Offer, Party, Proposal}};
+use crate::{
+    bet::Bet,
+    bet_database::{BetDatabase, BetOrProp, BetState},
+    party::{BetArgs, Offer, Party, Proposal},
+    OracleInfo,
+};
 use anyhow::{anyhow, Context};
-use bdk::{bitcoin::Amount, blockchain::Blockchain, database::BatchDatabase, reqwest::Url};
+use bdk::{database::BatchDatabase, reqwest::Url};
 use chacha20::cipher::StreamCipher;
-use olivia_core::{Outcome, OutcomeError, Descriptor};
+use olivia_core::{Descriptor, Outcome, OutcomeError};
 use term_table::{row::Row, Table};
 
 pub fn list_oracles(bet_db: &BetDatabase) -> Table {
@@ -20,15 +25,15 @@ pub fn list_oracles(bet_db: &BetDatabase) -> Table {
         ]));
     }
 
-   table
+    table
 }
 
-pub async fn propose<B: Blockchain, D: BatchDatabase>(
-    party: Party<B, D>,
+pub async fn propose<D: BatchDatabase>(
+    party: Party<bdk::blockchain::EsploraBlockchain, D>,
     event_url: Url,
-    value: Amount,
+    args: BetArgs<'_, '_>,
 ) -> anyhow::Result<Proposal> {
-    let (_bet_id, proposal) = party.make_proposal_from_url(event_url, value).await?;
+    let (_bet_id, proposal) = party.make_proposal_from_url(event_url, args).await?;
     Ok(proposal)
 }
 
@@ -47,7 +52,15 @@ pub fn list_bets(bet_db: &BetDatabase) -> Table {
     for (bet_id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
         match bet_state {
-            BetState::Proposed { local_proposal } => table.add_row(Row::new(vec![
+            BetState::Proposed { local_proposal }
+            | BetState::Cancelling {
+                bet_or_prop: BetOrProp::Proposal(local_proposal),
+                ..
+            }
+            | BetState::Cancelled {
+                bet_or_prop: BetOrProp::Proposal(local_proposal),
+                ..
+            } => table.add_row(Row::new(vec![
                 bet_id.to_string(),
                 name,
                 local_proposal
@@ -64,26 +77,33 @@ pub fn list_bets(bet_db: &BetDatabase) -> Table {
                     local_proposal.proposal.oracle, local_proposal.proposal.event_id
                 ),
             ])),
-            BetState::Offered { bet }
+            BetState::Offered { bet, .. }
             | BetState::Unconfirmed { bet, .. }
             | BetState::Confirmed { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
             | BetState::Claiming { bet, .. }
-            | BetState::Claimed { bet, .. }
-            => table.add_row(Row::new(vec![
+            | BetState::Cancelling {
+                bet_or_prop: BetOrProp::Bet(bet),
+                ..
+            }
+            | BetState::Cancelled {
+                bet_or_prop: BetOrProp::Bet(bet),
+                ..
+            }
+            | BetState::Claimed { bet, .. } => table.add_row(Row::new(vec![
                 bet_id.to_string(),
                 name,
                 bet.oracle_event
-                   .event
-                   .expected_outcome_time
-                   .map(|d| format!("{}", d))
-                   .unwrap_or("-".into()),
+                    .event
+                    .expected_outcome_time
+                    .map(|d| format!("{}", d))
+                    .unwrap_or("-".into()),
                 bet.local_value.to_string(),
                 bet.joint_output_value
-                   .checked_sub(bet.local_value)
-                   .unwrap()
-                   .to_string(),
+                    .checked_sub(bet.local_value)
+                    .unwrap()
+                    .to_string(),
                 match bet.i_chose_right {
                     false => bet.oracle_event.event.id.parties().unwrap().0.into(),
                     true => bet.oracle_event.event.id.parties().unwrap().1.into(),
@@ -96,11 +116,11 @@ pub fn list_bets(bet_db: &BetDatabase) -> Table {
     table
 }
 
-pub async fn generate_offer<B: Blockchain, D: BatchDatabase>(
-    party: &Party<B, D>,
+pub async fn generate_offer<D: BatchDatabase>(
+    party: &Party<bdk::blockchain::EsploraBlockchain, D>,
     proposal: Proposal,
-    value: Amount,
     choice: &str,
+    args: BetArgs<'_, '_>,
 ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
     let event_id = &proposal.event_id;
     if event_id.n_outcomes() != 2 {
@@ -110,28 +130,33 @@ pub async fn generate_offer<B: Blockchain, D: BatchDatabase>(
             event_id.n_outcomes()
         ));
     }
-    let outcome =
-        Outcome::try_from_id_and_outcome(proposal.event_id.clone(), choice).map_err(|e| -> anyhow::Error {match e {
-            OutcomeError::OccurredNotTrue { .. } => {
-                unreachable!("not an occur event")
-            }
-            OutcomeError::InvalidEntity { entity } => {
-                anyhow!(
-                    "{} is not a valid outcome: {} is not one of the competitors",
-                    choice,
-                    entity
-                )
-            }
-            OutcomeError::BadFormat => {
-                match event_id.descriptor() {
-                    Descriptor::Enum { outcomes }  => anyhow!("{} is not a valid outcome. possible outcomes are: {}", choice, outcomes.join(", ")),
-                    _ => anyhow!("{} is not a valid outcome.", choice),
+    let outcome = Outcome::try_from_id_and_outcome(proposal.event_id.clone(), choice).map_err(
+        |e| -> anyhow::Error {
+            match e {
+                OutcomeError::OccurredNotTrue { .. } => {
+                    unreachable!("not an occur event")
                 }
+                OutcomeError::InvalidEntity { entity } => {
+                    anyhow!(
+                        "{} is not a valid outcome: {} is not one of the competitors",
+                        choice,
+                        entity
+                    )
+                }
+                OutcomeError::BadFormat => match event_id.descriptor() {
+                    Descriptor::Enum { outcomes } => anyhow!(
+                        "{} is not a valid outcome. possible outcomes are: {}",
+                        choice,
+                        outcomes.join(", ")
+                    ),
+                    _ => anyhow!("{} is not a valid outcome.", choice),
+                },
             }
-        }})?;
+        },
+    )?;
 
     party
-        .generate_offer(proposal, outcome.value == 1, value, )
+        .generate_offer(proposal, outcome.value == 1, args)
         .await
         .context("failed to generate offer")
 }

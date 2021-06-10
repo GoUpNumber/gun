@@ -10,7 +10,7 @@ edition = "2018"
 dirs = "3.0"
 clap = "2.33"
 bdk = {  path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "async-interface"], default-features = false }
-bdk-cli = { path = "../bdk-cli", features = ["clap", "async-interface"] }
+bdk-cli = { path = "../bdk-cli", features = ["clap", "async-interface"], default-features = false }
 serde_json = "1.0"
 olivia_core = { path = "../olivia/olivia_core", features = ["std"] }
 olivia_secp256k1 = { path = "../olivia/olivia_secp256k1", features = ["libsecp_compat"] }

@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::Network, blockchain::Blockchain, database::BatchDatabase, wallet::AddressIndex, Wallet,
+    bitcoin::Network, blockchain::EsploraBlockchain, database::BatchDatabase, wallet::AddressIndex,
+    Wallet,
 };
 use serde_json::json;
 use std::{fs, path::PathBuf, process::Command};
 
 pub async fn nigiri_fund(
-    wallet: &Wallet<impl Blockchain, impl BatchDatabase>,
+    wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>,
 ) -> anyhow::Result<()> {
     let new_address = wallet.get_address(AddressIndex::New)?;
     println!("funding: {}", new_address);

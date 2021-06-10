@@ -1,11 +1,7 @@
-use crate::{
-    bet::Bet,
-    party::LocalProposal,
-    OracleInfo,
-};
+use crate::{bet::Bet, party::LocalProposal, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{secp256k1::SecretKey, Transaction, Txid},
+    bitcoin::{secp256k1::SecretKey, OutPoint, Transaction, Txid},
     sled::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
@@ -70,7 +66,6 @@ pub struct Claim {
     pub tx: Transaction,
 }
 
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BetState {
     Proposed {
@@ -82,7 +77,6 @@ pub enum BetState {
     Unconfirmed {
         bet: Bet,
         funding_transaction: Transaction,
-        has_broadcast: bool,
     },
     Confirmed {
         bet: Bet,
@@ -104,6 +98,46 @@ pub enum BetState {
     },
     Claimed {
         bet: Bet,
+    },
+    Cancelling {
+        cancel_txid: Txid,
+        bet_or_prop: BetOrProp,
+    },
+    Cancelled {
+        bet_or_prop: BetOrProp,
+        reason: CancelReason,
+    },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum CancelReason {
+    ICancelled {
+        spent: OutPoint,
+        my_cancelling_tx: Txid,
+    },
+    TheyCancelled {
+        spent: OutPoint,
+    },
+    InvalidTx(Transaction),
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum BetOrProp {
+    Bet(Bet),
+    Proposal(LocalProposal),
+}
+
+impl BetOrProp {
+    pub fn inputs(&self) -> Vec<OutPoint> {
+        match self {
+            BetOrProp::Bet(bet) => bet
+                .tx
+                .input
+                .iter()
+                .map(|input| input.previous_output)
+                .collect(),
+            BetOrProp::Proposal(local_proposal) => local_proposal.proposal.payload.inputs.clone(),
+        }
     }
 }
 
@@ -118,7 +152,28 @@ impl BetState {
             Won { .. } => "won",
             Lost { .. } => "lost",
             Claiming { .. } => "caliming",
-            Claimed { .. }  => "claimed"
+            Claimed { .. } => "claimed",
+            Cancelled { .. } => "cancelled",
+            Cancelling { .. } => "cancelling",
+        }
+    }
+
+    pub fn reserved_utxos(&self) -> Vec<OutPoint> {
+        use BetState::*;
+        match self {
+            Proposed { local_proposal } => local_proposal
+                .proposal
+                .payload
+                .inputs
+                .iter()
+                .map(Clone::clone)
+                .collect(),
+            Offered { bet, .. } | Unconfirmed { bet, .. } => bet
+                .my_input_indexes
+                .iter()
+                .map(|i| bet.tx.input[*i].previous_output)
+                .collect(),
+            _ => vec![],
         }
     }
 }
@@ -212,6 +267,16 @@ impl BetDatabase {
         Ok(i)
     }
 
+    pub fn currently_used_utxos(&self, ignore: &[BetId]) -> anyhow::Result<Vec<OutPoint>> {
+        Ok(self
+            .list_entities::<BetState>()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(bet_id, _)| !ignore.contains(bet_id))
+            .flat_map(|(_, bet)| bet.reserved_utxos())
+            .collect())
+    }
+
     pub fn insert_oracle_info(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
         let key = MapKey::OracleInfo(oracle_info.id.clone());
         insert(&self.0, key, oracle_info)
@@ -227,9 +292,8 @@ impl BetDatabase {
 
     pub fn update_bets<F>(&self, bet_ids: &[BetId], f: F) -> anyhow::Result<()>
     where
-        F: Fn(BetState, TxDb) -> anyhow::Result<BetState>,
+        F: Fn(BetState, BetId, TxDb) -> anyhow::Result<BetState>,
     {
-
         self.0
             .transaction(move |db| {
                 for bet_id in bet_ids {
@@ -237,13 +301,14 @@ impl BetDatabase {
                     let key = key.to_bytes();
                     let old_state =
                         db.remove(key.clone())?
-                    .ok_or(ConflictableTransactionError::Abort(anyhow!(
-                        "bet {} does not exist",
-                        bet_id
-                    )))?;
+                            .ok_or(ConflictableTransactionError::Abort(anyhow!(
+                                "bet {} does not exist",
+                                bet_id
+                            )))?;
                     let old_state = serde_json::from_slice(&old_state[..])
                         .expect("it's in the DB so it should be deserializable");
-                    let new_state = f(old_state, TxDb(db)).map_err(ConflictableTransactionError::Abort)?;
+                    let new_state = f(old_state, *bet_id, TxDb(db))
+                        .map_err(ConflictableTransactionError::Abort)?;
                     db.insert(key, serde_json::to_vec(&new_state).unwrap())?;
                 }
                 Ok(())

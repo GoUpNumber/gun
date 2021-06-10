@@ -1,14 +1,14 @@
 use crate::{
-    bet_database::{BetId, BetState},
     bet::Bet,
+    bet_database::{BetId, BetState},
     OracleInfo,
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, Amount, OutPoint, Script, Transaction},
-    blockchain::Blockchain,
+    bitcoin::{util::psbt, Amount, Script, Transaction},
     database::BatchDatabase,
     wallet::tx_builder::TxOrdering,
+    SignOptions,
 };
 use chacha20::ChaCha20Rng;
 use miniscript::DescriptorTrait;
@@ -27,10 +27,10 @@ pub struct DecryptedOffer {
 pub struct ValidatedOffer {
     pub bet_id: BetId,
     pub bet: Bet,
-    pub tx: Transaction
+    pub tx: Transaction,
 }
 
-impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
+impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub fn decrypt_offer(
         &self,
         bet_id: BetId,
@@ -59,16 +59,12 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         let mut psbt_inputs = vec![];
         let mut input_value = 0;
         for input in &offer.inputs {
-            let txout = self
-                .get_txout(input.outpoint)
+            let mut psbt_input = self
+                .outpoint_to_psbt_input(input.outpoint)
                 .await
-                .context("Failed to find input for offer")?;
-            input_value += txout.value;
-            let psbt_input = psbt::Input {
-                witness_utxo: Some(txout),
-                final_script_witness: Some(input.witness.clone()),
-                ..Default::default()
-            };
+                .context("Failed to find proposal input")?;
+            input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
+            psbt_input.final_script_witness = Some(input.witness.clone());
             psbt_inputs.push(psbt_input);
         }
 
@@ -78,8 +74,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             .checked_sub(offer.fee as u64)
             .ok_or(anyhow!("fee is absurdly high"))?;
 
-        Ok((psbt_inputs,
-            Amount::from_sat(offer_value)))
+        Ok((psbt_inputs, Amount::from_sat(offer_value)))
     }
 
     pub async fn decrypt_and_validate_offer(
@@ -124,8 +119,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             offer.choose_right,
             randomize.clone(),
         );
-        let joint_output_value =
-            offer_value
+        let joint_output_value = offer_value
             .checked_add(proposal.value)
             .expect("we've checked the offer value on the chain");
 
@@ -134,17 +128,26 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             joint_output_value,
         );
 
-        let (tx, vout) = self.take_offer_generate_tx(
-            proposal.clone(),
-            offer.clone(),
-            psbt_inputs,
-            output,
-        )?;
+        let (tx, vout) =
+            self.take_offer_generate_tx(proposal.clone(), offer.clone(), psbt_inputs, output)?;
+
+        let my_input_indexes = proposal
+            .payload
+            .inputs
+            .iter()
+            .map(|input| {
+                tx.input
+                    .iter()
+                    .enumerate()
+                    .find(|(_, txin)| txin.previous_output == *input)
+                    .unwrap()
+                    .0
+            })
+            .collect();
         let bet = Bet {
-            outpoint: OutPoint {
-                txid: tx.txid(),
-                vout,
-            },
+            tx: tx.clone(),
+            my_input_indexes,
+            vout,
             oracle_id: oracle_info.id.clone(),
             oracle_event: oracle_event.clone(),
             joint_output: joint_output.clone(),
@@ -152,27 +155,22 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             joint_output_value,
             i_chose_right: !offer.choose_right,
         };
-        Ok(ValidatedOffer {
-            bet_id,
-            bet,
-            tx
-        })
+        Ok(ValidatedOffer { bet_id, bet, tx })
     }
 
-    pub fn take_offer(
+    pub async fn take_offer(
         &self,
-        ValidatedOffer {
-            bet_id,
-            bet,
-            tx
-        }: ValidatedOffer,
+        ValidatedOffer { bet_id, bet, tx }: ValidatedOffer,
     ) -> anyhow::Result<Transaction> {
+        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), tx.clone())
+            .await
+            .context("Broadcasting bet tx")?;
+
         self.bet_db
-            .update_bets(&[bet_id], |bet_state, _| match bet_state {
+            .update_bets(&[bet_id], |bet_state, _, _| match bet_state {
                 BetState::Proposed { .. } => Ok(BetState::Unconfirmed {
                     bet: bet.clone(),
                     funding_transaction: tx.clone(),
-                    has_broadcast: false,
                 }),
                 _ => Ok(bet_state),
             })?;
@@ -216,7 +214,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
 
         let is_final = self
             .wallet
-            .sign(&mut psbt, None)
+            .sign(&mut psbt, SignOptions::default())
             .context("Failed to sign transaction")?;
 
         if !is_final {

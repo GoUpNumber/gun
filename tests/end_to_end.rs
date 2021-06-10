@@ -2,8 +2,7 @@ use anyhow::Context;
 use bdk::{
     bitcoin::Network,
     blockchain::{
-        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Blockchain,
-        EsploraBlockchain,
+        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, EsploraBlockchain,
     },
     database::BatchDatabase,
     wallet::AddressIndex,
@@ -14,14 +13,17 @@ use bweet::{
     bet_database,
     bitcoin::Amount,
     keychain::Keychain,
-    party::{Party},
+    party::{BetArgs, Party},
 };
-use olivia_core::{Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys, Attestation};
-use olivia_secp256k1::{Secp256k1, fun::Scalar};
+use olivia_core::{Attestation, Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys};
+use olivia_secp256k1::{fun::Scalar, Secp256k1};
+use rand::Rng;
 use std::{str::FromStr, time::Duration};
 
-async fn create_party(id: u8) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase>> {
-    let keychain = Keychain::new([id; 64]);
+async fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDatabase>> {
+    let mut r = [0u8; 64];
+    rand::thread_rng().fill(&mut r);
+    let keychain = Keychain::new(r);
     let descriptor = bdk::template::Bip84(
         keychain.main_wallet_xprv(Network::Regtest),
         bdk::KeychainKind::External,
@@ -58,7 +60,7 @@ async fn create_party(id: u8) -> anyhow::Result<Party<impl Blockchain, impl Batc
     Ok(party)
 }
 
-async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> anyhow::Result<()> {
+async fn fund_wallet(wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>) -> anyhow::Result<()> {
     let new_address = wallet.get_address(AddressIndex::New)?;
     println!("funding: {}", new_address);
     bweet::reqwest::Client::new()
@@ -69,40 +71,98 @@ async fn fund_wallet(wallet: &Wallet<impl Blockchain, impl BatchDatabase>) -> an
     Ok(())
 }
 
+macro_rules! setup_test {
+    () => {{
+        let party_1 = create_party(1).await.unwrap();
+        let party_2 = create_party(2).await.unwrap();
+        let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
+        let announce_keypair =
+            olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
+        let attest_keypair =
+            olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
+        let oracle_nonce_keypair = olivia_secp256k1::SCHNORR.new_keypair(nonce_secret_key);
+        let event_id = EventId::from_str("/test/red_blue.win").unwrap();
+        let oracle_id = "non-existent-oracle.com".to_string();
+        let oracle_info = OracleInfo {
+            id: oracle_id.clone(),
+            oracle_keys: OracleKeys {
+                attestation_key: attest_keypair.public_key().clone().into(),
+                announcement_key: announce_keypair.public_key().clone().into(),
+            },
+        };
+
+        party_1.trust_oracle(oracle_info.clone()).unwrap();
+        party_2.trust_oracle(oracle_info.clone()).unwrap();
+
+        let oracle_event = OracleEvent::<Secp256k1> {
+            event: Event {
+                id: event_id.clone(),
+                expected_outcome_time: None,
+            },
+            nonces: vec![oracle_nonce_keypair.public_key().clone().into()],
+        };
+        (
+            party_1,
+            party_2,
+            oracle_info,
+            attest_keypair,
+            oracle_nonce_keypair,
+            oracle_id,
+            oracle_event,
+        )
+    }};
+}
+
+macro_rules! wait_for_state {
+    ($party:ident, $bet_id:ident, $state:literal) => {{
+        let mut counter = 0;
+        let mut cur_state: String;
+        while {
+            cur_state = $party
+                .bet_db()
+                .get_entity::<BetState>($bet_id)
+                .unwrap()
+                .unwrap()
+                .name()
+                .into();
+            cur_state != $state
+        } {
+            $party.take_next_action($bet_id).await.unwrap();
+            counter += 1;
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if counter > 10 {
+                panic!(
+                    "{}/{} has failed to reach state {}. It ended up in {}",
+                    stringify!($party),
+                    stringify!($bet_id),
+                    $state,
+                    cur_state
+                );
+            }
+        }
+    }};
+}
+
 #[tokio::test]
-pub async fn end_to_end() {
-    let party_1 = create_party(1).await.unwrap();
-    let party_2 = create_party(2).await.unwrap();
-    let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
-    let announce_keypair = olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
-    let attest_keypair = olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
-    let oracle_nonce_keypair = olivia_secp256k1::SCHNORR.new_keypair(nonce_secret_key);
-    let event_id = EventId::from_str("/test/red_blue.win").unwrap();
-    let oracle_id = "non-existent-oracle.com".to_string();
-    let oracle_info = OracleInfo {
-        id: oracle_id.clone(),
-        oracle_keys: OracleKeys {
-            attestation_key: attest_keypair.public_key().clone().into(),
-            announcement_key: announce_keypair.public_key().clone().into(),
-        },
-    };
-
-    party_1.trust_oracle(oracle_info.clone()).unwrap();
-    party_2.trust_oracle(oracle_info.clone()).unwrap();
-
-    let oracle_event = OracleEvent::<Secp256k1> {
-        event: Event {
-            id: event_id.clone(),
-            expected_outcome_time: None,
-        },
-        nonces: vec![oracle_nonce_keypair.public_key().clone().into()],
-    };
+pub async fn test_happy_path() {
+    let (
+        party_1,
+        party_2,
+        oracle_info,
+        attest_keypair,
+        oracle_nonce_keypair,
+        oracle_id,
+        oracle_event,
+    ) = setup_test!();
 
     let (p1_bet_id, proposal) = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
-            Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+            BetArgs {
+                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -111,64 +171,50 @@ pub async fn end_to_end() {
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
-                Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                 oracle_event,
                 oracle_info,
+                BetArgs {
+                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
-    let validated_offer = party_1.decrypt_and_validate_offer(p1_bet_id, encrypted_offer).await.unwrap();
-
-    party_1
-        .take_offer(validated_offer)
+    let validated_offer = party_1
+        .decrypt_and_validate_offer(p1_bet_id, encrypted_offer)
+        .await
         .unwrap();
 
-    while party_1
-        .bet_db()
-        .get_entity::<BetState>(p1_bet_id)
-        .unwrap()
-        .unwrap()
-        .name()
-        != "confirmed"
-    {
-        party_1.take_next_action(p1_bet_id).await.unwrap();
-    }
-    while party_2
-        .bet_db()
-        .get_entity::<BetState>(p2_bet_id)
-        .unwrap()
-        .unwrap()
-        .name()
-        != "confirmed"
-    {
-        party_2.take_next_action(p2_bet_id).await.unwrap();
-    }
+    party_1.take_offer(validated_offer).await.unwrap();
 
-    party_1.bet_db().get_entity::<BetState>(p1_bet_id).unwrap();
-    party_2.bet_db().get_entity::<BetState>(p2_bet_id).unwrap();
+    wait_for_state!(party_1, p1_bet_id, "confirmed");
+    wait_for_state!(party_2, p2_bet_id, "confirmed");
 
     let (outcome, index, winner, winner_id, loser, loser_id) = match rand::random() {
         false => ("red_win", 0, &party_1, p1_bet_id, party_2, p2_bet_id),
-        true  => ("blue_win", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
+        true => ("blue_win", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
     };
-
 
     let winner_initial_balance = winner.wallet().get_balance().unwrap();
 
-    let attestation =
-        Attestation {
-            outcome: outcome.into(),
-            scalars: vec![Secp256k1::reveal_attest_scalar(&attest_keypair, oracle_nonce_keypair.into(), index).into()],
-            time: olivia_core::chrono::Utc::now().naive_utc(),
-        };
+    let attestation = Attestation {
+        outcome: outcome.into(),
+        scalars: vec![Secp256k1::reveal_attest_scalar(
+            &attest_keypair,
+            oracle_nonce_keypair.into(),
+            index,
+        )
+        .into()],
+        time: olivia_core::chrono::Utc::now().naive_utc(),
+    };
 
     winner
         .learn_outcome(winner_id, attestation.clone())
         .unwrap();
-   loser.learn_outcome(loser_id, attestation).unwrap();
+    loser.learn_outcome(loser_id, attestation).unwrap();
 
     let winner_claim = winner
         .claim_to(None, None)
@@ -184,4 +230,160 @@ pub async fn end_to_end() {
     winner.wallet().sync(noop_progress(), None).await.unwrap();
 
     assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
+}
+
+#[tokio::test]
+pub async fn cancel_proposal() {
+    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+
+    let (p1_bet_id, proposal) = party_1
+        .make_proposal(
+            oracle_id.clone(),
+            oracle_event.clone(),
+            BetArgs {
+                value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let (bet_id_overlap, _tmp) = party_1
+        .make_proposal(
+            oracle_id.clone(),
+            oracle_event.clone(),
+            BetArgs {
+                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                must_overlap: &[p1_bet_id],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    dbg!(&proposal.payload.inputs);
+    dbg!(_tmp.payload.inputs);
+
+    let (p2_bet_id, _) = {
+        let (bet, offer, cipher) = party_2
+            .generate_offer_with_oracle_event(
+                proposal.clone(),
+                true,
+                oracle_event,
+                oracle_info,
+                BetArgs {
+                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+    };
+
+    party_1.cancel(&[p1_bet_id]).await.unwrap();
+
+    wait_for_state!(party_1, p1_bet_id, "cancelled");
+    wait_for_state!(party_2, p2_bet_id, "cancelled");
+    wait_for_state!(party_1, bet_id_overlap, "cancelled");
+}
+
+#[tokio::test]
+pub async fn cancel_offer() {
+    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+
+    let (_, proposal) = party_1
+        .make_proposal(
+            oracle_id.clone(),
+            oracle_event.clone(),
+            BetArgs {
+                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let (p2_bet_id, _) = {
+        let (bet, offer, cipher) = party_2
+            .generate_offer_with_oracle_event(
+                proposal.clone(),
+                true,
+                oracle_event,
+                oracle_info,
+                BetArgs {
+                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+    };
+
+    party_2.cancel(&[p2_bet_id]).await.unwrap();
+    wait_for_state!(party_2, p2_bet_id, "cancelled");
+}
+
+#[tokio::test]
+pub async fn cancel_offer_after_offer_taken() {
+    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+
+    let (p1_bet_id, proposal) = party_1
+        .make_proposal(
+            oracle_id.clone(),
+            oracle_event.clone(),
+            BetArgs {
+                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let (first_p2_bet_id, _) = {
+        let (bet, offer, cipher) = party_2
+            .generate_offer_with_oracle_event(
+                proposal.clone(),
+                true,
+                oracle_event.clone(),
+                oracle_info.clone(),
+                BetArgs {
+                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+    };
+
+    let (second_p2_bet_id, second_encrypted_offer) = {
+        let (bet, offer, cipher) = party_2
+            .generate_offer_with_oracle_event(
+                proposal.clone(),
+                true,
+                oracle_event,
+                oracle_info,
+                BetArgs {
+                    value: Amount::from_str_with_denomination("0.03 BTC").unwrap(),
+                    must_overlap: &[first_p2_bet_id],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+    };
+
+    let second_validated_offer = party_1
+        .decrypt_and_validate_offer(p1_bet_id, second_encrypted_offer)
+        .await
+        .unwrap();
+
+    party_1.take_offer(second_validated_offer).await.unwrap();
+
+    wait_for_state!(party_1, p1_bet_id, "confirmed");
+    party_2
+        .cancel(&[first_p2_bet_id, second_p2_bet_id])
+        .await
+        .unwrap();
+    wait_for_state!(party_2, second_p2_bet_id, "confirmed");
+    wait_for_state!(party_2, first_p2_bet_id, "cancelled");
 }

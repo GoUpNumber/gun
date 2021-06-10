@@ -1,6 +1,6 @@
 use crate::{
-    bet_database::{BetId, BetState},
     bet::Bet,
+    bet_database::{BetId, BetState},
     change::Change,
     keychain::KeyPair,
     party::{proposal::Proposal, JointOutput, Party},
@@ -8,15 +8,13 @@ use crate::{
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
-        self,
-        util::{psbt, psbt::PartiallySignedTransaction as PSBT},
-        Amount, OutPoint, Script, Transaction, TxIn,
+        self, util::psbt::PartiallySignedTransaction as PSBT, Amount, Script, Transaction, TxIn,
     },
-    blockchain::Blockchain,
     database::BatchDatabase,
     descriptor::ExtendedDescriptor,
     miniscript::DescriptorTrait,
     wallet::tx_builder::TxOrdering,
+    SignOptions,
 };
 use chacha20::cipher::StreamCipher;
 use olivia_core::{OracleEvent, OracleInfo};
@@ -26,7 +24,7 @@ use olivia_secp256k1::{
 };
 use std::{convert::TryInto, str::FromStr};
 
-use super::{randomize::Randomize, Either};
+use super::{randomize::Randomize, BetArgs, Either};
 
 pub type OfferId = XOnly;
 
@@ -107,8 +105,6 @@ impl Offer {
         };
         bdk::FeeRate::from_sat_per_vb((self.fee as f32) / (template_tx.get_weight() as f32 / 4.0))
     }
-
-
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -144,12 +140,12 @@ impl FromStr for EncryptedOffer {
     }
 }
 
-impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
+impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub async fn generate_offer(
         &self,
         proposal: Proposal,
         choose_right: bool,
-        local_value: Amount,
+        args: BetArgs<'_, '_>,
     ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
         let url = crate::reqwest::Url::parse(&format!(
             "http://{}{}",
@@ -160,9 +156,9 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         self.generate_offer_with_oracle_event(
             proposal,
             choose_right,
-            local_value,
             oracle_event,
             oracle_info,
+            args,
         )
         .await
     }
@@ -171,9 +167,9 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         &self,
         proposal: Proposal,
         choose_right: bool,
-        local_value: Amount,
         oracle_event: OracleEvent<Secp256k1>,
         oracle_info: OracleInfo<Secp256k1>,
+        args: BetArgs<'_, '_>,
     ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
         let remote_public_key = &proposal.payload.public_key;
         let event_id = &oracle_event.event.id;
@@ -192,47 +188,8 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
         let local_keypair = self.keychain.keypair_for_offer(&proposal);
         let (cipher, mut rng) = crate::ecdh::ecdh(&local_keypair, remote_public_key);
 
-        let (offer, joint_output, outpoint, joint_output_value) = self
-            ._generate_offer(
-                proposal,
-                local_value,
-                anticipated_attestations,
-                local_keypair,
-                choose_right,
-                &mut rng,
-            )
-            .await?;
-
-        let bet = Bet {
-            outpoint,
-            joint_output: joint_output.clone(),
-            oracle_id: oracle_info.id,
-            oracle_event,
-            local_value,
-            joint_output_value,
-            i_chose_right: choose_right,
-        };
-
-        Ok((bet, offer, cipher))
-    }
-
-    pub fn save_and_encrypt_offer(&self, bet: Bet, offer: Offer, mut cipher: impl StreamCipher) -> anyhow::Result<(BetId, EncryptedOffer)> {
-        let bet_id = self.bet_db.insert_bet(BetState::Offered { bet })?;
-        let encrypted_offer = offer.encrypt(&mut cipher);
-        Ok((bet_id, encrypted_offer))
-    }
-
-    async fn _generate_offer(
-        &self,
-        proposal: Proposal,
-        local_value: Amount,
-        anticipated_attestations: [Point<Jacobian, Public, Zero>; 2],
-        local_keypair: KeyPair,
-        choose_right: bool,
-        rng: &mut chacha20::ChaCha20Rng,
-    ) -> anyhow::Result<(Offer, JointOutput, OutPoint, Amount)> {
         let remote_public_key = proposal.payload.public_key;
-        let randomize = Randomize::new(rng);
+        let randomize = Randomize::new(&mut rng);
 
         let joint_output = JointOutput::new(
             [remote_public_key, local_keypair.public_key],
@@ -242,13 +199,25 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             randomize,
         );
 
-        let output_value = local_value
+        let local_value = args.value;
+        let joint_output_value = local_value
             .checked_add(proposal.value)
             .ok_or(anyhow!("BTC amount overflow"))?;
 
-        let output = (joint_output.descriptor().script_pubkey(), output_value);
+        let output = (
+            joint_output.descriptor().script_pubkey(),
+            joint_output_value,
+        );
 
-        let (psbt, vout, fee) = self.make_offer_generate_tx(&proposal, output).await?;
+        let (psbt, vout, fee) = self.make_offer_generate_tx(&proposal, output, args).await?;
+
+        // the inputs we own have witnesses
+        let my_input_indexes = psbt
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, input)| input.final_script_witness.as_ref().map(|_| i))
+            .collect::<Vec<_>>();
 
         let inputs: Vec<SignedInput> = psbt
             .inputs
@@ -268,7 +237,6 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             .collect();
 
         let tx = psbt.extract_tx();
-        let txid = tx.txid();
         let mut change = None;
 
         for output in &tx.output {
@@ -285,32 +253,53 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
             fee,
             value: local_value,
         };
+        let bet = Bet {
+            tx,
+            my_input_indexes,
+            vout,
+            joint_output: joint_output.clone(),
+            oracle_id: oracle_info.id,
+            oracle_event,
+            local_value,
+            joint_output_value,
+            i_chose_right: choose_right,
+        };
 
-        Ok((offer, joint_output, OutPoint { txid, vout }, output_value))
+        Ok((bet, offer, cipher))
     }
 
-    pub async fn make_offer_generate_tx(
+    pub fn save_and_encrypt_offer(
+        &self,
+        bet: Bet,
+        offer: Offer,
+        mut cipher: impl StreamCipher,
+    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
+        let bet_id = self.bet_db.insert_bet(BetState::Offered { bet })?;
+        let encrypted_offer = offer.encrypt(&mut cipher);
+        Ok((bet_id, encrypted_offer))
+    }
+
+    async fn make_offer_generate_tx(
         &self,
         proposal: &Proposal,
         output: (Script, Amount),
+        args: BetArgs<'_, '_>,
     ) -> anyhow::Result<(PSBT, u32, u32)> {
         let mut builder = self.wallet.build_tx();
         builder
             .add_recipient(output.0.clone(), output.1.as_sat())
             .ordering(TxOrdering::Bip69Lexicographic);
 
+        args.apply_args(self.bet_db(), &mut builder)?;
+
         let mut required_input_value = proposal.value.as_sat();
         let mut input_value = 0;
         for proposal_input in &proposal.payload.inputs {
-            let txout = self
-                .get_txout(*proposal_input)
+            let psbt_input = self
+                .outpoint_to_psbt_input(*proposal_input)
                 .await
                 .context("Failed to find proposal input")?;
-            input_value += txout.value;
-            let psbt_input = psbt::Input {
-                witness_utxo: Some(txout),
-                ..Default::default()
-            };
+            input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             builder.add_foreign_utxo(
                 *proposal_input,
                 psbt_input,
@@ -338,7 +327,7 @@ impl<B: Blockchain, D: BatchDatabase> Party<B, D> {
 
         let is_final = self
             .wallet
-            .sign(&mut psbt, None)
+            .sign(&mut psbt, SignOptions::default())
             .context("Unable to sign offer transaction")?;
         assert!(
             !is_final,

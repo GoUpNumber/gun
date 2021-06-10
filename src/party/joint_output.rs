@@ -1,5 +1,5 @@
 use bdk::{
-    bitcoin::{self,  PublicKey},
+    bitcoin::{self, PublicKey},
     descriptor::ExtendedDescriptor,
     keys::DescriptorSinglePub,
 };
@@ -70,10 +70,8 @@ impl JointOutput {
                     .unwrap(),
                 {
                     let point = g!(offer_key + right + r2 * G);
-                    point
-                    .mark::<(Normal, NonZero)>()
-                    .unwrap()
-                }
+                    point.mark::<(Normal, NonZero)>().unwrap()
+                },
             ],
         };
 

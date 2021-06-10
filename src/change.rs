@@ -1,4 +1,5 @@
 use bdk::bitcoin::Script;
+use olivia_secp256k1::fun::hex;
 
 #[derive(Debug, Clone, PartialEq)]
 struct BinScript(Script);
@@ -43,19 +44,31 @@ impl Change {
         &self.script_pubkey.0
     }
 }
+use serde::de::Error;
 
 impl<'de> serde::Deserialize<'de> for BinScript {
     fn deserialize<D: serde::de::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<BinScript, D::Error> {
-        Ok(BinScript(Script::from(Vec::<u8>::deserialize(
-            deserializer,
-        )?)))
+        if deserializer.is_human_readable() {
+            Ok(BinScript(Script::from(
+                hex::decode(&String::deserialize(deserializer)?)
+                    .map_err(|e| D::Error::custom(format!("{}", e)))?,
+            )))
+        } else {
+            Ok(BinScript(Script::from(Vec::<u8>::deserialize(
+                deserializer,
+            )?)))
+        }
     }
 }
 
 impl<'de> serde::Serialize for BinScript {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(&self.0.to_bytes()[..])
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&hex::encode(&self.0.as_bytes()))
+        } else {
+            serializer.serialize_bytes(self.0.as_bytes())
+        }
     }
 }

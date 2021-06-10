@@ -1,15 +1,20 @@
 #![feature(backtrace)]
 use anyhow::{anyhow, Context};
-use bdk::{Wallet, bitcoin::Network, bitcoin::Address, blockchain::{AnyBlockchain, Blockchain, ConfigurableBlockchain, Progress}, database::BatchDatabase, reqwest, sled};
+use bdk::{
+    bitcoin::{Address, Network},
+    blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain, Progress},
+    database::BatchDatabase,
+    reqwest, sled, Wallet,
+};
 use bdk_cli::structopt::StructOpt;
 use bweet::{
     amount_ext::FromCliStr,
-    bet_database::{BetDatabase, BetState},
+    bet_database::{BetDatabase, BetId, BetState},
     bitcoin::Amount,
     cmd,
     config::Config,
     keychain::Keychain,
-    party::{Party, Proposal},
+    party::{BetArgs, Party, Proposal},
 };
 use clap::{Arg, SubCommand};
 use std::{fs, path::PathBuf, str::FromStr};
@@ -41,6 +46,14 @@ macro_rules! cli_app {
                                 Arg::with_name("event-url")
                                     .required(true)
                                     .help("The url where the oracle is publishing the event"),
+                            )
+                            .arg(
+                                Arg::with_name("overlap")
+                                    .multiple(true)
+                                    .short("o")
+                                    .long("overlap")
+                                    .takes_value(true)
+                                    .help("A list of bets that the proposal's inputs can use"),
                             ),
                     )
                     .subcommand(SubCommand::with_name("list").about("List outstanding bets"))
@@ -52,8 +65,18 @@ macro_rules! cli_app {
                                     .required(true)
                                     .help("The value of the bet"),
                             )
-                            .arg(Arg::with_name("proposal").required(true).help(""))
-                            .arg(Arg::with_name("choose").required(true).short("c").takes_value(true).help("which outcome to choose"))
+                            .arg(
+                                Arg::with_name("proposal")
+                                    .required(true)
+                                    .help("The proposal you want to make an offer on"),
+                            )
+                            .arg(
+                                Arg::with_name("choose")
+                                    .required(true)
+                                    .short("c")
+                                    .takes_value(true)
+                                    .help("which outcome to choose"),
+                            ),
                     )
                     .subcommand(
                         SubCommand::with_name("take")
@@ -72,16 +95,24 @@ macro_rules! cli_app {
                     .subcommand(
                         SubCommand::with_name("claim")
                             .about("Claim the winnings from your bets")
-                            .arg(Arg::with_name("to").takes_value(true).help("Claim to particular address"))
-                            .arg(Arg::with_name("value").takes_value(true).help("How much to claim (default is claims all)"))
+                            .arg(
+                                Arg::with_name("to")
+                                    .takes_value(true)
+                                    .help("Claim to particular address"),
+                            )
+                            .arg(
+                                Arg::with_name("value")
+                                    .takes_value(true)
+                                    .help("How much to claim (default is claims all)"),
+                            ),
                     )
                     .subcommand(
                         SubCommand::with_name("show")
-                            .about("View a proposal or offer")
+                            .about("Show more details about a bet")
                             .arg(
-                                Arg::with_name("message")
+                                Arg::with_name("bet id")
                                     .required(true)
-                                    .help("The proposal or offer string"),
+                                    .help("The id of a bet"),
                             ),
                     )
                     .subcommand(
@@ -90,6 +121,11 @@ macro_rules! cli_app {
                             .about("Modify/view list of trusted oracles")
                             .subcommand(SubCommand::with_name("list").about("list trusted oracles"))
                             .subcommand(SubCommand::with_name("add").about("Trust an oracle")),
+                    )
+                    .subcommand(
+                        SubCommand::with_name("cancel")
+                            .about("Cancel bets")
+                            .arg(Arg::with_name("bet ids").multiple(true)),
                     ),
             )
             .subcommand(
@@ -171,7 +207,7 @@ async fn main() -> anyhow::Result<()> {
         ("bet", Some(matches)) => match matches.subcommand() {
             ("oracles", Some(matches)) => match matches.subcommand() {
                 ("list", _) => {
-                    let bet_db = get_bet_db(&wallet_dir)?;
+                    let bet_db = load_bet_db(&wallet_dir)?;
                     let table = cmd::bet::list_oracles(&bet_db);
                     println!("{}", table.render());
                 }
@@ -188,8 +224,27 @@ async fn main() -> anyhow::Result<()> {
                         ));
                     }
                 };
+                let allow_overlap = args
+                    .values_of("overlap")
+                    .map(|overlap| {
+                        overlap
+                            .map(|x| BetId::from_str(x))
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or(vec![]);
+
                 let event_url = reqwest::Url::parse(args.value_of("event-url").unwrap())?;
-                let proposal = cmd::bet::propose(party, event_url, value).await?;
+                let proposal = cmd::bet::propose(
+                    party,
+                    event_url,
+                    BetArgs {
+                        may_overlap: &allow_overlap,
+                        value,
+                        ..Default::default()
+                    },
+                )
+                .await?;
                 println!("{}", proposal.to_string());
             }
             ("list", _) => {
@@ -198,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
                     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
                     poke_bets(&party).await;
                 }
-                let bet_db = get_bet_db(&wallet_dir)?;
+                let bet_db = load_bet_db(&wallet_dir)?;
                 let table = cmd::bet::list_bets(&bet_db);
                 println!("{}", table.render());
             }
@@ -217,12 +272,30 @@ async fn main() -> anyhow::Result<()> {
                     }
                 };
                 let choice = args.value_of("choose").unwrap();
-                let (bet, offer, cipher) = cmd::bet::generate_offer(&party, proposal, value, choice).await?;
+                let (bet, offer, cipher) = cmd::bet::generate_offer(
+                    &party,
+                    proposal,
+                    choice,
+                    BetArgs {
+                        value,
+                        ..Default::default()
+                    },
+                )
+                .await?;
                 println!("{}", bet.prompt());
                 if read_answer() {
-                    let (_bet_id, encrypted_offer) = party.save_and_encrypt_offer(bet, offer, cipher)?;
+                    let (_bet_id, encrypted_offer) =
+                        party.save_and_encrypt_offer(bet, offer, cipher)?;
                     println!("{}", encrypted_offer.to_string());
                 }
+            }
+            ("show", Some(args)) => {
+                let bet_id = BetId::from_str(args.value_of("bet id").unwrap())?;
+                let bet_db = load_bet_db(&wallet_dir)?;
+                let bet: BetState = bet_db
+                    .get_entity(bet_id)?
+                    .ok_or(anyhow!("Bet {} doesn't exist", bet_id))?;
+                println!("{}", serde_json::to_string_pretty(&bet).unwrap());
             }
             ("take", Some(args)) => {
                 let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
@@ -233,13 +306,14 @@ async fn main() -> anyhow::Result<()> {
                     bweet::party::EncryptedOffer::from_str(args.value_of("offer").unwrap())
                         .context("Decoding encrypted offer")?;
 
-                let validated_offer =
-                    party.decrypt_and_validate_offer(bet_id, encrypted_offer).await?;
+                let validated_offer = party
+                    .decrypt_and_validate_offer(bet_id, encrypted_offer)
+                    .await?;
 
                 println!("{}", validated_offer.bet.prompt());
 
                 if read_answer() {
-                    let tx = party.take_offer(validated_offer)?;
+                    let tx = party.take_offer(validated_offer).await?;
                     println!(
                         "The funding transaction txid is {}. Attempting to broadcast...",
                         tx.txid()
@@ -255,16 +329,31 @@ async fn main() -> anyhow::Result<()> {
                 // Todo offer
             }
             ("claim", Some(args)) => {
-                let party =  load_party(&wallet_dir).await?;
-                let to =  args.value_of("to").map(|addr|Address::from_str(addr).map(|a| a.script_pubkey())).transpose()?;
-                let value = args.value_of("value").map(|value| Amount::from_str(value)).transpose()?;
-                match party.claim_to(to,value)? {
+                let party = load_party(&wallet_dir).await?;
+                let to = args
+                    .value_of("to")
+                    .map(|addr| Address::from_str(addr).map(|a| a.script_pubkey()))
+                    .transpose()?;
+                let value = args
+                    .value_of("value")
+                    .map(|value| Amount::from_str(value))
+                    .transpose()?;
+                match party.claim_to(to, value)? {
                     Some(claim) => {
                         println!("broadcasting claim tx: {}", claim.tx.txid());
                         party.wallet().broadcast(claim.tx).await?;
-                    },
+                    }
                     None => return Err(anyhow!("There are no coins to claim")),
                 }
+            }
+            ("cancel", Some(args)) => {
+                let bet_ids = args
+                    .values_of("bet ids")
+                    .unwrap()
+                    .map(|x| BetId::from_str(x))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let party = load_party(&wallet_dir).await?;
+                party.cancel(&bet_ids).await?;
             }
             _ => {
                 println!("{}", matches.usage());
@@ -281,6 +370,7 @@ async fn main() -> anyhow::Result<()> {
                 ("reset", _) => {
                     bweet::cmd::dev::reset(&wallet_dir)?;
                     bweet::cmd::dev::nigiri_stop()?;
+                    bweet::cmd::dev::nigiri_delete()?;
                     bweet::cmd::dev::nigiri_start()?;
                 }
                 ("fund", _) => {
@@ -353,7 +443,7 @@ fn get_seed_words_file(wallet_dir: &PathBuf) -> PathBuf {
     seed_words_file
 }
 
-fn get_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
+fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
     let mut db_file = wallet_dir.clone();
     db_file.push("database.sled");
     let database = sled::open(db_file.to_str().unwrap())?;
@@ -361,7 +451,9 @@ fn get_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
     Ok(bet_db)
 }
 
-async fn load_party(wallet_dir: &PathBuf) -> anyhow::Result<Party<impl Blockchain, impl BatchDatabase>> {
+async fn load_party(
+    wallet_dir: &PathBuf,
+) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDatabase>> {
     let (wallet, bet_db, keychain, config) = load_wallet(&wallet_dir).await?;
     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
     Ok(party)
@@ -370,7 +462,7 @@ async fn load_party(wallet_dir: &PathBuf) -> anyhow::Result<Party<impl Blockchai
 async fn load_wallet(
     wallet_dir: &PathBuf,
 ) -> anyhow::Result<(
-    Wallet<impl Blockchain, impl BatchDatabase>,
+    Wallet<EsploraBlockchain, impl BatchDatabase>,
     BetDatabase,
     Keychain,
     Config,
@@ -413,15 +505,15 @@ async fn load_wallet(
             keychain.main_wallet_xprv(config.network),
             bdk::KeychainKind::External,
         );
-        Wallet::new(
-            descriptor,
-            None,
-            config.network,
-            wallet_db,
-            AnyBlockchain::from_config(&config.blockchain)?,
-        )
-        .await
-        .context("Initializing wallet failed")?
+        let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
+            AnyBlockchain::Esplora(esplora) => esplora,
+            #[allow(unreachable_patterns)]
+            _ => return Err(anyhow!("A the moment only esplora is supported")),
+        };
+
+        Wallet::new(descriptor, None, config.network, wallet_db, esplora)
+            .await
+            .context("Initializing wallet failed")?
     };
 
     let bet_db = BetDatabase::new(database.open_tree("bets")?);
@@ -429,9 +521,7 @@ async fn load_wallet(
     Ok((wallet, bet_db, keychain, config))
 }
 
-async fn poke_bets<B: Blockchain, D: BatchDatabase>(
-    party: &Party<B, D>,
-) {
+async fn poke_bets<D: BatchDatabase>(party: &Party<EsploraBlockchain, D>) {
     for (bet_id, _) in party.bet_db().list_entities_print_error::<BetState>() {
         match party.take_next_action(bet_id).await {
             Ok(_updated) => {}
