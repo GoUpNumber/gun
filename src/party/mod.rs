@@ -29,11 +29,11 @@ use bdk::{
     wallet::{AddressIndex, Wallet},
     KeychainKind, SignOptions,
 };
-use core::borrow::Borrow;
+use core::{borrow::Borrow, convert::TryFrom};
 use miniscript::DescriptorTrait;
 use olivia_core::{
     http::{EventResponse, RootResponse},
-    Attestation, OracleEvent, OracleId, Outcome,
+    Attestation, EventId, OracleEvent, OracleId, Outcome,
 };
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
@@ -108,6 +108,7 @@ where
         &self,
         url: reqwest::Url,
     ) -> anyhow::Result<OracleEvent<Secp256k1>> {
+        let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
         let event_response = self
             .client
             .get(url.clone())
@@ -117,11 +118,19 @@ where
             .json::<EventResponse<Secp256k1>>()
             .await?;
 
-        Ok(event_response
+        let oracle_info = self
+            .bet_db()
+            .get_entity::<OracleInfo>(oracle_id.to_string())?
+            .ok_or(anyhow!("oracle '{}' is not trusted"))?;
+        let event_id = EventId::try_from(url.clone())
+            .with_context(|| format!("trying to parse the path of {} for ", &url))?;
+
+        let oracle_event = event_response
             .announcement
-            .oracle_event
-            .decode()
-            .ok_or(anyhow!("unable to decode oracle event at {}", url))?)
+            .verify_against_id(&event_id, &oracle_info.oracle_keys.announcement_key)
+            .ok_or(anyhow!("announcement oracle returned from {}", url))?;
+
+        Ok(oracle_event)
     }
 
     pub fn new_blockchain(&self) -> anyhow::Result<AnyBlockchain> {
