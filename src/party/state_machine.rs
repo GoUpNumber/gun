@@ -22,7 +22,6 @@ where
     async fn check_cancelled(&self, inputs: &[OutPoint]) -> anyhow::Result<Option<CancelReason>> {
         for input in inputs {
             if !self.wallet.client().utxo_exists(*input).await? {
-                dbg!("==> ", &input);
                 //TOOD: only sync one address
                 self.wallet
                     .sync(bdk::blockchain::noop_progress(), None)
@@ -73,7 +72,7 @@ where
             }
             BetState::Proposed { local_proposal } => {
                 if let Some(reason) = self
-                    .check_cancelled(&local_proposal.proposal.payload.inputs)
+                    .check_cancelled(&local_proposal.proposal.inputs)
                     .await?
                 {
                     update_bet! { self, bet_id,

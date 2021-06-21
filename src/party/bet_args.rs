@@ -1,4 +1,7 @@
-use crate::bet_database::{BetDatabase, BetId, BetState};
+use crate::{
+    bet_database::{BetDatabase, BetId, BetState},
+    ValueChoice,
+};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Amount,
@@ -7,8 +10,10 @@ use bdk::{
     TxBuilder,
 };
 
+// TODO remove autism
+
 pub struct BetArgs<'a, 'b> {
-    pub value: Amount,
+    pub value: ValueChoice,
     pub may_overlap: &'a [BetId],
     pub must_overlap: &'b [BetId],
 }
@@ -17,7 +22,7 @@ impl Default for BetArgs<'_, '_> {
     fn default() -> Self {
         static EMPTY: [BetId; 0] = [];
         BetArgs {
-            value: Amount::ZERO,
+            value: ValueChoice::Amount(Amount::ZERO),
             may_overlap: &EMPTY,
             must_overlap: &EMPTY,
         }
@@ -48,6 +53,7 @@ impl BetArgs<'_, '_> {
                 })?;
             }
         }
+
         Ok(())
     }
 }

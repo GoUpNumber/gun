@@ -12,8 +12,12 @@ impl FromCliStr for Amount {
         match string.rfind(char::is_numeric) {
             Some(i) => {
                 let denom = Denomination::from_str(&string[(i + 1)..])?;
-                let value = &string[..=i];
-                Ok(Amount::from_str_in(value, denom)?)
+                let value: String = string[..=i]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+
+                Ok(Amount::from_str_in(&value, denom)?)
             }
             None => Err(anyhow!("{} is not a Bitcoin amount")),
         }

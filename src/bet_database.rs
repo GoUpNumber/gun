@@ -51,7 +51,6 @@ pub enum KeyKind {
     BetId,
     OracleInfo,
     Bet,
-    ClaimTx,
 }
 
 impl KeyKind {
@@ -61,12 +60,7 @@ impl KeyKind {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct Claim {
-    pub bets: Vec<BetId>,
-    pub tx: Transaction,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state")]
 pub enum BetState {
     Proposed {
         local_proposal: LocalProposal,
@@ -136,7 +130,7 @@ impl BetOrProp {
                 .iter()
                 .map(|input| input.previous_output)
                 .collect(),
-            BetOrProp::Proposal(local_proposal) => local_proposal.proposal.payload.inputs.clone(),
+            BetOrProp::Proposal(local_proposal) => local_proposal.proposal.inputs.clone(),
         }
     }
 }
@@ -163,7 +157,6 @@ impl BetState {
         match self {
             Proposed { local_proposal } => local_proposal
                 .proposal
-                .payload
                 .inputs
                 .iter()
                 .map(Clone::clone)
@@ -290,6 +283,14 @@ impl BetDatabase {
             .transpose()?)
     }
 
+    pub fn remove_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
+        Ok(self
+            .0
+            .remove(VersionedKey::from(T::to_map_key(key)).to_bytes())?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?)
+    }
+
     pub fn update_bets<F>(&self, bet_ids: &[BetId], f: F) -> anyhow::Result<()>
     where
         F: Fn(BetState, BetId, TxDb) -> anyhow::Result<BetState>,
@@ -317,10 +318,6 @@ impl BetDatabase {
                 bdk::sled::transaction::TransactionError::Abort(e) => e,
                 bdk::sled::transaction::TransactionError::Storage(e) => e.into(),
             })
-    }
-
-    pub fn add_claim_tx(&self, bets: Vec<BetId>, tx: Transaction) -> anyhow::Result<()> {
-        insert(&self.0, MapKey::ClaimTx(tx.txid()), Claim { bets, tx })
     }
 
     pub fn list_entities<T: Entity>(&self) -> impl Iterator<Item = anyhow::Result<(T::Key, T)>> {

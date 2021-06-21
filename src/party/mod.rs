@@ -1,9 +1,9 @@
-// mod claim;
 mod bet_args;
 mod joint_output;
 mod offer;
 mod proposal;
 mod randomize;
+mod spend_won;
 mod state_machine;
 mod take_offer;
 
@@ -15,31 +15,25 @@ pub use take_offer::*;
 
 use crate::{
     bet::Bet,
-    bet_database::{BetDatabase, BetId, BetOrProp, BetState, Claim},
+    bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     keychain::Keychain,
     reqwest, OracleInfo,
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, Amount, OutPoint, PrivateKey, Script, TxOut, Txid},
+    bitcoin::{util::psbt, OutPoint, Transaction, Txid},
     blockchain::{AnyBlockchain, AnyBlockchainConfig, Blockchain, ConfigurableBlockchain},
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
-    signer::SignerOrdering,
     wallet::{AddressIndex, Wallet},
-    KeychainKind, SignOptions,
+    SignOptions,
 };
-use core::{borrow::Borrow, convert::TryFrom};
-use miniscript::DescriptorTrait;
-use olivia_core::{
-    http::{EventResponse, RootResponse},
-    Attestation, EventId, OracleEvent, OracleId, Outcome,
-};
+
+use olivia_core::{http::EventResponse, Attestation, Outcome};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
     Secp256k1,
 };
-use std::sync::Arc;
 
 pub struct Party<B, D> {
     wallet: Wallet<B, D>,
@@ -76,61 +70,8 @@ where
         &self.bet_db
     }
 
-    pub async fn save_oracle_info(&self, oracle_id: OracleId) -> anyhow::Result<OracleInfo> {
-        match self.bet_db.borrow().get_entity(oracle_id.clone())? {
-            Some(oracle_info) => Ok(oracle_info),
-            None => {
-                let root_response = self
-                    .client
-                    .get(&format!("https://{}", &oracle_id))
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json::<RootResponse<Secp256k1>>()
-                    .await?;
-
-                let oracle_info = OracleInfo {
-                    id: oracle_id,
-                    oracle_keys: root_response.public_keys,
-                };
-
-                self.bet_db.insert_oracle_info(oracle_info.clone())?;
-                Ok(oracle_info)
-            }
-        }
-    }
-
     pub fn trust_oracle(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
         self.bet_db.insert_oracle_info(oracle_info)
-    }
-
-    pub async fn get_oracle_event_from_url(
-        &self,
-        url: reqwest::Url,
-    ) -> anyhow::Result<OracleEvent<Secp256k1>> {
-        let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
-        let event_response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<EventResponse<Secp256k1>>()
-            .await?;
-
-        let oracle_info = self
-            .bet_db()
-            .get_entity::<OracleInfo>(oracle_id.to_string())?
-            .ok_or(anyhow!("oracle '{}' is not trusted"))?;
-        let event_id = EventId::try_from(url.clone())
-            .with_context(|| format!("trying to parse the path of {} for ", &url))?;
-
-        let oracle_event = event_response
-            .announcement
-            .verify_against_id(&event_id, &oracle_info.oracle_keys.announcement_key)
-            .ok_or(anyhow!("announcement oracle returned from {}", url))?;
-
-        Ok(oracle_event)
     }
 
     pub fn new_blockchain(&self) -> anyhow::Result<AnyBlockchain> {
@@ -215,128 +156,7 @@ where
         Ok(())
     }
 
-    pub fn claim_to(
-        &self,
-        dest: Option<Script>,
-        value: Option<Amount>,
-    ) -> anyhow::Result<Option<Claim>> {
-        let claimable_bets = self
-            .bet_db
-            .list_entities::<BetState>()
-            .filter_map(|result| match result {
-                Ok(ok) => Some(ok),
-                Err(e) => {
-                    eprintln!("Eror with entry in database: {}", e);
-                    None
-                }
-            })
-            .filter_map(|(bet_id, bet_state)| match bet_state {
-                BetState::Won {
-                    bet, secret_key, ..
-                } => Some((bet_id, bet, secret_key)),
-                BetState::Claiming {
-                    bet, secret_key, ..
-                } => Some((bet_id, bet, secret_key)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        let claimable_bet_ids = claimable_bets
-            .iter()
-            .map(|(bet_id, _, _)| *bet_id)
-            .collect::<Vec<_>>();
-
-        if claimable_bet_ids.is_empty() {
-            return Ok(None);
-        }
-
-        let mut builder = self.wallet.build_tx();
-        builder.manually_selected_only().enable_rbf();
-
-        let recipient = dest.unwrap_or(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
-
-        match value {
-            Some(value) => builder.add_recipient(recipient, value.as_sat()),
-            None => builder.set_single_recipient(recipient),
-        };
-
-        for (_, bet, _) in &claimable_bets {
-            let psbt_input = psbt::Input {
-                witness_utxo: Some(TxOut {
-                    value: bet.joint_output_value.as_sat(),
-                    script_pubkey: bet.joint_output.descriptor().script_pubkey(),
-                }),
-                non_witness_utxo: Some(bet.tx.clone()),
-                witness_script: Some(bet.joint_output.descriptor().script_code()),
-                ..Default::default()
-            };
-            builder
-                .add_foreign_utxo(
-                    bet.outpoint(),
-                    psbt_input,
-                    bet.joint_output
-                        .descriptor()
-                        .max_satisfaction_weight()
-                        .unwrap(),
-                )
-                .unwrap();
-        }
-
-        let (mut psbt, _) = builder.finish()?;
-
-        for (_, bet, secret_key) in claimable_bets {
-            let signer = PrivateKey {
-                compressed: true,
-                network: self.wallet.network(),
-                key: secret_key,
-            };
-            let output_descriptor = bet.joint_output.wallet_descriptor();
-            let mut tmp_wallet = Wallet::new_offline(
-                output_descriptor,
-                None,
-                self.wallet.network(),
-                MemoryDatabase::default(),
-            )
-            .expect("nothing can go wrong here");
-            tmp_wallet.add_signer(
-                KeychainKind::External,
-                SignerOrdering::default(),
-                Arc::new(signer),
-            );
-            tmp_wallet.sign(&mut psbt, SignOptions::default())?;
-        }
-
-        let finalized = self
-            .wallet
-            .finalize_psbt(&mut psbt, SignOptions::default())?;
-        assert!(
-            finalized,
-            "since we have signed each input is must be finalized"
-        );
-        let claim_tx = psbt.extract_tx();
-
-        self.bet_db
-            .update_bets(&claimable_bet_ids[..], |bet_state, _, _| match bet_state {
-                BetState::Won {
-                    bet, secret_key, ..
-                }
-                | BetState::Claiming {
-                    bet, secret_key, ..
-                } => Ok(BetState::Claiming {
-                    bet,
-                    claim_txid: claim_tx.txid(),
-                    secret_key,
-                }),
-                _ => Err(anyhow!("bet changed under our nose -- try again")),
-            })?;
-
-        Ok(Some(Claim {
-            tx: claim_tx,
-            bets: claimable_bet_ids,
-        }))
-    }
-
-    pub async fn cancel(&self, bet_ids: &[BetId]) -> anyhow::Result<()> {
+    pub async fn cancel(&self, bet_ids: &[BetId]) -> anyhow::Result<Option<Transaction>> {
         let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
         let unspent = self
             .wallet
@@ -352,7 +172,7 @@ where
             ))?;
             match bet_state {
                 BetState::Proposed { local_proposal } => {
-                    let inputs = &local_proposal.proposal.payload.inputs;
+                    let inputs = &local_proposal.proposal.inputs;
                     if inputs
                         .iter()
                         .find(|input| utxos_that_need_cancelling.contains(input))
@@ -403,9 +223,9 @@ where
             }
         }
 
-        builder.set_single_recipient(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
+        builder.drain_to(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
         let (mut psbt, _) = match builder.finish() {
-            Err(bdk::Error::NoUtxosSelected) => return Ok(()),
+            Err(bdk::Error::NoUtxosSelected) => return Ok(None),
             Ok(res) => res,
             e => e?,
         };
@@ -413,10 +233,6 @@ where
         assert!(finalized, "we should have signed all inputs");
         let cancel_tx = psbt.extract_tx();
         let cancel_txid = cancel_tx.txid();
-
-        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx)
-            .await
-            .context("broadcasting cancel transaction")?;
 
         self.bet_db()
             .update_bets(bet_ids, |bet_state, bet_id, _| match bet_state {
@@ -437,7 +253,11 @@ where
                 )),
             })?;
 
-        Ok(())
+        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
+            .await
+            .context("broadcasting cancel transaction")?;
+
+        Ok(Some(cancel_tx))
     }
 
     pub async fn is_confirmed(

@@ -1,12 +1,12 @@
 use crate::{
     bet_database::{BetId, BetState},
     bitcoin::{Amount, Script},
-    change::Change,
-    keychain::KeyPair,
+    change::{BinScript, Change},
     party::Party,
+    ValueChoice,
 };
 use anyhow::{anyhow, Context};
-use bdk::{bitcoin, bitcoin::Denomination, database::BatchDatabase, reqwest, FeeRate};
+use bdk::{bitcoin, bitcoin::Denomination, database::BatchDatabase, FeeRate};
 use core::str::FromStr;
 use olivia_core::{EventId, OracleEvent, OracleId};
 use olivia_secp256k1::{
@@ -16,9 +16,26 @@ use olivia_secp256k1::{
 
 use super::BetArgs;
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
-pub enum PayloadVer {
-    One(Payload),
+#[derive(Clone, Debug)]
+pub enum VersionedProposal {
+    One(Proposal),
+}
+
+impl VersionedProposal {
+    fn version_marker(&self) -> String {
+        match self {
+            VersionedProposal::One(..) => "📣",
+        }
+        .into()
+    }
+}
+
+impl From<VersionedProposal> for Proposal {
+    fn from(vp: VersionedProposal) -> Self {
+        match vp {
+            VersionedProposal::One(proposal) => proposal,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -27,37 +44,71 @@ pub struct Proposal {
     pub event_id: EventId,
     #[serde(with = "bitcoin::util::amount::serde::as_sat")]
     pub value: Amount,
-    pub payload: Payload,
+    pub inputs: Vec<bdk::bitcoin::OutPoint>,
+    pub public_key: Point<EvenY>,
+    pub change_script: Option<BinScript>,
+}
+
+impl Proposal {
+    pub fn into_versioned(self) -> VersionedProposal {
+        VersionedProposal::One(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct LocalProposal {
     pub proposal: Proposal,
     pub oracle_event: OracleEvent<Secp256k1>,
-    pub keypair: KeyPair,
+    pub change: Option<Change>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Payload {
     pub inputs: Vec<bdk::bitcoin::OutPoint>,
     pub public_key: Point<EvenY>,
-    pub change: Option<Change>,
+    pub change_script: Option<BinScript>,
 }
 
 impl Proposal {
-    pub fn to_string(&self) -> String {
+    pub fn to_sentence(&self) -> String {
         format!(
-            "📣{}#{}#{}#{}",
-            self.value
-                .to_string_in(Denomination::Bitcoin)
-                .trim_end_matches('0'),
-            self.oracle,
-            self.event_id,
-            crate::encode::serialize_base2048(&PayloadVer::One(self.payload.clone()))
+            "Wants to bet {} on {} relying on {} as the oracle",
+            self.value, self.event_id, self.oracle
         )
     }
+}
 
-    pub fn from_str(string: &str) -> anyhow::Result<Self> {
+impl core::fmt::Display for VersionedProposal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VersionedProposal::One(proposal) => {
+                let payload = Payload {
+                    inputs: proposal.inputs.clone(),
+                    public_key: proposal.public_key,
+                    change_script: proposal.change_script.clone(),
+                };
+                write!(
+                    f,
+                    "{}{}#{}#{}#{}",
+                    self.version_marker(),
+                    proposal
+                        .value
+                        .to_string_in(Denomination::Bitcoin)
+                        // FIXME: This looks dangerous?
+                        .trim_end_matches('0'),
+                    proposal.oracle,
+                    proposal.event_id,
+                    crate::encode::serialize_base2048(&payload)
+                )
+            }
+        }
+    }
+}
+
+impl FromStr for VersionedProposal {
+    type Err = anyhow::Error;
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
         let string = string.trim_start_matches("📣");
         let mut segments = string.split("#");
         let value = Amount::from_str_in(
@@ -72,38 +123,21 @@ impl Proposal {
         let base2048_encoded_payload = segments
             .next()
             .ok_or(anyhow!("missing base2048 encoded data"))?;
-        let payload = match crate::encode::deserialize_base2048(base2048_encoded_payload)? {
-            PayloadVer::One(payload) => payload,
-        };
 
-        Ok(Proposal {
+        let payload: Payload = crate::encode::deserialize_base2048(base2048_encoded_payload)?;
+
+        Ok(VersionedProposal::One(Proposal {
             oracle,
             value,
             event_id,
-            payload,
-        })
-    }
-
-    pub fn to_sentence(&self) -> String {
-        format!(
-            "Wants to bet {} on {} relying on {} as the oracle",
-            self.value, self.event_id, self.oracle
-        )
+            inputs: payload.inputs,
+            public_key: payload.public_key,
+            change_script: payload.change_script,
+        }))
     }
 }
 
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
-    pub async fn make_proposal_from_url(
-        &self,
-        url: reqwest::Url,
-        args: BetArgs<'_, '_>,
-    ) -> anyhow::Result<(BetId, Proposal)> {
-        let oracle_id = url.host_str().unwrap().to_string();
-        let oracle_event = self.get_oracle_event_from_url(url).await?;
-        self.save_oracle_info(oracle_id.clone()).await?;
-        self.make_proposal(oracle_id, oracle_event, args)
-    }
-
     pub fn make_proposal(
         &self,
         oracle_id: OracleId,
@@ -117,12 +151,18 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
                 event_id
             ));
         }
-        let keypair = self.keychain.keypair_for_proposal(&event_id, 0);
 
         let mut builder = self.wallet.build_tx();
-        builder
-            .fee_rate(FeeRate::from_sat_per_vb(0.0))
-            .add_recipient(Script::default(), args.value.as_sat());
+        builder.fee_rate(FeeRate::from_sat_per_vb(0.0));
+
+        match args.value {
+            ValueChoice::All => {
+                builder.drain_wallet().drain_to(Script::default());
+            }
+            ValueChoice::Amount(amount) => {
+                builder.add_recipient(Script::default(), amount.as_sat());
+            }
+        }
 
         args.apply_args(self.bet_db(), &mut builder)?;
 
@@ -141,6 +181,14 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .map(|txin| txin.previous_output.clone())
             .collect();
 
+        let value = Amount::from_sat(
+            outputs
+                .iter()
+                .find(|o| o.script_pubkey == Script::default())
+                .unwrap()
+                .value,
+        );
+
         let change = if outputs.len() > 1 {
             if outputs.len() != 2 {
                 return Err(anyhow!(
@@ -151,34 +199,30 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             Some(
                 outputs
                     .iter()
-                    .find_map(|output| {
-                        if output.script_pubkey != Script::default() {
-                            Some(Change::new(output.value, output.script_pubkey.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap(),
+                    .find(|output| output.script_pubkey != Script::default())
+                    .map(|output| Change::new(output.value, output.script_pubkey.clone()))
+                    .expect("bdk change script_pubkey will not be empty"),
             )
         } else {
             None
         };
 
-        let proposal = Proposal {
+        let mut proposal = Proposal {
             oracle: oracle_id.clone(),
             event_id: event_id.clone(),
-            value: args.value,
-            payload: Payload {
-                inputs: tx_inputs,
-                public_key: keypair.public_key,
-                change,
-            },
+            value,
+            inputs: tx_inputs,
+            public_key: crate::placeholder_point(),
+            change_script: change.as_ref().map(|x| x.binscript().clone()),
         };
+
+        let keypair = self.keychain.get_key_for_proposal(&proposal);
+        proposal.public_key = keypair.public_key;
 
         let local_proposal = LocalProposal {
             proposal: proposal.clone(),
             oracle_event,
-            keypair,
+            change,
         };
 
         let new_bet = BetState::Proposed { local_proposal };
@@ -196,6 +240,7 @@ mod test {
 
     #[test]
     fn to_and_from_str() {
+        use std::string::ToString;
         let forty_two = Point::<EvenY>::from_scalar_mul(G, &mut s!(42));
         let change_address =
             Address::from_str("bc1qwqdg6squsna38e46795at95yu9atm8azzmyvckulcc7kytlcckxswvvzej")
@@ -204,24 +249,22 @@ mod test {
             oracle: "h00.ooo".into(),
             value: Amount::from_str("0.1 BTC").unwrap(),
             event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.win").unwrap(),
-            payload: Payload {
-                inputs: vec![
-                    OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),
-                    OutPoint::new(Txid::from_slice(&[2u8; 32]).unwrap(), 1),
-                ],
-                public_key: forty_two,
-                change: None,
-            },
+            inputs: vec![
+                OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),
+                OutPoint::new(Txid::from_slice(&[2u8; 32]).unwrap(), 1),
+            ],
+            public_key: forty_two,
+            change_script: None,
         };
 
-        let encoded = proposal.to_string();
-        let decoded = Proposal::from_str(&encoded).unwrap();
-        assert_eq!(decoded, proposal);
+        let encoded = proposal.clone().into_versioned().to_string();
+        let decoded = VersionedProposal::from_str(&encoded).unwrap();
+        assert_eq!(proposal, decoded.into());
 
-        proposal.payload.change = Some(Change::new(100_000, change_address.script_pubkey()));
+        proposal.change_script = Some(change_address.script_pubkey().into());
 
-        let encoded = proposal.to_string();
-        let decoded = Proposal::from_str(&encoded).unwrap();
-        assert_eq!(decoded, proposal);
+        let encoded = proposal.clone().into_versioned().to_string();
+        let decoded = VersionedProposal::from_str(&encoded).unwrap();
+        assert_eq!(proposal, decoded.into());
     }
 }

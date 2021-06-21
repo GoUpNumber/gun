@@ -1,8 +1,8 @@
-use bdk::bitcoin::Script;
+use bdk::bitcoin::{Amount, Script};
 use olivia_secp256k1::fun::hex;
 
 #[derive(Debug, Clone, PartialEq)]
-struct BinScript(Script);
+pub struct BinScript(Script);
 
 impl From<BinScript> for Script {
     fn from(binscript: BinScript) -> Script {
@@ -24,24 +24,29 @@ impl From<Vec<u8>> for BinScript {
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Change {
-    value: u64,
+    #[serde(with = "bdk::bitcoin::util::amount::serde::as_sat")]
+    value: Amount,
     script_pubkey: BinScript,
 }
 
 impl Change {
     pub fn new(value: u64, script_pubkey: Script) -> Self {
         Change {
-            value,
+            value: Amount::from_sat(value),
             script_pubkey: script_pubkey.into(),
         }
     }
 
-    pub fn value(&self) -> u64 {
+    pub fn value(&self) -> Amount {
         self.value
     }
 
     pub fn script(&self) -> &Script {
         &self.script_pubkey.0
+    }
+
+    pub fn binscript(&self) -> &BinScript {
+        &self.script_pubkey
     }
 }
 use serde::de::Error;

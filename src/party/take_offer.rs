@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, Amount, Script, Transaction},
+    bitcoin::{util::psbt, Amount, Transaction},
     database::BatchDatabase,
     wallet::tx_builder::TxOrdering,
     SignOptions,
@@ -16,7 +16,6 @@ use std::convert::TryInto;
 
 use super::{
     randomize::Randomize, Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party,
-    Proposal,
 };
 
 pub struct DecryptedOffer {
@@ -28,6 +27,7 @@ pub struct ValidatedOffer {
     pub bet_id: BetId,
     pub bet: Bet,
     pub tx: Transaction,
+    pub feerate: f32,
 }
 
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
@@ -43,8 +43,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         match local_proposal {
             BetState::Proposed { local_proposal } => {
-                let (mut cipher, rng) =
-                    crate::ecdh::ecdh(&local_proposal.keypair, &encrypted_offer.public_key);
+                let keypair = self.keychain.get_key_for_proposal(&local_proposal.proposal);
+                let (mut cipher, rng) = crate::ecdh::ecdh(&keypair, &encrypted_offer.public_key);
                 let offer = encrypted_offer.decrypt(&mut cipher)?;
                 Ok(DecryptedOffer { offer, rng })
             }
@@ -68,13 +68,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             psbt_inputs.push(psbt_input);
         }
 
-        let offer_value = input_value
-            .checked_sub(offer.change.as_ref().map(|c| c.value()).unwrap_or(0))
-            .ok_or(anyhow!("offer change is absurdly high"))?
-            .checked_sub(offer.fee as u64)
-            .ok_or(anyhow!("fee is absurdly high"))?;
-
-        Ok((psbt_inputs, Amount::from_sat(offer_value)))
+        Ok((psbt_inputs, Amount::from_sat(input_value)))
     }
 
     pub async fn decrypt_and_validate_offer(
@@ -82,9 +76,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         bet_id: BetId,
         encrypted_offer: EncryptedOffer,
     ) -> anyhow::Result<ValidatedOffer> {
-        let decrypted_offer = self.decrypt_offer(bet_id, encrypted_offer)?;
-        let (psbt_inputs, offer_value) = self.lookup_offer_inputs(&decrypted_offer.offer).await?;
-        let DecryptedOffer { offer, mut rng } = decrypted_offer;
+        let DecryptedOffer { offer, mut rng } = self.decrypt_offer(bet_id, encrypted_offer)?;
+        let (offer_psbt_inputs, offer_input_value) = self.lookup_offer_inputs(&offer).await?;
+
         let randomize = Randomize::new(&mut rng);
 
         let bet_state = self
@@ -101,6 +95,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             proposal,
             ..
         } = local_proposal;
+
+        let keypair = self.keychain.get_key_for_proposal(&proposal);
         let oracle_id = &proposal.oracle;
 
         let oracle_info = self
@@ -112,27 +108,82 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0)
             .try_into()
             .map_err(|_| anyhow!("wrong number of attestations"))?;
+
         let joint_output = JointOutput::new(
-            [local_proposal.keypair.public_key, offer.public_key],
-            Either::Left(local_proposal.keypair.secret_key),
+            [keypair.public_key, offer.public_key],
+            Either::Left(keypair.secret_key),
             anticipated_attestations,
             offer.choose_right,
             randomize.clone(),
         );
-        let joint_output_value = offer_value
+        let joint_output_value = offer
+            .value
             .checked_add(proposal.value)
             .expect("we've checked the offer value on the chain");
+        let joint_output_script_pubkey = joint_output.descriptor().script_pubkey();
 
-        let output = (
-            joint_output.descriptor().script_pubkey(),
-            joint_output_value,
-        );
+        let mut builder = self.wallet.build_tx();
 
-        let (tx, vout) =
-            self.take_offer_generate_tx(proposal.clone(), offer.clone(), psbt_inputs, output)?;
+        builder
+            .manually_selected_only()
+            .ordering(TxOrdering::Bip69Lexicographic);
+
+        for proposal_input in &proposal.inputs {
+            builder.add_utxo(*proposal_input)?;
+        }
+
+        for (input, psbt_input) in offer.inputs.iter().zip(offer_psbt_inputs) {
+            builder.add_foreign_utxo(input.outpoint, psbt_input, 4 + 1 + 73 + 33)?;
+        }
+
+        if let Some(change) = local_proposal.change {
+            builder.add_recipient(change.script().clone(), change.value().as_sat());
+        }
+
+        let mut absolute_fee = offer_input_value
+            .checked_sub(offer.value)
+            .ok_or(anyhow!("offer value is more than input value"))?;
+
+        if let Some(change) = offer.change {
+            absolute_fee = absolute_fee
+                .checked_sub(change.value())
+                .ok_or(anyhow!("too much change requested"))?;
+            builder.add_recipient(change.script().clone(), change.value().as_sat());
+        }
+
+        builder
+            .add_recipient(
+                joint_output_script_pubkey.clone(),
+                joint_output_value.as_sat(),
+            )
+            .fee_absolute(absolute_fee.as_sat());
+
+        let (mut psbt, _tx_details) = builder.finish()?;
+
+        let is_final = self
+            .wallet
+            .sign(&mut psbt, SignOptions::default())
+            .context("Failed to sign transaction")?;
+
+        if !is_final {
+            return Err(anyhow!("Transaction is incomplete after signing it"));
+        }
+
+        let tx = psbt.extract_tx();
+        let vout = tx
+            .output
+            .iter()
+            .enumerate()
+            .find_map(|(i, txout)| {
+                if txout.script_pubkey == joint_output_script_pubkey {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .expect("our joint outpoint will always exist") as u32;
 
         let my_input_indexes = proposal
-            .payload
             .inputs
             .iter()
             .map(|input| {
@@ -155,12 +206,21 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             joint_output_value,
             i_chose_right: !offer.choose_right,
         };
-        Ok(ValidatedOffer { bet_id, bet, tx })
+
+        let feerate = absolute_fee.as_sat() as f32 / (tx.get_weight() as f32 / 4.0);
+        Ok(ValidatedOffer {
+            bet_id,
+            bet,
+            tx,
+            feerate,
+        })
     }
 
     pub async fn take_offer(
         &self,
-        ValidatedOffer { bet_id, bet, tx }: ValidatedOffer,
+        ValidatedOffer {
+            bet_id, bet, tx, ..
+        }: ValidatedOffer,
     ) -> anyhow::Result<Transaction> {
         bdk::blockchain::Broadcast::broadcast(self.wallet.client(), tx.clone())
             .await
@@ -176,65 +236,5 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             })?;
 
         Ok(tx)
-    }
-
-    pub fn take_offer_generate_tx(
-        &self,
-        proposal: Proposal,
-        offer: Offer,
-        offer_psbt_inputs: Vec<psbt::Input>,
-        output: (Script, Amount),
-    ) -> anyhow::Result<(Transaction, u32)> {
-        let mut builder = self.wallet.build_tx();
-
-        builder
-            .manually_selected_only()
-            .ordering(TxOrdering::Bip69Lexicographic)
-            .fee_absolute(offer.fee as u64);
-
-        for proposal_input in proposal.payload.inputs {
-            builder.add_utxo(proposal_input)?;
-        }
-
-        for (input, psbt_input) in offer.inputs.iter().zip(offer_psbt_inputs) {
-            builder.add_foreign_utxo(input.outpoint, psbt_input, 4 + 1 + 73 + 33)?;
-        }
-
-        if let Some(change) = proposal.payload.change {
-            builder.add_recipient(change.script().clone(), change.value());
-        }
-
-        if let Some(change) = offer.change {
-            builder.add_recipient(change.script().clone(), change.value());
-        }
-
-        builder.add_recipient(output.0.clone(), output.1.as_sat());
-
-        let (mut psbt, _tx_details) = builder.finish()?;
-
-        let is_final = self
-            .wallet
-            .sign(&mut psbt, SignOptions::default())
-            .context("Failed to sign transaction")?;
-
-        if !is_final {
-            return Err(anyhow!("Transaction was unable to be completed"));
-        }
-
-        let tx = psbt.extract_tx();
-        let vout = tx
-            .output
-            .iter()
-            .enumerate()
-            .find_map(|(i, txout)| {
-                if txout.script_pubkey == output.0 {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .expect("our joint outpoint will always exist");
-
-        Ok((tx, vout as u32))
     }
 }

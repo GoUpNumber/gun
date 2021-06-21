@@ -14,6 +14,7 @@ use bweet::{
     bitcoin::Amount,
     keychain::Keychain,
     party::{BetArgs, Party},
+    FeeSpec, ValueChoice,
 };
 use olivia_core::{Attestation, Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys};
 use olivia_secp256k1::{fun::Scalar, Secp256k1};
@@ -61,7 +62,7 @@ async fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl Ba
 }
 
 async fn fund_wallet(wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>) -> anyhow::Result<()> {
-    let new_address = wallet.get_address(AddressIndex::New)?;
+    let new_address = wallet.get_address(AddressIndex::New)?.address;
     println!("funding: {}", new_address);
     bweet::reqwest::Client::new()
         .post("http://localhost:3000/faucet")
@@ -115,7 +116,7 @@ macro_rules! setup_test {
 
 macro_rules! wait_for_state {
     ($party:ident, $bet_id:ident, $state:literal) => {{
-        let mut counter = 0;
+        let mut counter: usize = 0;
         let mut cur_state: String;
         while {
             cur_state = $party
@@ -160,7 +161,7 @@ pub async fn test_happy_path() {
             oracle_id.clone(),
             oracle_event.clone(),
             BetArgs {
-                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
         )
@@ -174,9 +175,12 @@ pub async fn test_happy_path() {
                 oracle_event,
                 oracle_info,
                 BetArgs {
-                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    value: ValueChoice::Amount(
+                        Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ),
                     ..Default::default()
                 },
+                FeeSpec::default(),
             )
             .await
             .unwrap();
@@ -216,17 +220,18 @@ pub async fn test_happy_path() {
         .unwrap();
     loser.learn_outcome(loser_id, attestation).unwrap();
 
-    let winner_claim = winner
-        .claim_to(None, None)
+    let winner_claim_tx = winner
+        .claim(FeeSpec::default(), false)
+        .await
         .unwrap()
         .expect("winner should return a tx here");
+
     assert!(
-        loser.claim_to(None, None).unwrap().is_none(),
+        loser.claim(FeeSpec::default(), false).await.unwrap().is_none(),
         "loser should not have claim tx"
     );
 
-    assert_eq!(winner_claim.bets, vec![winner_id]);
-    winner.wallet().broadcast(winner_claim.tx).await.unwrap();
+    winner.wallet().broadcast(winner_claim_tx).await.unwrap();
     winner.wallet().sync(noop_progress(), None).await.unwrap();
 
     assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
@@ -241,7 +246,7 @@ pub async fn cancel_proposal() {
             oracle_id.clone(),
             oracle_event.clone(),
             BetArgs {
-                value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                value: ValueChoice::Amount(Amount::from_str_with_denomination("0.02 BTC").unwrap()),
                 ..Default::default()
             },
         )
@@ -252,15 +257,12 @@ pub async fn cancel_proposal() {
             oracle_id.clone(),
             oracle_event.clone(),
             BetArgs {
-                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 must_overlap: &[p1_bet_id],
                 ..Default::default()
             },
         )
         .unwrap();
-
-    dbg!(&proposal.payload.inputs);
-    dbg!(_tmp.payload.inputs);
 
     let (p2_bet_id, _) = {
         let (bet, offer, cipher) = party_2
@@ -270,9 +272,12 @@ pub async fn cancel_proposal() {
                 oracle_event,
                 oracle_info,
                 BetArgs {
-                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    value: ValueChoice::Amount(
+                        Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ),
                     ..Default::default()
                 },
+                FeeSpec::default(),
             )
             .await
             .unwrap();
@@ -295,7 +300,7 @@ pub async fn cancel_offer() {
             oracle_id.clone(),
             oracle_event.clone(),
             BetArgs {
-                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
         )
@@ -309,9 +314,12 @@ pub async fn cancel_offer() {
                 oracle_event,
                 oracle_info,
                 BetArgs {
-                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    value: ValueChoice::Amount(
+                        Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ),
                     ..Default::default()
                 },
+                FeeSpec::default(),
             )
             .await
             .unwrap();
@@ -331,7 +339,7 @@ pub async fn cancel_offer_after_offer_taken() {
             oracle_id.clone(),
             oracle_event.clone(),
             BetArgs {
-                value: Amount::from_str_with_denomination("0.01 BTC").unwrap(),
+                value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
         )
@@ -345,9 +353,12 @@ pub async fn cancel_offer_after_offer_taken() {
                 oracle_event.clone(),
                 oracle_info.clone(),
                 BetArgs {
-                    value: Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    value: ValueChoice::Amount(
+                        Amount::from_str_with_denomination("0.02 BTC").unwrap(),
+                    ),
                     ..Default::default()
                 },
+                FeeSpec::default(),
             )
             .await
             .unwrap();
@@ -362,10 +373,13 @@ pub async fn cancel_offer_after_offer_taken() {
                 oracle_event,
                 oracle_info,
                 BetArgs {
-                    value: Amount::from_str_with_denomination("0.03 BTC").unwrap(),
+                    value: ValueChoice::Amount(
+                        Amount::from_str_with_denomination("0.03 BTC").unwrap(),
+                    ),
                     must_overlap: &[first_p2_bet_id],
                     ..Default::default()
                 },
+                FeeSpec::default(),
             )
             .await
             .unwrap();

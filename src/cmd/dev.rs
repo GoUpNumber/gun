@@ -9,7 +9,7 @@ use std::{fs, path::PathBuf, process::Command};
 pub async fn nigiri_fund(
     wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>,
 ) -> anyhow::Result<()> {
-    let new_address = wallet.get_address(AddressIndex::New)?;
+    let new_address = wallet.get_address(AddressIndex::New)?.address;
     println!("funding: {}", new_address);
     crate::reqwest::Client::new()
         .post("http://localhost:3000/faucet")
@@ -39,7 +39,7 @@ pub fn nigiri_stop() -> anyhow::Result<()> {
 }
 
 pub fn reset(wallet_dir: &PathBuf) -> anyhow::Result<()> {
-    let config = crate::cmd::get_config(&wallet_dir)?;
+    let config = crate::cmd::load_config(&wallet_dir)?;
     if config.network != Network::Regtest {
         return Err(anyhow!(
             "Can delete a {} wallet (only regtest)",

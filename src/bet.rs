@@ -37,7 +37,13 @@ impl Bet {
         let oracle = &self.oracle_id;
         let expected_outcome_time = self.oracle_event.event.expected_outcome_time;
 
-        println!("You are betting on {}", self.oracle_event.event.id);
+        write!(
+            &mut res,
+            "You are betting on {}",
+            self.oracle_event.event.id
+        )
+        .unwrap();
+        write!(&mut res, "\n").unwrap();
         write!(&mut res, "You win if {} beats {}.", i_back, they_back).unwrap();
         write!(&mut res, "\n").unwrap();
         write!(&mut res, "You risk {} to gain {}.", i_risk, i_gain).unwrap();

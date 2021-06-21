@@ -13,18 +13,19 @@ pub struct Config {
 impl Config {
     pub fn default_config(network: Network) -> Config {
         use Network::*;
+        let concurrency = Some(4);
         let blockchain = match network {
             Bitcoin => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "https://blockstream.info/api/".to_string(),
-                concurrency: None,
+                concurrency,
             }),
             Testnet => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "https://blockstream.info/testnet/api/".to_string(),
-                concurrency: None,
+                concurrency,
             }),
             Regtest => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "http://localhost:3000".to_string(),
-                concurrency: None,
+                concurrency,
             }),
             Signet => unimplemented!("signet not supported yet!"),
         };

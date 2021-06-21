@@ -6,7 +6,6 @@ use crate::{
     },
     party::Proposal,
 };
-use olivia_core::EventId;
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
 
 pub struct Keychain {
@@ -48,17 +47,22 @@ impl Keychain {
         ExtendedPrivKey::new_master(network, &self.seed).unwrap()
     }
 
-    pub fn keypair_for_proposal(&self, event_id: &EventId, index: u32) -> KeyPair {
+    pub fn get_key_for_proposal(&self, proposal: &Proposal) -> KeyPair {
+        let mut proposal = proposal.clone();
+        proposal.public_key = crate::placeholder_point();
         let mut proposal_hmac = self.proposal_hmac.clone();
-        proposal_hmac.input(event_id.as_str().as_bytes());
-        proposal_hmac.input(index.to_be_bytes().as_ref());
+        let bin = crate::encode::serialize(&proposal);
+        proposal_hmac.input(&bin[..]);
         let res = Hmac::from_engine(proposal_hmac);
-        Self::keypair_from_slice(&res[..])
+        let keypair = Self::keypair_from_slice(&res[..]);
+        proposal.public_key = keypair.public_key;
+        keypair
     }
 
     pub fn keypair_for_offer(&self, proposal: &Proposal) -> KeyPair {
         let mut offer_hmac = self.offer_hmac.clone();
-        offer_hmac.input(proposal.to_string().as_bytes());
+        let bin = crate::encode::serialize(proposal);
+        offer_hmac.input(&bin[..]);
         let res = Hmac::from_engine(offer_hmac);
         Self::keypair_from_slice(&res[..])
     }
