@@ -38,7 +38,7 @@ use olivia_secp256k1::{
 pub struct Party<B, D> {
     wallet: Wallet<B, D>,
     keychain: Keychain,
-    client: crate::reqwest::Client,
+    client: crate::reqwest::blocking::Client,
     bet_db: BetDatabase,
     blockchain_config: AnyBlockchainConfig,
 }
@@ -57,7 +57,7 @@ where
             wallet,
             keychain,
             bet_db,
-            client: crate::reqwest::Client::new(),
+            client: crate::reqwest::blocking::Client::new(),
             blockchain_config,
         }
     }
@@ -137,17 +137,17 @@ where
         Ok(())
     }
 
-    async fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
+    fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
         let event_id = bet.oracle_event.event.id;
         let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
         let event_response = self
             .client
             .get(event_url)
             .send()
-            .await?
+            ?
             .error_for_status()?
             .json::<EventResponse<Secp256k1>>()
-            .await?;
+            ?;
 
         if let Some(attestation) = event_response.attestation {
             self.learn_outcome(bet_id, attestation)?;
@@ -156,7 +156,7 @@ where
         Ok(())
     }
 
-    pub async fn cancel(&self, bet_ids: &[BetId]) -> anyhow::Result<Option<Transaction>> {
+    pub fn cancel(&self, bet_ids: &[BetId]) -> anyhow::Result<Option<Transaction>> {
         let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
         let unspent = self
             .wallet
@@ -209,7 +209,7 @@ where
 
         self.wallet
             .sync(bdk::blockchain::noop_progress(), None)
-            .await?;
+            ?;
 
         let mut builder = self.wallet.build_tx();
         builder.manually_selected_only().enable_rbf();
@@ -254,13 +254,13 @@ where
             })?;
 
         bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
-            .await
+            
             .context("broadcasting cancel transaction")?;
 
         Ok(Some(cancel_tx))
     }
 
-    pub async fn is_confirmed(
+    pub fn is_confirmed(
         &self,
         txid: Txid,
         // output in transaction
@@ -274,8 +274,8 @@ where
             MemoryDatabase::default(),
             blockchain,
         )
-        .await?;
-        wallet.sync(bdk::blockchain::noop_progress(), None).await?;
+        ?;
+        wallet.sync(bdk::blockchain::noop_progress(), None)?;
         Ok(wallet.list_transactions(true)?.iter().find_map(|tx| {
             if tx.txid == txid && tx.height.is_some() {
                 Some(tx.height.unwrap())
@@ -285,12 +285,12 @@ where
         }))
     }
 
-    pub async fn outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
+    pub fn outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
         let tx = self
             .wallet
             .client()
             .get_tx(&outpoint.txid)
-            .await?
+            ?
             .ok_or(anyhow!("txid not found {}", outpoint.txid))?;
 
         let txout = tx
@@ -311,7 +311,7 @@ where
         Ok(psbt_input)
     }
 
-    pub async fn outpoint_exists(
+    pub fn outpoint_exists(
         &self,
         outpoint: OutPoint,
         descriptor: ExtendedDescriptor,
@@ -324,8 +324,8 @@ where
             MemoryDatabase::default(),
             blockchain,
         )
-        .await?;
-        wallet.sync(bdk::blockchain::noop_progress(), None).await?;
+        ?;
+        wallet.sync(bdk::blockchain::noop_progress(), None)?;
         Ok(wallet
             .list_unspent()?
             .iter()

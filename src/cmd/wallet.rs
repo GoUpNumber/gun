@@ -10,8 +10,8 @@ use bdk::{
 use std::collections::HashMap;
 use structopt::StructOpt;
 
-pub async fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
-    let party = load_party(&wallet_dir).await?;
+pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
+    let party = load_party(&wallet_dir)?;
     let (in_bet, unclaimed) = party
         .bet_db()
         .list_entities_print_error::<BetState>()
@@ -52,15 +52,15 @@ pub enum AddressOpt {
     Show { address: Address },
 }
 
-pub async fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result<CmdOutput> {
+pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result<CmdOutput> {
     match addr_opt {
         AddressOpt::New => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let address = wallet.get_address(AddressIndex::New)?;
             Ok(item! { "address" => address.to_string().into() })
         }
         AddressOpt::Next => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let address = wallet.get_address(AddressIndex::LastUnused)?;
             Ok(item! { "address" => address.to_string().into() })
         }
@@ -94,7 +94,7 @@ pub async fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::
             Ok(CmdOutput::table(vec!["address", "value", "utxos"], rows))
         }
         AddressOpt::Show { address } => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let script_pubkey = address.script_pubkey();
             let output_descriptor = wallet
                 .get_descriptor_for_script_pubkey(&address.script_pubkey())?
@@ -157,8 +157,8 @@ pub struct SendOpt {
     bump_claiming: bool,
 }
 
-pub async fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
-    let party = load_party(wallet_dir).await?;
+pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+    let party = load_party(wallet_dir)?;
     let mut builder = party.wallet().build_tx();
 
     match send_opt.value {
@@ -175,7 +175,7 @@ pub async fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result
     send_opt
         .fee
         .apply_to_builder(party.wallet().client(), &mut builder)
-        .await?;
+        ?;
 
     let (mut psbt, bet_ids_claiming) = if send_opt.spend_won {
         party.spend_won_bets(builder, send_opt.bump_claiming)?.expect("Won't be None since builder we pass in is not manually_selected_only")
@@ -197,7 +197,7 @@ pub async fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result
 
     party.set_bets_to_claiming(&bet_ids_claiming, txid)?;
 
-    Broadcast::broadcast(party.wallet().client(), tx).await?;
+    Broadcast::broadcast(party.wallet().client(), tx)?;
 
     Ok(item! { "txid" => txid.to_string().into() })
 }
@@ -208,12 +208,12 @@ pub enum TransactionOpt {
     Show { txid: Txid },
 }
 
-pub async fn run_transaction_cmd(
+pub fn run_transaction_cmd(
     wallet_dir: &PathBuf,
     opt: TransactionOpt,
 ) -> anyhow::Result<CmdOutput> {
     use TransactionOpt::*;
-    let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+    let (wallet, _, _, _) = load_wallet(wallet_dir)?;
 
     match opt {
         List => {
@@ -265,10 +265,10 @@ pub enum UtxoOpt {
     Show { outpoint: OutPoint },
 }
 
-pub async fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
     match opt {
         UtxoOpt::List => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let rows = wallet
                 .list_unspent()?
                 .into_iter()
@@ -287,7 +287,7 @@ pub async fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<
             Ok(CmdOutput::table(vec!["outpoint", "address", "value"], rows))
         }
         UtxoOpt::Show { outpoint } => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir).await?;
+            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let utxo = wallet
                 .query_db(|db| db.get_utxo(&outpoint))?
                 .ok_or(anyhow!("UTXO {} not in wallet database", outpoint))?;

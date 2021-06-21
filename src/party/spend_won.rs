@@ -11,12 +11,12 @@ where
     D: bdk::database::BatchDatabase,
 {
 
-    pub async fn claim(&self, fee: FeeSpec, bump_claiming: bool) -> anyhow::Result<Option<Transaction>> {
+    pub fn claim(&self, fee: FeeSpec, bump_claiming: bool) -> anyhow::Result<Option<Transaction>> {
         let wallet = self.wallet();
         let mut builder = wallet.build_tx();
         builder.manually_selected_only().enable_rbf();
 
-        fee.apply_to_builder(wallet.client(), &mut builder).await?;
+        fee.apply_to_builder(wallet.client(), &mut builder)?;
 
         let recipient = wallet.get_address(AddressIndex::New)?.script_pubkey();
 

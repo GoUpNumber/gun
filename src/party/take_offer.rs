@@ -52,7 +52,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
     }
 
-    async fn lookup_offer_inputs(
+    fn lookup_offer_inputs(
         &self,
         offer: &Offer,
     ) -> anyhow::Result<(Vec<psbt::Input>, Amount)> {
@@ -61,7 +61,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         for input in &offer.inputs {
             let mut psbt_input = self
                 .outpoint_to_psbt_input(input.outpoint)
-                .await
+                
                 .context("Failed to find proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             psbt_input.final_script_witness = Some(input.witness.clone());
@@ -71,13 +71,13 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         Ok((psbt_inputs, Amount::from_sat(input_value)))
     }
 
-    pub async fn decrypt_and_validate_offer(
+    pub fn decrypt_and_validate_offer(
         &self,
         bet_id: BetId,
         encrypted_offer: EncryptedOffer,
     ) -> anyhow::Result<ValidatedOffer> {
         let DecryptedOffer { offer, mut rng } = self.decrypt_offer(bet_id, encrypted_offer)?;
-        let (offer_psbt_inputs, offer_input_value) = self.lookup_offer_inputs(&offer).await?;
+        let (offer_psbt_inputs, offer_input_value) = self.lookup_offer_inputs(&offer)?;
 
         let randomize = Randomize::new(&mut rng);
 
@@ -216,14 +216,14 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         })
     }
 
-    pub async fn take_offer(
+    pub fn take_offer(
         &self,
         ValidatedOffer {
             bet_id, bet, tx, ..
         }: ValidatedOffer,
     ) -> anyhow::Result<Transaction> {
         bdk::blockchain::Broadcast::broadcast(self.wallet.client(), tx.clone())
-            .await
+            
             .context("Broadcasting bet tx")?;
 
         self.bet_db

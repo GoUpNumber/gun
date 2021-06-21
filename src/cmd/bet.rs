@@ -87,12 +87,12 @@ pub enum BetOpt {
     Oracle(crate::cmd::OracleOpt),
 }
 
-pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::CmdOutput> {
+pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::CmdOutput> {
     match cmd {
         BetOpt::Propose { args, event_url } => {
-            let party = cmd::load_party(wallet_dir).await?;
+            let party = cmd::load_party(wallet_dir)?;
             let oracle_id = event_url.host_str().unwrap().to_string();
-            let (oracle_event, _) = get_oracle_event_from_url(party.bet_db(), event_url).await?;
+            let (oracle_event, _) = get_oracle_event_from_url(party.bet_db(), event_url)?;
             let (_bet_id, proposal) = party.make_proposal(oracle_id, oracle_event, args.into())?;
             eprintln!("post your proposal and let people make offers to it:");
             Ok(item! { "proposal" => Cell::String(proposal.into_versioned().to_string()) })
@@ -104,7 +104,7 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
             fee,
             yes,
         } => {
-            let party = cmd::load_party(wallet_dir).await?;
+            let party = cmd::load_party(wallet_dir)?;
             let proposal: Proposal = proposal.into();
             let event_id = proposal.event_id.clone();
             if event_id.n_outcomes() != 2 {
@@ -145,7 +145,7 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
             ))?;
 
             let (oracle_event, oracle_info) =
-                get_oracle_event_from_url(party.bet_db(), event_url).await?;
+                get_oracle_event_from_url(party.bet_db(), event_url)?;
 
             let (bet, offer, cipher) = party
                 .generate_offer_with_oracle_event(
@@ -156,7 +156,7 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
                     args.into(),
                     fee,
                 )
-                .await?;
+                ?;
 
             if yes || cmd::read_answer(bet.prompt()) {
                 let (_, encrypted_offer) = party.save_and_encrypt_offer(bet, offer, cipher)?;
@@ -169,13 +169,13 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
             id,
             encrypted_offer,
         } => {
-            let party = cmd::load_party(wallet_dir).await?;
+            let party = cmd::load_party(wallet_dir)?;
             let validated_offer = party
                 .decrypt_and_validate_offer(id, encrypted_offer)
-                .await?;
+                ?;
 
             if cmd::read_answer(validated_offer.bet.prompt()) {
-                let tx = party.take_offer(validated_offer).await?;
+                let tx = party.take_offer(validated_offer)?;
                 Ok(item! { "txid" => Cell::String(tx.txid().to_string()) })
             } else {
                 Ok(CmdOutput::None)
@@ -187,9 +187,9 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
             print_tx,
         } => {
             use bdk::bitcoin::consensus::encode;
-            let party = cmd::load_party(wallet_dir).await?;
+            let party = cmd::load_party(wallet_dir)?;
             let wallet = party.wallet();
-            let claim_tx = party.claim(fee, bump_claiming).await?;
+            let claim_tx = party.claim(fee, bump_claiming)?;
             match claim_tx {
                 Some(claim_tx) => {
                     if print_tx {
@@ -199,7 +199,7 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
                     } else {
                         use bdk::blockchain::Broadcast;
                         let txid = claim_tx.txid();
-                        Broadcast::broadcast(wallet.client(), claim_tx).await?;
+                        Broadcast::broadcast(wallet.client(), claim_tx)?;
                         Ok(item! { "txid" => Cell::string(txid)})
                     }
                 }
@@ -207,8 +207,8 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
             }
         }
         BetOpt::Cancel { bet_ids } => {
-            let party = cmd::load_party(wallet_dir).await?;
-            let tx = party.cancel(&bet_ids).await?;
+            let party = cmd::load_party(wallet_dir)?;
+            let tx = party.cancel(&bet_ids)?;
             match tx {
                 Some(tx) => Ok(item! { "txid" => Cell::String(tx.txid().to_string())}),
                 None => Ok(CmdOutput::None),
@@ -245,15 +245,15 @@ pub async fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cm
         }
         BetOpt::List { no_update } => {
             if !no_update {
-                let party = cmd::load_party(wallet_dir).await?;
-                poke_bets(&party).await
+                let party = cmd::load_party(wallet_dir)?;
+                poke_bets(&party)
             }
             let bet_db = cmd::load_bet_db(wallet_dir)?;
             Ok(list_bets(&bet_db))
         }
         BetOpt::Oracle(oracle_cmd) => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
-            run_oralce_cmd(bet_db, oracle_cmd).await
+            run_oralce_cmd(bet_db, oracle_cmd)
         }
     }
 }
@@ -343,29 +343,25 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
     )
 }
 
-async fn poke_bets<D: BatchDatabase>(party: &Party<EsploraBlockchain, D>) {
+fn poke_bets<D: BatchDatabase>(party: &Party<EsploraBlockchain, D>) {
     for (bet_id, _) in party.bet_db().list_entities_print_error::<BetState>() {
-        match party.take_next_action(bet_id).await {
+        match party.take_next_action(bet_id) {
             Ok(_updated) => {}
             Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),
         }
     }
 }
 
-async fn get_oracle_event_from_url(
+fn get_oracle_event_from_url(
     bet_db: &BetDatabase,
     url: crate::reqwest::Url,
 ) -> anyhow::Result<(crate::OracleEvent, crate::OracleInfo)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
-    let client = crate::reqwest::Client::new();
 
-    let event_response = client
-        .get(url.clone())
-        .send()
-        .await?
+    let event_response = reqwest::blocking::get(url.clone())?
         .error_for_status()?
         .json::<olivia_core::http::EventResponse<olivia_secp256k1::Secp256k1>>()
-        .await?;
+        ?;
 
     let oracle_info = bet_db
         .get_entity::<crate::OracleInfo>(oracle_id.to_string())?

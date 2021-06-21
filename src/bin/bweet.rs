@@ -40,8 +40,7 @@ pub enum Commands {
     Init(InitOpt),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
 
     let wallet_dir = opt
@@ -57,19 +56,19 @@ async fn main() -> anyhow::Result<()> {
         });
 
     if opt.sync {
-        let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir).await?;
+        let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;
         eprintln!("syncing wallet with {:?}", config.blockchain);
-        wallet.sync(bdk::blockchain::noop_progress(), None).await?;
+        wallet.sync(bdk::blockchain::noop_progress(), None)?;
     }
 
     let res = match opt.command {
-        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt).await,
-        Commands::Balance => cmd::run_balance(wallet_dir).await,
-        Commands::Address(opt) => cmd::get_address(&wallet_dir, opt).await,
-        Commands::Send(opt) => cmd::run_send(&wallet_dir, opt).await,
+        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt),
+        Commands::Balance => cmd::run_balance(wallet_dir),
+        Commands::Address(opt) => cmd::get_address(&wallet_dir, opt),
+        Commands::Send(opt) => cmd::run_send(&wallet_dir, opt),
         Commands::Init(opt) => cmd::run_init(&wallet_dir, opt),
-        Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet_dir, opt).await,
-        Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet_dir, opt).await,
+        Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet_dir, opt),
+        Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet_dir, opt),
     };
 
     match res {

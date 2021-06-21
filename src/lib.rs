@@ -4,7 +4,7 @@
 use std::str::FromStr;
 
 use bdk::bitcoin::Amount;
-pub use bdk::{bitcoin, reqwest};
+pub use bdk::{bitcoin};
 pub mod amount_ext;
 pub mod bet;
 pub mod bet_database;
@@ -17,6 +17,7 @@ mod fee_spec;
 pub mod keychain;
 pub mod party;
 pub use fee_spec::*;
+pub use reqwest;
 
 pub use chacha20::cipher;
 pub use olivia_core::{chrono, url};

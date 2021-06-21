@@ -31,7 +31,7 @@ pub enum OracleOpt {
     },
 }
 
-pub async fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
     match cmd {
         OracleOpt::Add { url, yes } => {
             let url = url::Url::from_str(&url)
@@ -43,13 +43,10 @@ pub async fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Resu
             match bet_db.get_entity::<OracleInfo>(oracle_id.clone())? {
                 Some(_) => eprintln!("oracle {} is already trusted", oracle_id),
                 None => {
-                    let root_response = reqwest::Client::new()
-                        .get(url)
-                        .send()
-                        .await?
+                    let root_response = reqwest::blocking::get(url)?
                         .error_for_status()?
                         .json::<RootResponse<Secp256k1>>()
-                        .await?;
+                        ?;
                     let oracle_info = OracleInfo {
                         id: oracle_id,
                         oracle_keys: root_response.public_keys,

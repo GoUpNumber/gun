@@ -114,7 +114,7 @@ impl JointOutput {
         )
     }
 
-    // pub async fn compute_privkey<B: Blockchain>(
+    // pub fn compute_privkey<B: Blockchain>(
     //     &self,
     //     sig_scalar: Either,
     // ) -> anyhow::Result<SecretKey> {

@@ -121,7 +121,7 @@ impl FromStr for EncryptedOffer {
 }
 
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
-    pub async fn generate_offer_with_oracle_event(
+    pub fn generate_offer_with_oracle_event(
         &self,
         proposal: Proposal,
         choose_right: bool,
@@ -175,7 +175,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         fee_spec
             .apply_to_builder(self.wallet.client(), &mut builder)
-            .await?;
+            ?;
 
         args.apply_args(self.bet_db(), &mut builder)?;
 
@@ -183,7 +183,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         for proposal_input in &proposal.inputs {
             let psbt_input = self
                 .outpoint_to_psbt_input(*proposal_input)
-                .await
+                
                 .context("Failed to find proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             builder.add_foreign_utxo(

@@ -24,7 +24,7 @@ impl Default for FeeSpec {
 }
 
 impl FeeSpec {
-    pub async fn apply_to_builder<
+    pub fn apply_to_builder<
         B: Blockchain,
         D: BatchDatabase,
         Cs: CoinSelectionAlgorithm<D>,
@@ -43,7 +43,7 @@ impl FeeSpec {
                 builder.fee_rate(*rate);
             }
             Height(height) => {
-                let feerate = blockchain.estimate_fee(*height as usize).await?;
+                let feerate = blockchain.estimate_fee(*height as usize)?;
                 builder.fee_rate(feerate);
             }
         }

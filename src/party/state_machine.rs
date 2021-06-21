@@ -19,13 +19,13 @@ impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
 where
     D: bdk::database::BatchDatabase,
 {
-    async fn check_cancelled(&self, inputs: &[OutPoint]) -> anyhow::Result<Option<CancelReason>> {
+    fn check_cancelled(&self, inputs: &[OutPoint]) -> anyhow::Result<Option<CancelReason>> {
         for input in inputs {
-            if !self.wallet.client().utxo_exists(*input).await? {
+            if !self.wallet.client().utxo_exists(*input)? {
                 //TOOD: only sync one address
                 self.wallet
                     .sync(bdk::blockchain::noop_progress(), None)
-                    .await?;
+                    ?;
                 let tx = self.wallet.list_transactions(true)?.into_iter().find(|tx| {
                     tx.transaction
                         .as_ref()
@@ -48,7 +48,7 @@ where
         Ok(None)
     }
 
-    pub async fn take_next_action(&self, bet_id: BetId) -> anyhow::Result<()> {
+    pub fn take_next_action(&self, bet_id: BetId) -> anyhow::Result<()> {
         let bet_state = self
             .bet_db
             .get_entity(bet_id)?
@@ -60,7 +60,7 @@ where
             | BetState::Cancelled { .. }
             | BetState::Lost { .. } => {}
             BetState::Cancelling { bet_or_prop, .. } => {
-                if let Some(reason) = self.check_cancelled(&bet_or_prop.inputs()).await? {
+                if let Some(reason) = self.check_cancelled(&bet_or_prop.inputs())? {
                     update_bet! {
                         self, bet_id,
                         BetState::Cancelling { bet_or_prop, .. } => BetState::Cancelled {
@@ -73,7 +73,7 @@ where
             BetState::Proposed { local_proposal } => {
                 if let Some(reason) = self
                     .check_cancelled(&local_proposal.proposal.inputs)
-                    .await?
+                    ?
                 {
                     update_bet! { self, bet_id,
                         BetState::Proposed { local_proposal } => BetState::Cancelled {
@@ -87,7 +87,7 @@ where
                 let txid = bet.tx.txid();
                 if let Some(height) = self
                     .is_confirmed(txid, bet.joint_output.wallet_descriptor())
-                    .await?
+                    ?
                 {
                     update_bet! { self, bet_id,
                         BetState::Offered { bet, .. } => BetState::Confirmed { bet, height }
@@ -102,7 +102,7 @@ where
                     .collect::<Vec<_>>();
                 if let Some(reason) = self
                     .check_cancelled(&inputs_to_check_for_cancellation)
-                    .await?
+                    ?
                 {
                     update_bet! { self, bet_id,
                         BetState::Cancelling { bet_or_prop, .. } => BetState::Cancelled {
@@ -124,14 +124,14 @@ where
 
                 if let Some(height) = self
                     .is_confirmed(txid, bet.joint_output.wallet_descriptor())
-                    .await?
+                    ?
                 {
                     update_bet! { self, bet_id,
                         BetState::Unconfirmed { bet, .. } => BetState::Confirmed { bet, height }
                     };
                     self.wallet
                         .sync(bdk::blockchain::noop_progress(), None)
-                        .await?;
+                        ?;
                 } else {
                     let inputs_to_check_for_cancellation = bet
                         .tx
@@ -141,7 +141,7 @@ where
                         .collect::<Vec<_>>();
                     if let Some(reason) = self
                         .check_cancelled(&inputs_to_check_for_cancellation)
-                        .await?
+                        ?
                     {
                         update_bet! { self, bet_id,
                             BetState::Cancelling { bet_or_prop, .. } => {
@@ -155,12 +155,12 @@ where
                 }
             }
             BetState::Confirmed { bet, height: _ } => {
-                self.try_get_outcome(bet_id, bet).await?;
+                self.try_get_outcome(bet_id, bet)?;
             }
             BetState::Claiming { bet, .. } => {
                 let has_been_claimed = self
                     .outpoint_exists(bet.outpoint(), bet.joint_output.wallet_descriptor())
-                    .await?;
+                    ?;
                 if has_been_claimed {
                     update_bet! { self, bet_id,
                                  BetState::Claiming { bet, .. } => BetState::Claimed { bet }

@@ -99,16 +99,16 @@ pub fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
     Ok(bet_db)
 }
 
-async fn load_party(
+fn load_party(
     wallet_dir: &PathBuf,
 ) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
     let (wallet, bet_db, keychain, config) =
-        load_wallet(wallet_dir).await.context("loading wallet")?;
+        load_wallet(wallet_dir).context("loading wallet")?;
     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
     Ok(party)
 }
 
-pub async fn load_wallet(
+pub fn load_wallet(
     wallet_dir: &PathBuf,
 ) -> anyhow::Result<(
     Wallet<EsploraBlockchain, impl BatchDatabase>,
@@ -162,7 +162,7 @@ pub async fn load_wallet(
         };
 
         Wallet::new(descriptor, None, config.network, wallet_db, esplora)
-            .await
+            
             .context("Initializing wallet failed")?
     };
 
