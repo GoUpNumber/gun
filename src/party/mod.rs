@@ -143,11 +143,9 @@ where
         let event_response = self
             .client
             .get(event_url)
-            .send()
-            ?
+            .send()?
             .error_for_status()?
-            .json::<EventResponse<Secp256k1>>()
-            ?;
+            .json::<EventResponse<Secp256k1>>()?;
 
         if let Some(attestation) = event_response.attestation {
             self.learn_outcome(bet_id, attestation)?;
@@ -207,9 +205,7 @@ where
             }
         }
 
-        self.wallet
-            .sync(bdk::blockchain::noop_progress(), None)
-            ?;
+        self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
 
         let mut builder = self.wallet.build_tx();
         builder.manually_selected_only().enable_rbf();
@@ -254,7 +250,6 @@ where
             })?;
 
         bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
-            
             .context("broadcasting cancel transaction")?;
 
         Ok(Some(cancel_tx))
@@ -273,24 +268,22 @@ where
             self.wallet.network(),
             MemoryDatabase::default(),
             blockchain,
-        )
-        ?;
+        )?;
         wallet.sync(bdk::blockchain::noop_progress(), None)?;
-        Ok(wallet.list_transactions(true)?.iter().find_map(|tx| {
-            if tx.txid == txid && tx.height.is_some() {
-                Some(tx.height.unwrap())
-            } else {
-                None
-            }
-        }))
+        Ok(wallet
+            .list_transactions(true)?
+            .iter()
+            .find_map(|tx| match &tx.confirmation_time {
+                Some(confirmation_time) if tx.txid == txid => Some(confirmation_time.height),
+                _ => None,
+            }))
     }
 
     pub fn outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
         let tx = self
             .wallet
             .client()
-            .get_tx(&outpoint.txid)
-            ?
+            .get_tx(&outpoint.txid)?
             .ok_or(anyhow!("txid not found {}", outpoint.txid))?;
 
         let txout = tx
@@ -311,11 +304,11 @@ where
         Ok(psbt_input)
     }
 
-    pub fn outpoint_exists(
+    pub fn get_spending_tx(
         &self,
         outpoint: OutPoint,
         descriptor: ExtendedDescriptor,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<Txid>> {
         let blockchain = self.new_blockchain()?;
         let wallet = Wallet::new(
             descriptor,
@@ -323,13 +316,28 @@ where
             self.wallet.network(),
             MemoryDatabase::default(),
             blockchain,
-        )
-        ?;
+        )?;
         wallet.sync(bdk::blockchain::noop_progress(), None)?;
-        Ok(wallet
+        let res = Ok(wallet
+            .list_transactions(true)?
+            .iter()
+            .find(|tx| {
+                tx.confirmation_time.is_some()
+                    && tx
+                        .transaction
+                        .as_ref()
+                        .unwrap()
+                        .input
+                        .iter()
+                        .find(|x| x.previous_output == outpoint)
+                        .is_some()
+            })
+            .map(|tx| tx.txid));
+        debug_assert!(wallet
             .list_unspent()?
             .iter()
             .find(|utxo| utxo.outpoint == outpoint)
-            .is_some())
+            .is_none());
+        res
     }
 }

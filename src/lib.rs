@@ -3,8 +3,8 @@
 
 use std::str::FromStr;
 
+pub use bdk::bitcoin;
 use bdk::bitcoin::Amount;
-pub use bdk::{bitcoin};
 pub mod amount_ext;
 pub mod bet;
 pub mod bet_database;
@@ -20,11 +20,13 @@ pub use fee_spec::*;
 pub use reqwest;
 
 pub use chacha20::cipher;
-pub use olivia_core::{chrono, url};
+pub use olivia_core::chrono;
 pub use olivia_secp256k1::schnorr_fun::fun::{hex, rand_core};
+pub use reqwest::Url;
 
 pub type OracleInfo = olivia_core::OracleInfo<olivia_secp256k1::Secp256k1>;
 pub type OracleEvent = olivia_core::OracleEvent<olivia_secp256k1::Secp256k1>;
+pub type Attestation = olivia_core::Attestation<olivia_secp256k1::Secp256k1>;
 
 #[derive(Clone, Debug)]
 pub enum ValueChoice {

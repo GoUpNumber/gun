@@ -2,12 +2,14 @@ use crate::{cmd, config::Config, item};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Network,
-    keys::{GeneratableKey, GeneratedKey},
+    keys::{
+        bip39::{Language, Mnemonic, MnemonicType},
+        GeneratableKey, GeneratedKey,
+    },
+    miniscript::Segwitv0,
 };
-use bip39::{Language, Mnemonic, MnemonicType};
 use cmd::Cell;
-use miniscript::Segwitv0;
-use std::{fs, path::PathBuf};
+use std::{fs, io, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
 use super::CmdOutput;
@@ -18,9 +20,9 @@ pub enum NWords {}
 pub struct InitOpt {
     /// The network name (bitcoin|regtest|testnet)
     network: Network,
-    /// Existing BIP39 seed words file
+    /// Existing BIP39 seed words file. Use "-" to read words from stdin.
     #[structopt(long, name = "FILE")]
-    from_existing: Option<PathBuf>,
+    from_existing: Option<String>,
     #[structopt(long, default_value = "12", name = "[12|24]")]
     /// The number of BIP39 seed words to use
     n_words: usize,
@@ -36,13 +38,24 @@ pub fn run_init(
 ) -> anyhow::Result<CmdOutput> {
     let seed_words = match from_existing {
         Some(existing_words_file) => {
-            let seed_words = fs::read_to_string(&existing_words_file).context(format!(
-                "loading existing seed words from {}",
-                existing_words_file.display()
-            ))?;
-            Mnemonic::validate(&seed_words, Language::English)
-                .context("parsing existing seedwords")?;
-            seed_words
+            let words = match existing_words_file.as_str() {
+                "-" => {
+                    use io::Read;
+                    let mut words = String::new();
+                    io::stdin().read_to_string(&mut words)?;
+                    words
+                }
+                existing_words_file => {
+                    let existing_words_file = PathBuf::from_str(existing_words_file)
+                        .context("parsing existing seed words file name")?;
+                    fs::read_to_string(&existing_words_file).context(format!(
+                        "loading existing seed words from {}",
+                        existing_words_file.display()
+                    ))?
+                }
+            };
+            Mnemonic::validate(&words, Language::English).context("parsing existing seedwords")?;
+            words
         }
         None => {
             let n_words = MnemonicType::for_word_count(n_words)?;

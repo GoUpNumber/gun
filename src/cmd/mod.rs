@@ -4,7 +4,11 @@ mod oracle;
 mod wallet;
 use anyhow::Context;
 use bdk::{
-    bitcoin::Amount,
+    bitcoin::{
+        consensus::encode,
+        util::{address::Payload, psbt::PartiallySignedTransaction as Psbt},
+        Address, Amount, Network, Txid,
+    },
     blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
     sled, Wallet,
@@ -15,6 +19,7 @@ pub mod bet;
 pub use bet::*;
 pub mod dev;
 pub use oracle::*;
+use term_table::{row::Row, Table};
 pub use wallet::*;
 
 use crate::{
@@ -102,8 +107,7 @@ pub fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
 fn load_party(
     wallet_dir: &PathBuf,
 ) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
-    let (wallet, bet_db, keychain, config) =
-        load_wallet(wallet_dir).context("loading wallet")?;
+    let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
     Ok(party)
 }
@@ -116,30 +120,32 @@ pub fn load_wallet(
     Keychain,
     Config,
 )> {
-    use bip39::{Language, Mnemonic, Seed};
+    use bdk::keys::bip39::{Language, Mnemonic, Seed};
 
     if !wallet_dir.exists() {
         return Err(anyhow!(
-            "No wallet found at {}. Run `bweet init` to set a new one up or set --bweet-dir.",
+            "No wallet found at {}. Run `gun init` to set a new one up or set --gun-dir.",
             wallet_dir.as_path().display()
         ));
     }
 
     let config = load_config(&wallet_dir).context("loading configuration")?;
-    let keychain = {
-        let sw_file = get_seed_words_file(&wallet_dir);
-        let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
-        let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
-            anyhow!(
-                "parsing seed phrase in '{}' failed: {}",
-                sw_file.as_path().display(),
-                e
-            )
-        })?;
-        let mut seed_bytes = [0u8; 64];
-        let seed = Seed::new(&mnemonic, "");
-        seed_bytes.copy_from_slice(seed.as_bytes());
-        Keychain::new(seed_bytes)
+    let keychain = match config.keys {
+        crate::config::WalletKeys::SeedWordsFile => {
+            let sw_file = get_seed_words_file(&wallet_dir);
+            let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
+            let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
+                anyhow!(
+                    "parsing seed phrase in '{}' failed: {}",
+                    sw_file.as_path().display(),
+                    e
+                )
+            })?;
+            let mut seed_bytes = [0u8; 64];
+            let seed = Seed::new(&mnemonic, "");
+            seed_bytes.copy_from_slice(seed.as_bytes());
+            Keychain::new(seed_bytes)
+        }
     };
     let database = {
         let mut db_file = wallet_dir.clone();
@@ -151,10 +157,14 @@ pub fn load_wallet(
         let wallet_db = database
             .open_tree("wallet")
             .context("opening wallet tree")?;
-        let descriptor = bdk::template::Bip84(
-            keychain.main_wallet_xprv(config.network),
-            bdk::KeychainKind::External,
-        );
+
+        let descriptor = match config.kind {
+            crate::config::WalletKind::P2wpkh => bdk::template::Bip84(
+                keychain.main_wallet_xprv(config.network),
+                bdk::KeychainKind::External,
+            ),
+        };
+
         let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
             AnyBlockchain::Esplora(esplora) => esplora,
             #[allow(unreachable_patterns)]
@@ -162,7 +172,6 @@ pub fn load_wallet(
         };
 
         Wallet::new(descriptor, None, config.network, wallet_db, esplora)
-            
             .context("Initializing wallet failed")?
     };
 
@@ -204,6 +213,18 @@ impl From<String> for Cell {
     }
 }
 
+pub fn format_amount(amount: Amount) -> String {
+    if amount == Amount::ZERO {
+        "0".to_string()
+    }
+    else {
+        let mut string = amount.to_string();
+        string.insert(string.len() - 7, ' ');
+        string.insert(string.len() - 11, ' ');
+        string
+    }
+}
+
 impl Cell {
     pub fn string<T: core::fmt::Display>(t: T) -> Self {
         Self::String(t.to_string())
@@ -222,12 +243,7 @@ impl Cell {
         use Cell::*;
         match self {
             String(string) => string,
-            Amount(amount) => {
-                let mut string = amount.to_string();
-                string.insert(string.len() - 7, ' ');
-                string.insert(string.len() - 11, ' ');
-                string
-            }
+            Amount(amount) => format_amount(amount),
             Int(integer) => integer.to_string(),
             Empty => "-".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
@@ -265,11 +281,10 @@ impl CmdOutput {
     }
 
     pub fn render(self) -> String {
-        use term_table::{row::Row, Table};
         use CmdOutput::*;
         match self {
             Table(table_data) => {
-                let mut table = Table::new();
+                let mut table = term_table::Table::new();
                 table.add_row(Row::new(table_data.col_names.to_vec()));
                 for row in table_data.rows.into_iter() {
                     table.add_row(Row::new(row.into_iter().map(Cell::render)));
@@ -281,7 +296,7 @@ impl CmdOutput {
                 if item.len() == 1 {
                     return item.into_iter().next().unwrap().1.render();
                 }
-                let mut table = Table::new();
+                let mut table = term_table::Table::new();
                 for (key, value) in item {
                     table.add_row(Row::new(vec![key, value.render()]))
                 }
@@ -358,6 +373,79 @@ impl CmdOutput {
             List(list) => serde_json::to_value(list).unwrap(),
             None => serde_json::Value::Null,
         }
+    }
+}
+
+pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
+    let mut table = Table::new();
+    let mut header = Some("in".to_string());
+    for (i, psbt_input) in psbt.inputs.iter().enumerate() {
+        let txout = psbt_input.witness_utxo.as_ref().unwrap();
+        let input = &psbt.global.unsigned_tx.input[i];
+        let _address = Payload::from_script(&txout.script_pubkey)
+            .map(|payload| Address { payload, network }.to_string())
+            .unwrap_or(txout.script_pubkey.to_string());
+
+        table.add_row(Row::new(vec![
+            header.take().unwrap_or("".to_string()),
+            input.previous_output.to_string(),
+            format_amount(Amount::from_sat(txout.value)),
+        ]));
+    }
+
+    let mut header = Some("out".to_string());
+    for (i, _) in psbt.outputs.iter().enumerate() {
+        let txout = &psbt.global.unsigned_tx.output[i];
+        let address = Payload::from_script(&txout.script_pubkey)
+            .map(|payload| Address { payload, network }.to_string())
+            .unwrap_or(txout.script_pubkey.to_string());
+        table.add_row(Row::new(vec![
+            header.take().unwrap_or("".to_string()),
+            address,
+            format_amount(Amount::from_sat(txout.value)),
+        ]));
+    }
+    let input_value: u64 = psbt
+        .inputs
+        .iter()
+        .map(|x| x.witness_utxo.as_ref().map(|x| x.value).unwrap_or(0))
+        .sum();
+    let output_value: u64 = psbt.global.unsigned_tx.output.iter().map(|x| x.value).sum();
+    let fee = input_value - output_value;
+    let feerate = fee as f32 / (psbt.clone().extract_tx().get_weight() as f32 / 4.0);
+    table.add_row(Row::new(vec!["fee", &format!("{} (rate)", &feerate), &format_amount(Amount::from_sat(fee))]));
+    table.render()
+}
+
+pub fn decide_to_broadcast(
+    network: Network,
+    blockchain: &impl bdk::blockchain::Broadcast,
+    psbt: Psbt,
+    yes: bool,
+    print_tx: bool,
+) -> anyhow::Result<(CmdOutput, Option<Txid>)> {
+    use crate::item;
+    if yes
+        || read_answer(format!(
+            "Is this transaction ok?\n{}",
+            display_psbt(network, &psbt)
+        ))
+    {
+        let tx = psbt.extract_tx();
+
+        if print_tx {
+            Ok((
+                item! { "tx" => Cell::String(crate::hex::encode(&encode::serialize(&tx))) },
+                Some(tx.txid()),
+            ))
+        } else {
+            use bdk::blockchain::Broadcast;
+            let txid = tx.txid();
+            Broadcast::broadcast(blockchain, tx)?;
+            Ok((item! { "txid" => Cell::string(txid)}, Some(txid)))
+        }
+    } else {
+        Ok((CmdOutput::None, None))
     }
 }
 

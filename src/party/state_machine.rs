@@ -23,9 +23,7 @@ where
         for input in inputs {
             if !self.wallet.client().utxo_exists(*input)? {
                 //TOOD: only sync one address
-                self.wallet
-                    .sync(bdk::blockchain::noop_progress(), None)
-                    ?;
+                self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
                 let tx = self.wallet.list_transactions(true)?.into_iter().find(|tx| {
                     tx.transaction
                         .as_ref()
@@ -34,7 +32,7 @@ where
                         .iter()
                         .find(|txin| txin.previous_output == *input)
                         .is_some()
-                        && tx.height.is_some()
+                        && tx.confirmation_time.is_some()
                 });
                 return Ok(Some(match tx {
                     Some(tx) => CancelReason::ICancelled {
@@ -71,10 +69,7 @@ where
                 }
             }
             BetState::Proposed { local_proposal } => {
-                if let Some(reason) = self
-                    .check_cancelled(&local_proposal.proposal.inputs)
-                    ?
-                {
+                if let Some(reason) = self.check_cancelled(&local_proposal.proposal.inputs)? {
                     update_bet! { self, bet_id,
                         BetState::Proposed { local_proposal } => BetState::Cancelled {
                             bet_or_prop: BetOrProp::Proposal(local_proposal),
@@ -85,9 +80,8 @@ where
             }
             BetState::Offered { bet, .. } => {
                 let txid = bet.tx.txid();
-                if let Some(height) = self
-                    .is_confirmed(txid, bet.joint_output.wallet_descriptor())
-                    ?
+                if let Some(height) =
+                    self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
                 {
                     update_bet! { self, bet_id,
                         BetState::Offered { bet, .. } => BetState::Confirmed { bet, height }
@@ -100,10 +94,7 @@ where
                     .iter()
                     .map(|x| x.previous_output)
                     .collect::<Vec<_>>();
-                if let Some(reason) = self
-                    .check_cancelled(&inputs_to_check_for_cancellation)
-                    ?
-                {
+                if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
                     update_bet! { self, bet_id,
                         BetState::Cancelling { bet_or_prop, .. } => BetState::Cancelled {
                             bet_or_prop,
@@ -122,16 +113,13 @@ where
             } => {
                 let txid = funding_transaction.txid();
 
-                if let Some(height) = self
-                    .is_confirmed(txid, bet.joint_output.wallet_descriptor())
-                    ?
+                if let Some(height) =
+                    self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
                 {
                     update_bet! { self, bet_id,
                         BetState::Unconfirmed { bet, .. } => BetState::Confirmed { bet, height }
                     };
-                    self.wallet
-                        .sync(bdk::blockchain::noop_progress(), None)
-                        ?;
+                    self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
                 } else {
                     let inputs_to_check_for_cancellation = bet
                         .tx
@@ -139,10 +127,7 @@ where
                         .iter()
                         .map(|x| x.previous_output)
                         .collect::<Vec<_>>();
-                    if let Some(reason) = self
-                        .check_cancelled(&inputs_to_check_for_cancellation)
-                        ?
-                    {
+                    if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
                         update_bet! { self, bet_id,
                             BetState::Cancelling { bet_or_prop, .. } => {
                                 BetState::Cancelled {
@@ -158,12 +143,11 @@ where
                 self.try_get_outcome(bet_id, bet)?;
             }
             BetState::Claiming { bet, .. } => {
-                let has_been_claimed = self
-                    .outpoint_exists(bet.outpoint(), bet.joint_output.wallet_descriptor())
-                    ?;
-                if has_been_claimed {
+                if let Some(tx_that_claimed) =
+                    self.get_spending_tx(bet.outpoint(), bet.joint_output.wallet_descriptor())?
+                {
                     update_bet! { self, bet_id,
-                                 BetState::Claiming { bet, .. } => BetState::Claimed { bet }
+                                 BetState::Claiming { bet, claim_txid, .. } => BetState::Claimed { bet, expecting: Some(claim_txid), txid: tx_that_claimed  }
                     }
                 }
             }

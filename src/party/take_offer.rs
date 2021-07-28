@@ -7,11 +7,11 @@ use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{util::psbt, Amount, Transaction},
     database::BatchDatabase,
+    miniscript::DescriptorTrait,
     wallet::tx_builder::TxOrdering,
     SignOptions,
 };
 use chacha20::ChaCha20Rng;
-use miniscript::DescriptorTrait;
 use std::convert::TryInto;
 
 use super::{
@@ -52,16 +52,12 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
     }
 
-    fn lookup_offer_inputs(
-        &self,
-        offer: &Offer,
-    ) -> anyhow::Result<(Vec<psbt::Input>, Amount)> {
+    fn lookup_offer_inputs(&self, offer: &Offer) -> anyhow::Result<(Vec<psbt::Input>, Amount)> {
         let mut psbt_inputs = vec![];
         let mut input_value = 0;
         for input in &offer.inputs {
             let mut psbt_input = self
                 .outpoint_to_psbt_input(input.outpoint)
-                
                 .context("Failed to find proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             psbt_input.final_script_witness = Some(input.witness.clone());
@@ -223,7 +219,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }: ValidatedOffer,
     ) -> anyhow::Result<Transaction> {
         bdk::blockchain::Broadcast::broadcast(self.wallet.client(), tx.clone())
-            
             .context("Broadcasting bet tx")?;
 
         self.bet_db

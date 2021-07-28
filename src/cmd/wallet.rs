@@ -1,8 +1,7 @@
 use super::*;
-use crate::{bet_database::BetState, item};
+use crate::{bet_database::BetState, cmd, item};
 use bdk::{
     bitcoin::{Address, OutPoint, Script, Txid},
-    blockchain::Broadcast,
     database::Database,
     wallet::AddressIndex,
     KeychainKind, LocalUtxo, SignOptions,
@@ -36,6 +35,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
     Ok(item! {
         "main" => Cell::Amount(wallet_balance),
         "unclaimed" => Cell::Amount(unclaimed),
+        "total" => Cell::Amount(wallet_balance + unclaimed),
         "locked" => Cell::Amount(in_bet),
     })
 }
@@ -45,8 +45,8 @@ pub enum AddressOpt {
     /// A new address even if the last one hasn't been used.
     New,
     /// First one that hasn't been used.
-    Next,
-    /// List
+    LastUnused,
+    /// List addresses
     List,
     /// Show details of an address
     Show { address: Address },
@@ -59,7 +59,7 @@ pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result
             let address = wallet.get_address(AddressIndex::New)?;
             Ok(item! { "address" => address.to_string().into() })
         }
-        AddressOpt::Next => {
+        AddressOpt::LastUnused => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let address = wallet.get_address(AddressIndex::LastUnused)?;
             Ok(item! { "address" => address.to_string().into() })
@@ -68,29 +68,33 @@ pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result
             let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
             let scripts = wallet_db.iter_script_pubkeys(Some(KeychainKind::External))?;
             let config = load_config(wallet_dir).context("loading config")?;
-            let index = wallet_db.get_last_index(KeychainKind::External)?.unwrap();
+            let index = wallet_db.get_last_index(KeychainKind::External)?;
             let map = index_utxos(&wallet_db)?;
-            let rows = scripts
-                .iter()
-                .take(index as usize + 1)
-                .map(|script| {
-                    let address = Address::from_script(&script, config.network).unwrap();
-                    let value = map
-                        .get(script)
-                        .map(|utxos| {
-                            Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum())
-                        })
-                        .unwrap_or(Amount::ZERO);
+            let rows = match index {
+                Some(index) => scripts
+                    .iter()
+                    .take(index as usize + 1)
+                    .map(|script| {
+                        let address = Address::from_script(&script, config.network).unwrap();
+                        let value = map
+                            .get(script)
+                            .map(|utxos| {
+                                Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum())
+                            })
+                            .unwrap_or(Amount::ZERO);
 
-                    let count = map.get(script).map(Vec::len).unwrap_or(0);
+                        let count = map.get(script).map(Vec::len).unwrap_or(0);
 
-                    vec![
-                        Cell::String(address.to_string()),
-                        Cell::Amount(value),
-                        Cell::Int(count as u64),
-                    ]
-                })
-                .collect();
+                        vec![
+                            Cell::String(address.to_string()),
+                            Cell::Amount(value),
+                            Cell::Int(count as u64),
+                        ]
+                    })
+                    .collect(),
+                None => vec![],
+            };
+
             Ok(CmdOutput::table(vec!["address", "value", "utxos"], rows))
         }
         AddressOpt::Show { address } => {
@@ -143,42 +147,62 @@ fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script,
 pub struct SendOpt {
     /// The address to send the coins to
     to: Address,
-    /// The amount to send
+    /// The amount to send with denomination e.g. 0.1BTC
     value: ValueChoice,
-    /// The transaction fee to attach
+    /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
+    /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
     #[structopt(default_value)]
     fee: FeeSpec,
-    /// Don't spend winnings
+    /// Allow spending utxos that are currently being used in a protocol (like a bet).
     #[structopt(long)]
-    spend_won: bool,
+    spend_in_use: bool,
+    /// Don't spend unclaimed coins -- e.g. coins you won from bets
+    #[structopt(long)]
+    no_spend_unclaimed: bool,
     /// Also spend bets that are already in the "claiming" state replacing the previous
     /// transaction.
     #[structopt(long)]
     bump_claiming: bool,
+    #[structopt(long, short)]
+    yes: bool,
+    /// Print the resulting transaction out in hex instead of broadcasting it.
+    #[structopt(long, short)]
+    print_tx: bool,
 }
 
 pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+    let SendOpt {
+        to,
+        value,
+        fee,
+        no_spend_unclaimed,
+        bump_claiming,
+        yes,
+        print_tx,
+        spend_in_use,
+    } = send_opt;
     let party = load_party(wallet_dir)?;
     let mut builder = party.wallet().build_tx();
 
-    match send_opt.value {
-        ValueChoice::All => builder.drain_wallet().drain_to(send_opt.to.script_pubkey()),
-        ValueChoice::Amount(amount) => {
-            builder.add_recipient(send_opt.to.script_pubkey(), amount.as_sat())
-        }
+    match value {
+        ValueChoice::All => builder.drain_wallet().drain_to(to.script_pubkey()),
+        ValueChoice::Amount(amount) => builder.add_recipient(to.script_pubkey(), amount.as_sat()),
     };
 
     builder
         .enable_rbf()
         .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
 
-    send_opt
-        .fee
-        .apply_to_builder(party.wallet().client(), &mut builder)
-        ?;
+    if !spend_in_use {
+        builder.unspendable(party.bet_db().currently_used_utxos(&[])?);
+    }
 
-    let (mut psbt, bet_ids_claiming) = if send_opt.spend_won {
-        party.spend_won_bets(builder, send_opt.bump_claiming)?.expect("Won't be None since builder we pass in is not manually_selected_only")
+    fee.apply_to_builder(party.wallet().client(), &mut builder)?;
+
+    let (mut psbt, claiming_bet_ids) = if no_spend_unclaimed {
+        party
+            .spend_won_bets(builder, bump_claiming)?
+            .expect("Won't be None since builder we pass in is not manually_selected_only")
     } else {
         let (psbt, _) = builder.finish()?;
         (psbt, vec![])
@@ -192,14 +216,17 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
 
     assert!(finalized, "transaction must be finalized at this point");
 
-    let tx = psbt.extract_tx();
-    let txid = tx.txid();
-
-    party.set_bets_to_claiming(&bet_ids_claiming, txid)?;
-
-    Broadcast::broadcast(party.wallet().client(), tx)?;
-
-    Ok(item! { "txid" => txid.to_string().into() })
+    let (output, txid) = cmd::decide_to_broadcast(
+        party.wallet().network(),
+        party.wallet().client(),
+        psbt,
+        yes,
+        print_tx,
+    )?;
+    if let Some(txid) = txid {
+        party.set_bets_to_claiming(&claiming_bet_ids, txid)?;
+    }
+    Ok(output)
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -208,30 +235,34 @@ pub enum TransactionOpt {
     Show { txid: Txid },
 }
 
-pub fn run_transaction_cmd(
-    wallet_dir: &PathBuf,
-    opt: TransactionOpt,
-) -> anyhow::Result<CmdOutput> {
+pub fn run_transaction_cmd(wallet_dir: &PathBuf, opt: TransactionOpt) -> anyhow::Result<CmdOutput> {
     use TransactionOpt::*;
     let (wallet, _, _, _) = load_wallet(wallet_dir)?;
 
     match opt {
         List => {
-            let rows = wallet
-                .list_transactions(false)?
-                .into_iter()
+            let mut txns = wallet.list_transactions(false)?;
+
+            txns.sort_unstable_by_key(|x| std::cmp::Reverse(x.confirmation_time.as_ref().map(|x| x.timestamp).unwrap_or(0)));
+
+            let rows: Vec<Vec<Cell>> = txns.into_iter()
                 .map(|tx| {
                     vec![
                         Cell::String(tx.txid.to_string()),
-                        tx.height
-                            .map(|x| Cell::Int(x.into()))
+                        tx.confirmation_time
+                            .as_ref()
+                            .map(|x| Cell::Int(x.height.into()))
                             .unwrap_or(Cell::Empty),
-                        Cell::DateTime(tx.timestamp),
+                        tx.confirmation_time
+                            .as_ref()
+                            .map(|x| Cell::DateTime(x.timestamp))
+                            .unwrap_or(Cell::Empty),
                         Cell::Amount(Amount::from_sat(tx.sent)),
                         Cell::Amount(Amount::from_sat(tx.received)),
                     ]
                 })
                 .collect();
+
             Ok(CmdOutput::table(
                 vec!["txid", "height", "seen", "sent", "received"],
                 rows,
@@ -248,9 +279,14 @@ pub fn run_transaction_cmd(
                 "txid" => Cell::String(tx.txid.to_string()),
                 "sent" => Cell::Amount(Amount::from_sat(tx.sent)),
                 "received" => Cell::Amount(Amount::from_sat(tx.received)),
-                "seent-at" => Cell::DateTime(tx.timestamp),
-                "confirmed-at" => tx.height.map(|height| Cell::Int(height.into())).unwrap_or(Cell::Empty),
-                "fee" => Cell::Amount(Amount::from_sat(tx.fees))
+                "seent-at" => tx.confirmation_time.as_ref()
+                            .map(|x| Cell::DateTime(x.timestamp))
+                            .unwrap_or(Cell::Empty),
+                "confirmed-at" => tx.confirmation_time.as_ref()
+                            .map(|x| Cell::Int(x.height.into()))
+                            .unwrap_or(Cell::Empty),
+                "fee" => tx.fee.map(|x| Cell::Amount(Amount::from_sat(x)))
+                    .unwrap_or(Cell::Empty)
             })
         }
     }
@@ -297,9 +333,13 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
             let (tx_seen, tx_height) = tx
                 .map(|tx| {
                     (
-                        Cell::DateTime(tx.timestamp),
-                        tx.height
-                            .map(|h| Cell::Int(h as u64))
+                        tx.confirmation_time
+                            .as_ref()
+                            .map(|x| Cell::DateTime(x.timestamp))
+                            .unwrap_or(Cell::Empty),
+                        tx.confirmation_time
+                            .as_ref()
+                            .map(|x| Cell::Int(x.height as u64))
                             .unwrap_or(Cell::Empty),
                     )
                 })

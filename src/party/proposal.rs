@@ -170,7 +170,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .finish()
             .context("Failed to gather proposal outputs")?;
 
-        assert_eq!(txdetails.fees, 0);
+        assert_eq!(txdetails.fee, Some(0));
 
         let outputs = &psbt.global.unsigned_tx.output;
         let tx_inputs = psbt
@@ -248,7 +248,7 @@ mod test {
         let mut proposal = Proposal {
             oracle: "h00.ooo".into(),
             value: Amount::from_str("0.1 BTC").unwrap(),
-            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.win").unwrap(),
+            event_id: EventId::from_str("/random/2020-09-25T08:00:00/heads_tails.winner").unwrap(),
             inputs: vec![
                 OutPoint::new(Txid::from_slice(&[1u8; 32]).unwrap(), 0),
                 OutPoint::new(Txid::from_slice(&[2u8; 32]).unwrap(), 1),

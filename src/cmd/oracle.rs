@@ -1,4 +1,4 @@
-use crate::{bet_database::BetDatabase, cmd, item, reqwest, url, OracleInfo};
+use crate::{bet_database::BetDatabase, cmd, item, reqwest, OracleInfo, Url};
 use anyhow::anyhow;
 use olivia_core::{http::RootResponse, OracleId};
 use olivia_secp256k1::Secp256k1;
@@ -34,8 +34,8 @@ pub enum OracleOpt {
 pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
     match cmd {
         OracleOpt::Add { url, yes } => {
-            let url = url::Url::from_str(&url)
-                .or_else(|_| url::Url::from_str(&format!("https://{}", url)))?;
+            let url =
+                Url::from_str(&url).or_else(|_| Url::from_str(&format!("https://{}", url)))?;
             let oracle_id = url
                 .host()
                 .ok_or(anyhow!("orcale url missing host"))?
@@ -45,8 +45,7 @@ pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<Cmd
                 None => {
                     let root_response = reqwest::blocking::get(url)?
                         .error_for_status()?
-                        .json::<RootResponse<Secp256k1>>()
-                        ?;
+                        .json::<RootResponse<Secp256k1>>()?;
                     let oracle_info = OracleInfo {
                         id: oracle_id,
                         oracle_keys: root_response.public_keys,

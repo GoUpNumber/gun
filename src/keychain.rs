@@ -23,14 +23,14 @@ pub struct KeyPair {
 impl Keychain {
     pub fn new(seed: [u8; 64]) -> Self {
         let proposal_hmac = {
-            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-proposal");
+            let mut hmac = HmacEngine::<sha512::Hash>::new(b"gun-proposal");
             hmac.input(&seed[..]);
             let res = Hmac::from_engine(hmac);
             HmacEngine::<sha512::Hash>::new(&res[..])
         };
 
         let offer_hmac = {
-            let mut hmac = HmacEngine::<sha512::Hash>::new(b"bweet-offer");
+            let mut hmac = HmacEngine::<sha512::Hash>::new(b"gun-offer");
             hmac.input(&seed[..]);
             let res = Hmac::from_engine(hmac);
             HmacEngine::<sha512::Hash>::new(&res[..])

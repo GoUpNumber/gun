@@ -6,9 +6,7 @@ use bdk::{
 use serde_json::json;
 use std::{fs, path::PathBuf, process::Command};
 
-pub fn nigiri_fund(
-    wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>,
-) -> anyhow::Result<()> {
+pub fn nigiri_fund(wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>) -> anyhow::Result<()> {
     let new_address = wallet.get_address(AddressIndex::New)?.address;
     println!("funding: {}", new_address);
     crate::reqwest::blocking::Client::new()

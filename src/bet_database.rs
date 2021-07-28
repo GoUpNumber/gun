@@ -92,6 +92,8 @@ pub enum BetState {
     },
     Claimed {
         bet: Bet,
+        txid: Txid,
+        expecting: Option<Txid>,
     },
     Cancelling {
         cancel_txid: Txid,
@@ -145,7 +147,7 @@ impl BetState {
             Confirmed { .. } => "confirmed",
             Won { .. } => "won",
             Lost { .. } => "lost",
-            Claiming { .. } => "caliming",
+            Claiming { .. } => "claiming",
             Claimed { .. } => "claimed",
             Cancelled { .. } => "cancelled",
             Cancelling { .. } => "cancelling",

@@ -1,7 +1,20 @@
-use crate::{FeeSpec, bet_database::{BetId, BetState}};
+use crate::{
+    bet_database::{BetId, BetState},
+    FeeSpec,
+};
 use anyhow::anyhow;
-use bdk::{KeychainKind, SignOptions, TxBuilder, Wallet, bitcoin::{PrivateKey, Transaction, TxOut, Txid, util::psbt::{self, PartiallySignedTransaction as Psbt}}, blockchain::Blockchain, database::MemoryDatabase, signer::SignerOrdering, wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext}, wallet::AddressIndex};
-use miniscript::DescriptorTrait;
+use bdk::{
+    bitcoin::{
+        util::psbt::{self, PartiallySignedTransaction as Psbt},
+        PrivateKey, TxOut, Txid,
+    },
+    blockchain::Blockchain,
+    database::MemoryDatabase,
+    miniscript::DescriptorTrait,
+    signer::SignerOrdering,
+    wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
+    KeychainKind, SignOptions, TxBuilder, Wallet,
+};
 use std::sync::Arc;
 
 use super::Party;
@@ -10,8 +23,11 @@ impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
 where
     D: bdk::database::BatchDatabase,
 {
-
-    pub fn claim(&self, fee: FeeSpec, bump_claiming: bool) -> anyhow::Result<Option<Transaction>> {
+    pub fn claim(
+        &self,
+        fee: FeeSpec,
+        bump_claiming: bool,
+    ) -> anyhow::Result<Option<(Vec<BetId>, Psbt)>> {
         let wallet = self.wallet();
         let mut builder = wallet.build_tx();
         builder.manually_selected_only().enable_rbf();
@@ -33,11 +49,8 @@ where
             finalized,
             "since we have signed each input is must be finalized"
         );
-        let claim_tx = psbt.extract_tx();
 
-        self.set_bets_to_claiming(&claiming_bet_ids, claim_tx.txid())?;
-
-        Ok(Some(claim_tx))
+        Ok(Some((claiming_bet_ids, psbt)))
     }
 
     pub fn spend_won_bets<B: Blockchain, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
@@ -96,7 +109,7 @@ where
         let (mut psbt, _) = match builder.finish() {
             Ok(res) => res,
             Err(bdk::Error::NoUtxosSelected) => return Ok(None),
-            e => e?
+            e => e?,
         };
 
         for (_, bet, secret_key) in claimable_bets {

@@ -2,8 +2,8 @@ use bdk::{
     bitcoin::{self, PublicKey},
     descriptor::ExtendedDescriptor,
     keys::DescriptorSinglePub,
+    miniscript::{descriptor::Wsh, policy::concrete::Policy, Descriptor, DescriptorPublicKey},
 };
-use miniscript::{descriptor::Wsh, policy::concrete::Policy, Descriptor, DescriptorPublicKey};
 use olivia_secp256k1::fun::{g, marker::*, s, Point, Scalar, G};
 use std::convert::{Infallible, TryInto};
 

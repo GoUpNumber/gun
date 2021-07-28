@@ -9,7 +9,7 @@ use bdk::{
     Wallet,
 };
 use bet_database::BetState;
-use bweet::{
+use gun_wallet::{
     bet_database,
     bitcoin::Amount,
     keychain::Keychain,
@@ -31,20 +31,18 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
     );
     let db = bdk::database::MemoryDatabase::new();
     let esplora_url = "http://localhost:3000".to_string();
-    let esplora = EsploraBlockchain::new(&esplora_url, None);
+    let esplora = EsploraBlockchain::new(&esplora_url, None, 5);
     let wallet = Wallet::new(descriptor, None, Network::Regtest, db, esplora)
-        
         .context("Initializing wallet failed")?;
     wallet
         .sync(noop_progress(), None)
-        
         .context("syncing wallet failed")?;
 
     let bet_db = bet_database::BetDatabase::test_new();
 
     while wallet.get_balance()? < 100_000 {
         fund_wallet(&wallet)?;
-        tokio::time::sleep(Duration::from_millis(1_000));
+        std::thread::sleep(Duration::from_millis(1_000));
         wallet.sync(noop_progress(), None)?;
         println!("syncing done on party {} -- checking balance", id);
     }
@@ -56,6 +54,7 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
         AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
             base_url: esplora_url,
             concurrency: None,
+            stop_gap: 5,
         }),
     );
     Ok(party)
@@ -64,11 +63,11 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
 fn fund_wallet(wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>) -> anyhow::Result<()> {
     let new_address = wallet.get_address(AddressIndex::New)?.address;
     println!("funding: {}", new_address);
-    bweet::reqwest::Client::new()
+    gun_wallet::reqwest::blocking::Client::new()
         .post("http://localhost:3000/faucet")
         .json(&serde_json::json!({ "address": new_address }))
         .send()
-        ?;
+        .unwrap();
     Ok(())
 }
 
@@ -82,7 +81,7 @@ macro_rules! setup_test {
         let attest_keypair =
             olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
         let oracle_nonce_keypair = olivia_secp256k1::SCHNORR.new_keypair(nonce_secret_key);
-        let event_id = EventId::from_str("/test/red_blue.win").unwrap();
+        let event_id = EventId::from_str("/test/red_blue.winner").unwrap();
         let oracle_id = "non-existent-oracle.com".to_string();
         let oracle_info = OracleInfo {
             id: oracle_id.clone(),
@@ -144,7 +143,7 @@ macro_rules! wait_for_state {
     }};
 }
 
-#[tokio::test]
+#[test]
 pub fn test_happy_path() {
     let (
         party_1,
@@ -182,24 +181,23 @@ pub fn test_happy_path() {
                 },
                 FeeSpec::default(),
             )
-            
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
     let validated_offer = party_1
         .decrypt_and_validate_offer(p1_bet_id, encrypted_offer)
-        
         .unwrap();
 
-    party_1.take_offer(validated_offer).unwrap();
+    let tx = party_1.take_offer(validated_offer).unwrap();
+    party_1.wallet().broadcast(tx).unwrap();
 
     wait_for_state!(party_1, p1_bet_id, "confirmed");
     wait_for_state!(party_2, p2_bet_id, "confirmed");
 
     let (outcome, index, winner, winner_id, loser, loser_id) = match rand::random() {
-        false => ("red_win", 0, &party_1, p1_bet_id, party_2, p2_bet_id),
-        true => ("blue_win", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
+        false => ("red", 0, &party_1, p1_bet_id, party_2, p2_bet_id),
+        true => ("blue", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
     };
 
     let winner_initial_balance = winner.wallet().get_balance().unwrap();
@@ -218,26 +216,35 @@ pub fn test_happy_path() {
     winner
         .learn_outcome(winner_id, attestation.clone())
         .unwrap();
+    wait_for_state!(winner, winner_id, "won");
+
     loser.learn_outcome(loser_id, attestation).unwrap();
-
-    let winner_claim_tx = winner
-        .claim(FeeSpec::default(), false)
-        
-        .unwrap()
-        .expect("winner should return a tx here");
-
     assert!(
         loser.claim(FeeSpec::default(), false).unwrap().is_none(),
         "loser should not have claim tx"
     );
+    wait_for_state!(loser, loser_id, "lost");
+
+    let (bet_ids_claimed, winner_claim_psbt) = winner
+        .claim(FeeSpec::default(), false)
+        .unwrap()
+        .expect("winner should return a tx here");
+
+    let winner_claim_tx = winner_claim_psbt.extract_tx();
+    winner
+        .set_bets_to_claiming(&bet_ids_claimed, winner_claim_tx.txid())
+        .unwrap();
+
+    wait_for_state!(winner, winner_id, "claiming");
 
     winner.wallet().broadcast(winner_claim_tx).unwrap();
     winner.wallet().sync(noop_progress(), None).unwrap();
 
     assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
+    wait_for_state!(winner, winner_id, "claimed");
 }
 
-#[tokio::test]
+#[test]
 pub fn cancel_proposal() {
     let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
 
@@ -279,7 +286,6 @@ pub fn cancel_proposal() {
                 },
                 FeeSpec::default(),
             )
-            
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
@@ -291,7 +297,7 @@ pub fn cancel_proposal() {
     wait_for_state!(party_1, bet_id_overlap, "cancelled");
 }
 
-#[tokio::test]
+#[test]
 pub fn cancel_offer() {
     let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
 
@@ -321,7 +327,6 @@ pub fn cancel_offer() {
                 },
                 FeeSpec::default(),
             )
-            
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
@@ -330,7 +335,7 @@ pub fn cancel_offer() {
     wait_for_state!(party_2, p2_bet_id, "cancelled");
 }
 
-#[tokio::test]
+#[test]
 pub fn cancel_offer_after_offer_taken() {
     let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
 
@@ -360,7 +365,6 @@ pub fn cancel_offer_after_offer_taken() {
                 },
                 FeeSpec::default(),
             )
-            
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
@@ -381,14 +385,12 @@ pub fn cancel_offer_after_offer_taken() {
                 },
                 FeeSpec::default(),
             )
-            
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
     let second_validated_offer = party_1
         .decrypt_and_validate_offer(p1_bet_id, second_encrypted_offer)
-        
         .unwrap();
 
     party_1.take_offer(second_validated_offer).unwrap();
@@ -396,7 +398,6 @@ pub fn cancel_offer_after_offer_taken() {
     wait_for_state!(party_1, p1_bet_id, "confirmed");
     party_2
         .cancel(&[first_p2_bet_id, second_p2_bet_id])
-        
         .unwrap();
     wait_for_state!(party_2, second_p2_bet_id, "confirmed");
     wait_for_state!(party_2, first_p2_bet_id, "cancelled");

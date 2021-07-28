@@ -1,24 +1,26 @@
 #![feature(backtrace)]
 
-use bweet::cmd::{self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, TransactionOpt, UtxoOpt};
+use gun_wallet::cmd::{self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, TransactionOpt, UtxoOpt};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug, Clone)]
-/// A CLI wallet for maximum mischief
+/// A CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
 pub struct Opt {
-    #[structopt(parse(from_os_str), short("d"), help = "The wallet directory")]
-    bweet_dir: Option<PathBuf>,
+
+    #[structopt(parse(from_os_str), short("d"), env = "GUN_DIR" )]
+    /// The wallet data directory.
+    gun_dir: Option<PathBuf>,
     #[structopt(subcommand)]
     command: Commands,
-    #[structopt(short)]
+    #[structopt(short, long)]
     /// Sync the wallet before running the command
     sync: bool,
-    #[structopt(short)]
+    #[structopt(short, long)]
     /// Return output in JSON format
     json: bool,
     /// Return outupt in simplified UNIX table (tabs and newlines)
-    #[structopt(short)]
+    #[structopt(short, long)]
     tabs: bool,
 }
 
@@ -44,15 +46,12 @@ fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
 
     let wallet_dir = opt
-        .bweet_dir
-        .unwrap_or_else(|| match std::env::var("BWEET_DIR") {
-            Ok(bweet_dir) => PathBuf::from(bweet_dir),
-            Err(_) => {
-                let mut default_dir = PathBuf::new();
-                default_dir.push(&dirs::home_dir().unwrap());
-                default_dir.push(".bweet");
-                default_dir
-            }
+        .gun_dir
+        .unwrap_or_else(|| {
+            let mut default_dir = PathBuf::new();
+            default_dir.push(&dirs::home_dir().unwrap());
+            default_dir.push(".gun");
+            default_dir
         });
 
     if opt.sync {

@@ -29,16 +29,6 @@ pub struct SignedInput {
     pub witness: Vec<Vec<u8>>,
 }
 
-// impl SignedInput {
-//     fn to_txin(&self) -> TxIn {
-//         TxIn {
-//             previous_output: self.outpoint,
-//             witness: self.witness.clone(),
-//             ..Default::default()
-//         }
-//     }
-// }
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Payload {
     pub inputs: Vec<SignedInput>,
@@ -173,9 +163,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             }
         }
 
-        fee_spec
-            .apply_to_builder(self.wallet.client(), &mut builder)
-            ?;
+        fee_spec.apply_to_builder(self.wallet.client(), &mut builder)?;
 
         args.apply_args(self.bet_db(), &mut builder)?;
 
@@ -183,7 +171,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         for proposal_input in &proposal.inputs {
             let psbt_input = self
                 .outpoint_to_psbt_input(*proposal_input)
-                
                 .context("Failed to find proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             builder.add_foreign_utxo(
