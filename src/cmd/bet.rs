@@ -8,7 +8,10 @@ use crate::{
 use anyhow::*;
 use bdk::{blockchain::EsploraBlockchain, database::BatchDatabase};
 use cmd::CmdOutput;
-use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
+use olivia_core::{
+    chrono::{NaiveDateTime, Utc},
+    Descriptor, Outcome, OutcomeError,
+};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -282,6 +285,17 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
 fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
     let mut rows = vec![];
 
+    fn format_dt(dt: NaiveDateTime) -> String {
+        use olivia_core::chrono;
+        let now = chrono::Utc::now().naive_utc();
+        let diff = dt - now;
+        if diff > chrono::Duration::zero() {
+            format!("{}({}h)", dt, diff.num_hours())
+        } else {
+            dt.to_string()
+        }
+    }
+
     for (bet_id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
         match bet_state {
@@ -301,7 +315,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                         .oracle_event
                         .event
                         .expected_outcome_time
-                        .map(|d| format!("{}", d))
+                        .map(format_dt)
                         .unwrap_or("-".into()),
                 ),
                 Cell::Amount(local_proposal.proposal.value),
@@ -333,7 +347,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                     bet.oracle_event
                         .event
                         .expected_outcome_time
-                        .map(|d| format!("{}", d))
+                        .map(format_dt)
                         .unwrap_or("-".into()),
                 ),
                 Cell::Amount(bet.local_value),
@@ -354,10 +368,10 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
         vec![
             "id",
             "state",
-            "expected outcome-time",
+            "outcome-time",
             "risk",
             "reward",
-            "I bet on",
+            "I bet",
             "event-url",
         ],
         rows,

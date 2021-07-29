@@ -7,8 +7,7 @@ use structopt::StructOpt;
 #[derive(StructOpt, Debug, Clone)]
 /// A CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
 pub struct Opt {
-
-    #[structopt(parse(from_os_str), short("d"), env = "GUN_DIR" )]
+    #[structopt(parse(from_os_str), short("d"), env = "GUN_DIR")]
     /// The wallet data directory.
     gun_dir: Option<PathBuf>,
     #[structopt(subcommand)]
@@ -45,14 +44,12 @@ pub enum Commands {
 fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
 
-    let wallet_dir = opt
-        .gun_dir
-        .unwrap_or_else(|| {
-            let mut default_dir = PathBuf::new();
-            default_dir.push(&dirs::home_dir().unwrap());
-            default_dir.push(".gun");
-            default_dir
-        });
+    let wallet_dir = opt.gun_dir.unwrap_or_else(|| {
+        let mut default_dir = PathBuf::new();
+        default_dir.push(&dirs::home_dir().unwrap());
+        default_dir.push(".gun");
+        default_dir
+    });
 
     if opt.sync {
         let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;

@@ -216,12 +216,11 @@ impl From<String> for Cell {
 pub fn format_amount(amount: Amount) -> String {
     if amount == Amount::ZERO {
         "0".to_string()
-    }
-    else {
+    } else {
         let mut string = amount.to_string();
         string.insert(string.len() - 7, ' ');
         string.insert(string.len() - 11, ' ');
-        string
+        string.trim_end_matches(" BTC").to_string()
     }
 }
 
@@ -413,7 +412,11 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let output_value: u64 = psbt.global.unsigned_tx.output.iter().map(|x| x.value).sum();
     let fee = input_value - output_value;
     let feerate = fee as f32 / (psbt.clone().extract_tx().get_weight() as f32 / 4.0);
-    table.add_row(Row::new(vec!["fee", &format!("{} (rate)", &feerate), &format_amount(Amount::from_sat(fee))]));
+    table.add_row(Row::new(vec![
+        "fee",
+        &format!("{} (rate)", &feerate),
+        &format_amount(Amount::from_sat(fee)),
+    ]));
     table.render()
 }
 

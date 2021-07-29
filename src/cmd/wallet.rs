@@ -30,12 +30,44 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
             )
         });
 
-    let wallet_balance = Amount::from_sat(party.wallet().get_balance()?);
+    let tx_list = party
+        .wallet()
+        .list_transactions(false)?
+        .into_iter()
+        .map(|tx_details| (tx_details.txid, tx_details.confirmation_time.is_some()))
+        .collect::<Vec<_>>();
+    let unspent = party.wallet().list_unspent()?;
+
+    let (confirmed, unconfirmed) = unspent.into_iter().fold(
+        (Amount::ZERO, Amount::ZERO),
+        |(confirmed, unconfirmed), local_utxo| {
+            let is_confirmed = tx_list
+                .iter()
+                .find_map(|(txid, is_confirmed)| {
+                    if *txid == local_utxo.outpoint.txid {
+                        Some(*is_confirmed)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(false);
+            let value = Amount::from_sat(local_utxo.txout.value);
+            if is_confirmed {
+                (confirmed + value, unconfirmed)
+            } else {
+                match local_utxo.keychain {
+                    KeychainKind::External => (confirmed, unconfirmed + value),
+                    KeychainKind::Internal => (confirmed + value, unconfirmed),
+                }
+            }
+        },
+    );
 
     Ok(item! {
-        "main" => Cell::Amount(wallet_balance),
+        "confirmed" => Cell::Amount(confirmed),
+        "unconfirmed" => Cell::Amount(unconfirmed),
         "unclaimed" => Cell::Amount(unclaimed),
-        "total" => Cell::Amount(wallet_balance + unclaimed),
+        "total" => Cell::Amount(confirmed + unconfirmed + unclaimed),
         "locked" => Cell::Amount(in_bet),
     })
 }
@@ -145,10 +177,10 @@ fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script,
 
 #[derive(StructOpt, Debug, Clone)]
 pub struct SendOpt {
-    /// The address to send the coins to
-    to: Address,
     /// The amount to send with denomination e.g. 0.1BTC
     value: ValueChoice,
+    /// The address to send the coins to
+    to: Address,
     /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
     /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
     #[structopt(default_value)]
@@ -243,9 +275,17 @@ pub fn run_transaction_cmd(wallet_dir: &PathBuf, opt: TransactionOpt) -> anyhow:
         List => {
             let mut txns = wallet.list_transactions(false)?;
 
-            txns.sort_unstable_by_key(|x| std::cmp::Reverse(x.confirmation_time.as_ref().map(|x| x.timestamp).unwrap_or(0)));
+            txns.sort_unstable_by_key(|x| {
+                std::cmp::Reverse(
+                    x.confirmation_time
+                        .as_ref()
+                        .map(|x| x.timestamp)
+                        .unwrap_or(0),
+                )
+            });
 
-            let rows: Vec<Vec<Cell>> = txns.into_iter()
+            let rows: Vec<Vec<Cell>> = txns
+                .into_iter()
                 .map(|tx| {
                     vec![
                         Cell::String(tx.txid.to_string()),
