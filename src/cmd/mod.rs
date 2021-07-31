@@ -1,4 +1,3 @@
-mod fund_wallet;
 mod init;
 mod oracle;
 mod wallet;
@@ -158,12 +157,21 @@ pub fn load_wallet(
             .open_tree("wallet")
             .context("opening wallet tree")?;
 
-        let descriptor = match config.kind {
-            crate::config::WalletKind::P2wpkh => bdk::template::Bip84(
-                keychain.main_wallet_xprv(config.network),
-                bdk::KeychainKind::External,
-            ),
+        let (external_descriptor, internal_descriptor) = match config.kind {
+            crate::config::WalletKind::P2wpkh => {
+                (
+                    bdk::template::Bip84(
+                        keychain.main_wallet_xprv(config.network),
+                        bdk::KeychainKind::External,
+                    ),
+                    bdk::template::Bip84(
+                        keychain.main_wallet_xprv(config.network),
+                        bdk::KeychainKind::Internal,
+                    )
+                )
+            },
         };
+
 
         let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
             AnyBlockchain::Esplora(esplora) => esplora,
@@ -171,7 +179,7 @@ pub fn load_wallet(
             _ => return Err(anyhow!("A the moment only esplora is supported")),
         };
 
-        Wallet::new(descriptor, None, config.network, wallet_db, esplora)
+        Wallet::new(external_descriptor, Some(internal_descriptor), config.network, wallet_db, esplora)
             .context("Initializing wallet failed")?
     };
 

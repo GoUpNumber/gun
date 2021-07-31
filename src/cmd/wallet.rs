@@ -1,16 +1,12 @@
 use super::*;
 use crate::{bet_database::BetState, cmd, item};
-use bdk::{
-    bitcoin::{Address, OutPoint, Script, Txid},
-    database::Database,
-    wallet::AddressIndex,
-    KeychainKind, LocalUtxo, SignOptions,
-};
+use bdk::{KeychainKind, LocalUtxo, SignOptions, bitcoin::{Address, OutPoint, Script, Txid}, database::Database, wallet::AddressIndex};
 use std::collections::HashMap;
 use structopt::StructOpt;
 
 pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
     let party = load_party(&wallet_dir)?;
+
     let (in_bet, unclaimed) = party
         .bet_db()
         .list_entities_print_error::<BetState>()
@@ -18,7 +14,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
             BetState::Confirmed { bet, .. } | BetState::Unconfirmed { bet, .. } => {
                 Some((bet.local_value, Amount::ZERO))
             }
-            BetState::Won { bet, .. } | BetState::Claiming { bet, .. } => {
+            BetState::Won { bet, .. } => {
                 Some((Amount::ZERO, bet.joint_output_value))
             }
             _ => None,
@@ -349,18 +345,24 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
                 .list_unspent()?
                 .into_iter()
                 .map(|utxo| {
+                    let tx = wallet.query_db(|db| db.get_tx(&utxo.outpoint.txid, false)).unwrap_or(None);
                     vec![
                         Cell::String(utxo.outpoint.to_string()),
                         Address::from_script(&utxo.txout.script_pubkey, wallet.network())
                             .map(|address| Cell::String(address.to_string()))
                             .unwrap_or(Cell::Empty),
                         Cell::Amount(Amount::from_sat(utxo.txout.value)),
+                        Cell::String(match utxo.keychain {
+                            KeychainKind::Internal => "internal",
+                            KeychainKind::External => "external",
+                        }.into()),
+                        tx.map(|tx| Cell::String(tx.confirmation_time.is_some().to_string())).unwrap_or(Cell::Empty)
                     ]
                 })
                 .collect();
 
             // TODO: list won bet utxos
-            Ok(CmdOutput::table(vec!["outpoint", "address", "value"], rows))
+            Ok(CmdOutput::table(vec!["outpoint", "address", "value", "keychain", "confirmed"], rows))
         }
         UtxoOpt::Show { outpoint } => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;

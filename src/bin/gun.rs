@@ -13,7 +13,7 @@ pub struct Opt {
     #[structopt(subcommand)]
     command: Commands,
     #[structopt(short, long)]
-    /// Sync the wallet before running the command
+    /// Tell the wallet to sync itself.
     sync: bool,
     #[structopt(short, long)]
     /// Return output in JSON format
@@ -43,6 +43,7 @@ pub enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
+    let sync = opt.sync;
 
     let wallet_dir = opt.gun_dir.unwrap_or_else(|| {
         let mut default_dir = PathBuf::new();
@@ -51,14 +52,14 @@ fn main() -> anyhow::Result<()> {
         default_dir
     });
 
-    if opt.sync {
+    if sync && !matches!(opt.command, Commands::Bet(_)) {
         let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;
         eprintln!("syncing wallet with {:?}", config.blockchain);
         wallet.sync(bdk::blockchain::noop_progress(), None)?;
     }
 
     let res = match opt.command {
-        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt),
+        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir,opt, sync),
         Commands::Balance => cmd::run_balance(wallet_dir),
         Commands::Address(opt) => cmd::get_address(&wallet_dir, opt),
         Commands::Send(opt) => cmd::run_send(&wallet_dir, opt),

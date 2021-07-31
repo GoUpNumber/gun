@@ -42,6 +42,12 @@ pub enum BetOpt {
         #[structopt(long, short)]
         yes: bool,
     },
+    // Msg {
+    //     /// Proposal to make the message to
+    //     proposal: VersionedProposal,
+    //     ///
+    //     message: String
+    // },
     /// Take on offer made to your proposal
     Take {
         /// The bet id you are taking the bet from
@@ -69,11 +75,7 @@ pub enum BetOpt {
         yes: bool,
     },
     /// List bets
-    List {
-        #[structopt(long, short)]
-        /// Show list don't check the blockchain to update status
-        no_update: bool,
-    },
+    List,
     Show {
         bet_id: BetId,
         /// Show the proposal string
@@ -93,7 +95,13 @@ pub enum BetOpt {
     Oracle(crate::cmd::OracleOpt),
 }
 
-pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::CmdOutput> {
+pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt, sync: bool) -> anyhow::Result<cmd::CmdOutput> {
+
+    if sync {
+        let party = cmd::load_party(wallet_dir)?;
+        poke_bets(&party)
+    }
+
     match cmd {
         BetOpt::Propose { args, event_url } => {
             let party = cmd::load_party(wallet_dir)?;
@@ -267,11 +275,7 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
                 Ok(CmdOutput::Json(serde_json::to_value(&bet).unwrap()))
             }
         }
-        BetOpt::List { no_update } => {
-            if !no_update {
-                let party = cmd::load_party(wallet_dir)?;
-                poke_bets(&party)
-            }
+        BetOpt::List  => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
             Ok(list_bets(&bet_db))
         }
@@ -285,14 +289,18 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
 fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
     let mut rows = vec![];
 
-    fn format_dt(dt: NaiveDateTime) -> String {
+    fn format_in(dt: NaiveDateTime) -> String {
         use olivia_core::chrono;
         let now = chrono::Utc::now().naive_utc();
         let diff = dt - now;
-        if diff > chrono::Duration::zero() {
-            format!("{}({}h)", dt, diff.num_hours())
-        } else {
-            dt.to_string()
+        if diff.abs() < chrono::Duration::hours(1) {
+            format!("{}m", diff.num_minutes())
+        }
+        else if diff.abs() < chrono::Duration::days(1) {
+            format!("{}h", diff.num_hours())
+        }
+        else {
+            format!("{}d", diff.num_days())
         }
     }
 
@@ -315,8 +323,14 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                         .oracle_event
                         .event
                         .expected_outcome_time
-                        .map(format_dt)
+                        .map(|x| format!("{}", x))
                         .unwrap_or("-".into()),
+                ),
+                Cell::String(
+                    local_proposal
+                        .oracle_event
+                        .event
+                        .expected_outcome_time.map(format_in).unwrap_or("-".into())
                 ),
                 Cell::Amount(local_proposal.proposal.value),
                 Cell::Empty,
@@ -347,8 +361,15 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                     bet.oracle_event
                         .event
                         .expected_outcome_time
-                        .map(format_dt)
+                        .map(|x| format!("{}", x))
                         .unwrap_or("-".into()),
+                ),
+                Cell::String(
+                     bet.oracle_event
+                        .event
+                        .expected_outcome_time
+                        .map(format_in)
+                        .unwrap_or("-".into())
                 ),
                 Cell::Amount(bet.local_value),
                 Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
@@ -369,6 +390,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
             "id",
             "state",
             "outcome-time",
+            "in",
             "risk",
             "reward",
             "I bet",
