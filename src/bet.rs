@@ -1,11 +1,13 @@
 use crate::party::JointOutput;
-use bdk::bitcoin::{self, Amount, OutPoint, Transaction};
+use bdk::bitcoin::{
+    self, util::psbt::PartiallySignedTransaction as Psbt, Amount, OutPoint, Transaction,
+};
 use olivia_core::{OracleEvent, OracleId};
 use olivia_secp256k1::Secp256k1;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bet {
-    pub tx: Transaction,
+    pub psbt: Psbt,
     pub my_input_indexes: Vec<usize>,
     pub vout: u32,
     pub joint_output: JointOutput,
@@ -67,7 +69,7 @@ impl Bet {
 
     pub fn outpoint(&self) -> OutPoint {
         OutPoint {
-            txid: self.tx.txid(),
+            txid: self.tx().txid(),
             vout: self.vout,
         }
     }
@@ -75,7 +77,11 @@ impl Bet {
     pub fn my_inputs(&self) -> Vec<OutPoint> {
         self.my_input_indexes
             .iter()
-            .map(|i| self.tx.input[*i as usize].previous_output.clone())
+            .map(|i| self.tx().input[*i as usize].previous_output.clone())
             .collect()
+    }
+
+    pub fn tx(&self) -> Transaction {
+        self.psbt.clone().extract_tx()
     }
 }

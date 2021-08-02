@@ -2,7 +2,7 @@ use anyhow::Context;
 use bdk::{
     bitcoin::Network,
     blockchain::{
-        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig,
+        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Broadcast,
         EsploraBlockchain,
     },
     database::BatchDatabase,
@@ -204,8 +204,12 @@ pub fn test_happy_path() {
     let validated_offer = party_1
         .decrypt_and_validate_offer(p1_bet_id, encrypted_offer)
         .unwrap();
-
-    let _ = party_1.take_offer(validated_offer).unwrap();
+    Broadcast::broadcast(
+        party_1.wallet().client(),
+        validated_offer.bet.psbt.clone().extract_tx(),
+    )
+    .unwrap();
+    party_1.set_offer_taken(validated_offer).unwrap();
     wait_for_state!(party_1, p1_bet_id, "unconfirmed");
     test_client.generate(1, None);
 
@@ -314,8 +318,15 @@ pub fn cancel_proposal() {
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
-    party_1.cancel(&[p1_bet_id], FeeSpec::default()).unwrap();
-
+    let psbt = party_1
+        .generate_cancel_tx(&[p1_bet_id], FeeSpec::default())
+        .unwrap()
+        .expect("should be able to cancel");
+    let tx = psbt.extract_tx();
+    party_1
+        .set_bets_to_cancelling(&[p1_bet_id], tx.txid())
+        .unwrap();
+    Broadcast::broadcast(party_1.wallet().client(), tx).unwrap();
     wait_for_state!(party_1, p1_bet_id, "cancelling");
     test_client.generate(1, None);
     wait_for_state!(party_1, bet_id_overlap, "cancelled");
@@ -358,7 +369,15 @@ pub fn test_cancel_offer() {
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
-    party_2.cancel(&[p2_bet_id], FeeSpec::default()).unwrap();
+    let psbt = party_2
+        .generate_cancel_tx(&[p2_bet_id], FeeSpec::default())
+        .unwrap()
+        .expect("should be able to cancel");
+    let tx = psbt.extract_tx();
+    party_2
+        .set_bets_to_cancelling(&[p2_bet_id], tx.txid())
+        .unwrap();
+    Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, p2_bet_id, "cancelling");
     test_client.generate(1, None);
@@ -424,16 +443,22 @@ pub fn cancel_offer_after_offer_taken() {
         .decrypt_and_validate_offer(p1_bet_id, second_encrypted_offer)
         .unwrap();
 
-    party_1.take_offer(second_validated_offer).unwrap();
+    Broadcast::broadcast(party_1.wallet().client(), second_validated_offer.tx()).unwrap();
+    party_1.set_offer_taken(second_validated_offer).unwrap();
 
     wait_for_state!(party_1, p1_bet_id, "unconfirmed");
-    party_2
-        .cancel(
+    let psbt = party_2
+        .generate_cancel_tx(
             &[first_p2_bet_id, second_p2_bet_id],
             FeeSpec::Rate(FeeRate::from_sat_per_vb(5.0)),
         )
         .unwrap()
+        .expect("should be able to cancel");
+    let tx = psbt.extract_tx();
+    party_2
+        .set_bets_to_cancelling(&[first_p2_bet_id, second_p2_bet_id], tx.txid())
         .unwrap();
+    Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, second_p2_bet_id, "cancelling");
     wait_for_state!(party_2, first_p2_bet_id, "cancelling");

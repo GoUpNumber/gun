@@ -250,10 +250,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             })
             .collect();
 
-        let tx = psbt.extract_tx();
         let mut change = None;
 
-        for output in &tx.output {
+        for output in &psbt.global.unsigned_tx.output {
             if self.wallet.is_mine(&output.script_pubkey)? {
                 change = Some(Change::new(output.value, output.script_pubkey.clone()));
             }
@@ -267,7 +266,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             value: local_value,
         };
         let bet = Bet {
-            tx,
+            psbt,
             my_input_indexes,
             vout: vout as u32,
             joint_output: joint_output.clone(),

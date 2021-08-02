@@ -90,7 +90,7 @@ where
                     value: bet.joint_output_value.as_sat(),
                     script_pubkey: bet.joint_output.descriptor().script_pubkey(),
                 }),
-                non_witness_utxo: Some(bet.tx.clone()),
+                non_witness_utxo: Some(bet.tx()),
                 witness_script: Some(bet.joint_output.descriptor().script_code()),
                 ..Default::default()
             };

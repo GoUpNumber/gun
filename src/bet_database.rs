@@ -75,7 +75,6 @@ pub enum BetState {
     },
     Unconfirmed {
         bet: Bet,
-        funding_transaction: Transaction,
     },
     Confirmed {
         bet: Bet,
@@ -132,7 +131,7 @@ impl BetOrProp {
     pub fn inputs(&self) -> Vec<OutPoint> {
         match self {
             BetOrProp::Bet(bet) => bet
-                .tx
+                .tx()
                 .input
                 .iter()
                 .map(|input| input.previous_output)
@@ -171,7 +170,7 @@ impl BetState {
             Offered { bet, .. } | Unconfirmed { bet, .. } => bet
                 .my_input_indexes
                 .iter()
-                .map(|i| bet.tx.input[*i].previous_output)
+                .map(|i| bet.tx().input[*i].previous_output)
                 .collect(),
             _ => vec![],
         }

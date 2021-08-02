@@ -55,6 +55,12 @@ pub enum BetOpt {
         id: BetId,
         /// The offer string (a base20248 string)
         encrypted_offer: EncryptedOffer,
+        /// Take the offer and broadacast tx without prompting.
+        #[structopt(short, long)]
+        yes: bool,
+        #[structopt(short, long)]
+        /// Print the bet transaction as hex instead of broadcasting it.
+        print_tx: bool,
     },
     /// Claim your winnings
     ///
@@ -92,6 +98,13 @@ pub enum BetOpt {
         /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
         /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
         fee: FeeSpec,
+        /// Don't prompt for answers just say yes
+        #[structopt(short, long)]
+        yes: bool,
+        /// Print the cancel transaction hex but don't broadcast it (this assumes you will broadcast
+        /// the transaction yourself).
+        #[structopt(short, long)]
+        print_tx: bool,
     },
     /// Delete all memory of the bet.
     ///
@@ -210,14 +223,24 @@ pub fn run_bet_cmd(
         BetOpt::Take {
             id,
             encrypted_offer,
+            yes,
+            print_tx,
         } => {
             let party = cmd::load_party(wallet_dir)?;
             let validated_offer = party.decrypt_and_validate_offer(id, encrypted_offer)?;
 
-            if cmd::read_answer(validated_offer.bet.prompt()) {
-                let tx = party.take_offer(validated_offer)?;
-
-                Ok(item! { "txid" => Cell::String(tx.txid().to_string()) })
+            if yes || cmd::read_answer(validated_offer.bet.prompt()) {
+                let (output, txid) = cmd::decide_to_broadcast(
+                    party.wallet().network(),
+                    party.wallet().client(),
+                    validated_offer.bet.psbt.clone(),
+                    yes,
+                    print_tx,
+                )?;
+                if let Some(_) = txid {
+                    party.set_offer_taken(validated_offer)?;
+                }
+                Ok(output)
             } else {
                 Ok(CmdOutput::None)
             }
@@ -247,13 +270,32 @@ pub fn run_bet_cmd(
                 None => Ok(CmdOutput::None),
             }
         }
-        BetOpt::Cancel { bet_ids, fee } => {
+        BetOpt::Cancel {
+            bet_ids,
+            fee,
+            yes,
+            print_tx,
+        } => {
             let party = cmd::load_party(wallet_dir)?;
-            let tx = party.cancel(&bet_ids, fee)?;
-            match tx {
-                Some(tx) => Ok(item! { "txid" => Cell::String(tx.txid().to_string())}),
-                None => Ok(CmdOutput::None),
-            }
+            Ok(match party.generate_cancel_tx(&bet_ids, fee)? {
+                Some(psbt) => {
+                    let (output, txid) = cmd::decide_to_broadcast(
+                        party.wallet().network(),
+                        party.wallet().client(),
+                        psbt,
+                        yes,
+                        print_tx,
+                    )?;
+                    if let Some(txid) = txid {
+                        party.set_bets_to_cancelling(&bet_ids[..], txid)?;
+                    }
+                    output
+                }
+                None => {
+                    eprintln!("no bets needed cancelling");
+                    CmdOutput::None
+                }
+            })
         }
         BetOpt::Forget { bet_ids } => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
@@ -299,7 +341,7 @@ pub fn run_bet_cmd(
                         "oracle" => Cell::string(&bet.oracle_id),
                         "event-id" => Cell::string(&bet.oracle_event.event.id),
                         "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
-                        "txid" => Cell::string(bet.tx.txid()),
+                        "outpoint" => Cell::string(bet.outpoint()),
                     };
                     if let BetState::Offered {
                         encrypted_offer, ..

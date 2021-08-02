@@ -79,7 +79,7 @@ where
                 }
             }
             BetState::Offered { bet, .. } => {
-                let txid = bet.tx.txid();
+                let txid = bet.tx().txid();
                 if let Some(height) =
                     self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
                 {
@@ -89,7 +89,7 @@ where
                 }
 
                 let inputs_to_check_for_cancellation = bet
-                    .tx
+                    .tx()
                     .input
                     .iter()
                     .map(|x| x.previous_output)
@@ -107,11 +107,8 @@ where
                     };
                 }
             }
-            BetState::Unconfirmed {
-                funding_transaction,
-                bet,
-            } => {
-                let txid = funding_transaction.txid();
+            BetState::Unconfirmed { bet } => {
+                let txid = bet.tx().txid();
 
                 if let Some(height) =
                     self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
@@ -122,7 +119,7 @@ where
                     self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
                 } else {
                     let inputs_to_check_for_cancellation = bet
-                        .tx
+                        .tx()
                         .input
                         .iter()
                         .map(|x| x.previous_output)

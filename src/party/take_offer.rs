@@ -5,7 +5,10 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, Amount, Transaction},
+    bitcoin::{
+        util::psbt::{self, PartiallySignedTransaction as Psbt},
+        Amount, Transaction,
+    },
     database::BatchDatabase,
     miniscript::DescriptorTrait,
     wallet::tx_builder::TxOrdering,
@@ -26,8 +29,12 @@ pub struct DecryptedOffer {
 pub struct ValidatedOffer {
     pub bet_id: BetId,
     pub bet: Bet,
-    pub tx: Transaction,
-    pub feerate: f32,
+}
+
+impl ValidatedOffer {
+    pub fn tx(&self) -> Transaction {
+        self.bet.psbt.clone().extract_tx()
+    }
 }
 
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
@@ -173,8 +180,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             return Err(anyhow!("Transaction is incomplete after signing it"));
         }
 
-        let tx = psbt.extract_tx();
-        let vout = tx
+        let vout = psbt
+            .global
+            .unsigned_tx
             .output
             .iter()
             .enumerate()
@@ -191,7 +199,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .inputs
             .iter()
             .map(|input| {
-                tx.input
+                psbt.global
+                    .unsigned_tx
+                    .input
                     .iter()
                     .enumerate()
                     .find(|(_, txin)| txin.previous_output == *input)
@@ -199,8 +209,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
                     .0
             })
             .collect();
+
         let bet = Bet {
-            tx: tx.clone(),
+            psbt,
             my_input_indexes,
             vout,
             oracle_id: oracle_info.id.clone(),
@@ -211,33 +222,19 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             i_chose_right: !offer.choose_right,
         };
 
-        let feerate = absolute_fee.as_sat() as f32 / (tx.get_weight() as f32 / 4.0);
-        Ok(ValidatedOffer {
-            bet_id,
-            bet,
-            tx,
-            feerate,
-        })
+        Ok(ValidatedOffer { bet_id, bet })
     }
 
-    pub fn take_offer(
+    pub fn set_offer_taken(
         &self,
-        ValidatedOffer {
-            bet_id, bet, tx, ..
-        }: ValidatedOffer,
-    ) -> anyhow::Result<Transaction> {
-        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), tx.clone())
-            .context("Broadcasting bet tx")?;
-
+        ValidatedOffer { bet_id, bet, .. }: ValidatedOffer,
+    ) -> anyhow::Result<Psbt> {
         self.bet_db
             .update_bets(&[bet_id], |bet_state, _, _| match bet_state {
-                BetState::Proposed { .. } => Ok(BetState::Unconfirmed {
-                    bet: bet.clone(),
-                    funding_transaction: tx.clone(),
-                }),
+                BetState::Proposed { .. } => Ok(BetState::Unconfirmed { bet: bet.clone() }),
                 _ => Ok(bet_state),
             })?;
 
-        Ok(tx)
+        Ok(bet.psbt)
     }
 }

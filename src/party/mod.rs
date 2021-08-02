@@ -22,7 +22,10 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::psbt, OutPoint, Transaction, Txid},
+    bitcoin::{
+        util::psbt::{self, PartiallySignedTransaction as Psbt},
+        OutPoint, Txid,
+    },
     blockchain::{AnyBlockchain, AnyBlockchainConfig, Blockchain, ConfigurableBlockchain},
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
@@ -161,11 +164,11 @@ where
         Ok(())
     }
 
-    pub fn cancel(
+    pub fn generate_cancel_tx(
         &self,
         bet_ids: &[BetId],
         feespec: FeeSpec,
-    ) -> anyhow::Result<Option<Transaction>> {
+    ) -> anyhow::Result<Option<Psbt>> {
         self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
         let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
 
@@ -186,7 +189,7 @@ where
                     }
                 }
                 BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
-                    let tx = &bet.tx;
+                    let tx = bet.tx();
                     let inputs = bet
                         .my_input_indexes
                         .iter()
@@ -254,12 +257,14 @@ where
             },
         )?;
         assert!(finalized, "we should have signed all inputs");
-        let cancel_tx = psbt.extract_tx();
-        let cancel_txid = cancel_tx.txid();
+        Ok(Some(psbt))
+    }
 
-        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
-            .context("broadcasting cancel transaction")?;
-
+    pub fn set_bets_to_cancelling(
+        &self,
+        bet_ids: &[BetId],
+        cancel_txid: Txid,
+    ) -> anyhow::Result<()> {
         self.bet_db()
             .update_bets(bet_ids, |bet_state, bet_id, _| match bet_state {
                 BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
@@ -278,8 +283,7 @@ where
                     bet_state.name()
                 )),
             })?;
-
-        Ok(Some(cancel_tx))
+        Ok(())
     }
 
     pub fn is_confirmed(
