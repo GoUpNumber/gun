@@ -69,12 +69,13 @@ pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<Cmd
                 let oracle_keys = oracle_info.oracle_keys;
                 rows.push(vec![
                     Cell::String(oracle_id),
-                    Cell::String(oracle_keys.attestation_key.to_string()),
-                    Cell::String(oracle_keys.announcement_key.to_string()),
+                    Cell::string(oracle_keys.announcement),
+                    Cell::string(oracle_keys.olivia_v1.is_some()),
+                    Cell::string(oracle_keys.ecdsa_v1.is_some()),
                 ]);
             }
             Ok(CmdOutput::table(
-                vec!["id", "attestation-key", "announcement-key"],
+                vec!["id", "attestation-key", "olivia-v1", "ecdsa-v1"],
                 rows,
             ))
         }
@@ -95,8 +96,9 @@ pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<Cmd
 
             Ok(item! {
                 "id" => Cell::string(oracle_id),
-                "attestation-key" => Cell::string(oracle_keys.attestation_key),
-                "announcement-key" => Cell::string(oracle_keys.announcement_key)
+                "olivia-v1-key" => oracle_keys.olivia_v1.map(Cell::string).unwrap_or(Cell::Empty),
+                "ecdsa-v1-key" => oracle_keys.ecdsa_v1.map(Cell::string).unwrap_or(Cell::Empty),
+                "announcement" => Cell::string(oracle_keys.announcement),
             })
         }
     }

@@ -81,9 +81,9 @@ pub enum BetOpt {
     List,
     Show {
         bet_id: BetId,
-        /// Show the proposal string
+        /// Show the raw entry in the database
         #[structopt(long, short)]
-        proposal: bool,
+        raw: bool,
     },
     /// Cancel a bet
     Cancel {
@@ -267,22 +267,51 @@ pub fn run_bet_cmd(
                 removed.into_iter().map(|x| Cell::string(x)).collect(),
             ))
         }
-        BetOpt::Show { bet_id, proposal } => {
+        BetOpt::Show { bet_id, raw } => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
-            let bet = bet_db
+            let bet_state = bet_db
                 .get_entity::<BetState>(bet_id)?
                 .ok_or(anyhow!("Bet {} doesn't exist"))?;
 
-            if proposal {
-                match bet {
-                    BetState::Proposed { local_proposal } => Ok(
-                        item! { "proposal" => Cell::String(local_proposal.proposal.into_versioned().to_string() )},
-                    ),
-                    _ => Err(anyhow!("Bet {} is not a propsal")),
-                }
-            } else {
-                Ok(CmdOutput::Json(serde_json::to_value(&bet).unwrap()))
+            if raw {
+                return Ok(CmdOutput::Json(serde_json::to_value(&bet_state).unwrap()));
             }
+
+            let name = bet_state.name();
+
+            Ok(match bet_state.clone().into_bet_or_prop() {
+                BetOrProp::Proposal(local_proposal) => item! {
+                    "state" => Cell::string(name),
+                    "local-value" => Cell::Amount(local_proposal.proposal.value),
+                    "outcome-time" => local_proposal.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
+                    "oracle" => Cell::string(&local_proposal.proposal.oracle),
+                    "event-id" => Cell::string(&local_proposal.proposal.event_id),
+                    "my-inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                    "change-addr" => Cell::string(&local_proposal.proposal.change_script.is_some()),
+                    "string" => Cell::string(local_proposal.proposal.clone().into_versioned()),
+                },
+                BetOrProp::Bet(bet) => {
+                    let mut item = item! {
+                        "state" => Cell::string(name),
+                        "risk" => Cell::Amount(bet.local_value),
+                        "reward" => Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
+                        "i-bet" => Cell::String(Outcome { id: bet.oracle_event.event.id.clone(), value: bet.i_chose_right as u64 }.outcome_string()),
+                        "oracle" => Cell::string(&bet.oracle_id),
+                        "event-id" => Cell::string(&bet.oracle_event.event.id),
+                        "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                        "txid" => Cell::string(bet.tx.txid()),
+                    };
+                    if let BetState::Offered {
+                        encrypted_offer, ..
+                    } = bet_state
+                    {
+                        if let CmdOutput::Item(list) = &mut item {
+                            list.push(("string", Cell::String(encrypted_offer.to_string())));
+                        }
+                    }
+                    item
+                }
+            })
         }
         BetOpt::List => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
@@ -313,16 +342,8 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
 
     for (bet_id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
-        match bet_state {
-            BetState::Proposed { local_proposal }
-            | BetState::Cancelling {
-                bet_or_prop: BetOrProp::Proposal(local_proposal),
-                ..
-            }
-            | BetState::Cancelled {
-                bet_or_prop: BetOrProp::Proposal(local_proposal),
-                ..
-            } => rows.push(vec![
+        match bet_state.into_bet_or_prop() {
+            BetOrProp::Proposal(local_proposal) => rows.push(vec![
                 Cell::Int(bet_id.into()),
                 Cell::String(name),
                 Cell::String(
@@ -349,21 +370,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                     local_proposal.proposal.oracle, local_proposal.proposal.event_id
                 )),
             ]),
-            BetState::Offered { bet, .. }
-            | BetState::Unconfirmed { bet, .. }
-            | BetState::Confirmed { bet, .. }
-            | BetState::Won { bet, .. }
-            | BetState::Lost { bet, .. }
-            | BetState::Claiming { bet, .. }
-            | BetState::Cancelling {
-                bet_or_prop: BetOrProp::Bet(bet),
-                ..
-            }
-            | BetState::Cancelled {
-                bet_or_prop: BetOrProp::Bet(bet),
-                ..
-            }
-            | BetState::Claimed { bet, .. } => rows.push(vec![
+            BetOrProp::Bet(bet) => rows.push(vec![
                 Cell::Int(bet_id.into()),
                 Cell::String(name),
                 Cell::String(
@@ -441,8 +448,8 @@ fn get_oracle_event_from_url(
 
     let oracle_event = event_response
         .announcement
-        .verify_against_id(&event_id, &oracle_info.oracle_keys.announcement_key)
-        .ok_or(anyhow!("announcement oracle returned from {}", url))?;
+        .verify_against_id(&event_id, &oracle_info.oracle_keys.announcement)
+        .ok_or(anyhow!("Invalid oracle announcement returned from {}", url))?;
 
     let is_attested = event_response.attestation.is_some();
 

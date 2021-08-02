@@ -1,4 +1,8 @@
-use crate::{bet::Bet, party::LocalProposal, OracleInfo};
+use crate::{
+    bet::Bet,
+    party::{EncryptedOffer, LocalProposal},
+    OracleInfo,
+};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{secp256k1::SecretKey, OutPoint, Transaction, Txid},
@@ -67,6 +71,7 @@ pub enum BetState {
     },
     Offered {
         bet: Bet,
+        encrypted_offer: EncryptedOffer,
     },
     Unconfirmed {
         bet: Bet,
@@ -169,6 +174,22 @@ impl BetState {
                 .map(|i| bet.tx.input[*i].previous_output)
                 .collect(),
             _ => vec![],
+        }
+    }
+
+    pub fn into_bet_or_prop(self) -> BetOrProp {
+        match self {
+            BetState::Proposed { local_proposal } => BetOrProp::Proposal(local_proposal),
+            BetState::Cancelling { bet_or_prop, .. } | BetState::Cancelled { bet_or_prop, .. } => {
+                bet_or_prop
+            }
+            BetState::Offered { bet, .. }
+            | BetState::Unconfirmed { bet, .. }
+            | BetState::Confirmed { bet, .. }
+            | BetState::Won { bet, .. }
+            | BetState::Lost { bet, .. }
+            | BetState::Claiming { bet, .. }
+            | BetState::Claimed { bet, .. } => BetOrProp::Bet(bet),
         }
     }
 }

@@ -71,4 +71,11 @@ impl Bet {
             vout: self.vout,
         }
     }
+
+    pub fn my_inputs(&self) -> Vec<OutPoint> {
+        self.my_input_indexes
+            .iter()
+            .map(|i| self.tx.input[*i as usize].previous_output.clone())
+            .collect()
+    }
 }

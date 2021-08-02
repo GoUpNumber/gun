@@ -101,7 +101,14 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .ok_or(anyhow!("Oracle {} isn't in the database", oracle_id))?;
 
         let anticipated_attestations = oracle_event
-            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0)
+            .anticipate_attestations_olivia_v1(
+                &oracle_info
+                    .oracle_keys
+                    .olivia_v1
+                    .expect("since we already proposed must have olivia-v1"),
+                0,
+            )
+            .expect("since we already proposed the bet it must have olivia-v1")
             .try_into()
             .map_err(|_| anyhow!("wrong number of attestations"))?;
 

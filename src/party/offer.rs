@@ -130,7 +130,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let anticipated_attestations = oracle_event
-            .anticipate_attestations(&oracle_info.oracle_keys.attestation_key, 0)[..2]
+            .anticipate_attestations_olivia_v1(&oracle_info.oracle_keys.olivia_v1.ok_or(anyhow!("Oracle {} does not support olivia_v1"))?, 0)
+            .ok_or(anyhow!("Cannot make bet on {} since {} doesn't support olivia_v1 attestation for this event", event_id, oracle_info.id))?
+            [..2]
             .try_into()
             .unwrap();
 
@@ -285,8 +287,11 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         offer: Offer,
         mut cipher: impl StreamCipher,
     ) -> anyhow::Result<(BetId, EncryptedOffer)> {
-        let bet_id = self.bet_db.insert_bet(BetState::Offered { bet })?;
         let encrypted_offer = offer.encrypt(&mut cipher);
+        let bet_id = self.bet_db.insert_bet(BetState::Offered {
+            bet,
+            encrypted_offer: encrypted_offer.clone(),
+        })?;
         Ok((bet_id, encrypted_offer))
     }
 }

@@ -11,8 +11,8 @@ dirs = "3.0"
 # bdk = { git = "https://github.com/llfourn/bdk", branch = "gun", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
 bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
 serde_json = "1.0"
-olivia_core = { git = "https://github.com/llfourn/olivia", features = ["std"], rev = "ced4ef56" }
-olivia_secp256k1 = { git = "https://github.com/llfourn/olivia" , features = ["libsecp_compat"], rev = "ced4ef56" }
+olivia_core = { git = "https://github.com/llfourn/olivia", features = ["std"], rev = "62fbcad" }
+olivia_secp256k1 = { git = "https://github.com/llfourn/olivia" , features = ["libsecp_compat"], rev = "62fbcad" }
 sha2 = "0.9"
 base2048 = "0.2"
 chacha20 = { version = "0.7", features = ["rng", "cipher"] }

@@ -2,7 +2,8 @@ use anyhow::Context;
 use bdk::{
     bitcoin::Network,
     blockchain::{
-        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, EsploraBlockchain,
+        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig,
+        EsploraBlockchain,
     },
     database::BatchDatabase,
     testutils::blockchain_tests::TestClient,
@@ -17,7 +18,10 @@ use gun_wallet::{
     party::{BetArgs, Party},
     FeeSpec, ValueChoice,
 };
-use olivia_core::{Attestation, Event, EventId, Group, OracleEvent, OracleInfo, OracleKeys};
+use olivia_core::{
+    announce, attest, AnnouncementSchemes, Attestation, AttestationSchemes, Event, EventId, Group,
+    OracleEvent, OracleInfo, OracleKeys,
+};
 use olivia_secp256k1::{fun::Scalar, Secp256k1};
 use rand::Rng;
 use std::{str::FromStr, time::Duration};
@@ -88,8 +92,10 @@ macro_rules! setup_test {
         let oracle_info = OracleInfo {
             id: oracle_id.clone(),
             oracle_keys: OracleKeys {
-                attestation_key: attest_keypair.public_key().clone().into(),
-                announcement_key: announce_keypair.public_key().clone().into(),
+                olivia_v1: Some(attest_keypair.public_key().clone().into()),
+                ecdsa_v1: None,
+                announcement: announce_keypair.public_key().clone().into(),
+                group: Secp256k1,
             },
         };
 
@@ -101,7 +107,12 @@ macro_rules! setup_test {
                 id: event_id.clone(),
                 expected_outcome_time: None,
             },
-            nonces: vec![oracle_nonce_keypair.public_key().clone().into()],
+            schemes: AnnouncementSchemes {
+                olivia_v1: Some(announce::OliviaV1 {
+                    nonces: vec![oracle_nonce_keypair.public_key().clone().into()],
+                }),
+                ..Default::default()
+            },
         };
         (
             test_client,
@@ -210,12 +221,17 @@ pub fn test_happy_path() {
 
     let attestation = Attestation {
         outcome: outcome.into(),
-        scalars: vec![Secp256k1::reveal_attest_scalar(
-            &attest_keypair,
-            oracle_nonce_keypair.into(),
-            index,
-        )
-        .into()],
+        schemes: AttestationSchemes {
+            olivia_v1: Some(attest::OliviaV1 {
+                scalars: vec![Secp256k1::reveal_attest_scalar(
+                    &attest_keypair,
+                    oracle_nonce_keypair.into(),
+                    index,
+                )
+                .into()],
+            }),
+            ..Default::default()
+        },
         time: olivia_core::chrono::Utc::now().naive_utc(),
     };
 

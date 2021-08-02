@@ -216,6 +216,7 @@ pub enum Cell {
     Int(u64),
     Empty,
     DateTime(u64),
+    List(Vec<Box<Cell>>),
 }
 
 impl From<String> for Cell {
@@ -239,14 +240,9 @@ impl Cell {
     pub fn string<T: core::fmt::Display>(t: T) -> Self {
         Self::String(t.to_string())
     }
-    pub fn from_json(value: serde_json::Value) -> Option<Self> {
-        use serde_json::Value;
-        Some(match value {
-            Value::String(string) => Cell::String(string),
-            Value::Number(number) if number.is_u64() => Cell::Int(number.as_u64().unwrap()),
-            Value::Null => Cell::Empty,
-            _ => return None,
-        })
+
+    pub fn datetime(dt: NaiveDateTime) -> Self {
+        Self::DateTime(dt.timestamp() as u64)
     }
 
     pub fn render(self) -> String {
@@ -259,6 +255,11 @@ impl Cell {
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
                 .format("%Y-%m-%dT%H:%M:%SZ")
                 .to_string(),
+            List(list) => list
+                .into_iter()
+                .map(|x| Cell::render(*x))
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 
@@ -270,6 +271,11 @@ impl Cell {
             Int(integer) => serde_json::Value::Number(integer.into()),
             DateTime(timestamp) => serde_json::Value::Number(timestamp.into()),
             Empty => serde_json::Value::Null,
+            List(list) => serde_json::Value::Array(
+                list.into_iter()
+                    .map(|x| serde_json::to_value(&*x).unwrap())
+                    .collect(),
+            ),
         }
     }
 }
@@ -277,7 +283,7 @@ impl Cell {
 pub enum CmdOutput {
     Table(TableData),
     Json(serde_json::Value),
-    Item(Vec<(String, Cell)>),
+    Item(Vec<(&'static str, Cell)>),
     List(Vec<Cell>),
     None,
 }
@@ -308,7 +314,11 @@ impl CmdOutput {
                 }
                 let mut table = term_table::Table::new();
                 for (key, value) in item {
-                    table.add_row(Row::new(vec![key, value.render()]))
+                    if matches!(value, Cell::Amount(_)) {
+                        table.add_row(Row::new(vec![format!("{} (BTC)", key), value.render()]))
+                    } else {
+                        table.add_row(Row::new(vec![key.to_string(), value.render()]))
+                    }
                 }
                 table.render()
             }
@@ -468,7 +478,7 @@ macro_rules! item {
     ($($key:literal => $value:expr),*$(,)?) => {{
         let mut list = vec![];
         $(
-            list.push(($key.to_string(), $value));
+            list.push(($key, $value));
         )*
         $crate::cmd::CmdOutput::Item(list)
     }}

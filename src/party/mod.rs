@@ -90,16 +90,22 @@ where
                     let event_id = bet.oracle_event.event.id.clone();
                     let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome)
                         .context("parsing oracle outcome")?;
-                    let attest_scalar = Scalar::from(attestation.scalars[0].clone());
+                    let olivia_v1_scalars = &attestation
+                        .schemes
+                        .olivia_v1
+                        .as_ref()
+                        .ok_or(anyhow!("attestation is missing olivia-v1"))?
+                        .scalars;
+                    let attest_scalar = Scalar::from(olivia_v1_scalars[0].clone());
                     if let Some(oracle_info) =
                         txdb.get_entity::<OracleInfo>(bet.oracle_id.clone())?
                     {
-                        if !attestation.verify_attestation(
-                            &bet.oracle_event,
-                            &oracle_info.oracle_keys.attestation_key,
-                        ) {
-                            return Err(anyhow!("Oracle gave wrong attestation"));
-                        }
+                        attestation
+                            .verify_olivia_v1_attestation(
+                                &bet.oracle_event,
+                                &oracle_info.oracle_keys,
+                            )
+                            .context("Oracle gave invalid attestation")?;
                     }
 
                     let joint_output = &bet.joint_output;
