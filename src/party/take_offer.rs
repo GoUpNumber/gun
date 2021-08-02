@@ -122,7 +122,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         builder
             .manually_selected_only()
-            .ordering(TxOrdering::Bip69Lexicographic);
+            .ordering(TxOrdering::Bip69Lexicographic)
+            .enable_rbf();
 
         for proposal_input in &proposal.inputs {
             builder.add_utxo(*proposal_input)?;

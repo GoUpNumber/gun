@@ -35,7 +35,8 @@ pub enum BetOpt {
         /// The outcome to choose
         #[structopt(short)]
         choice: String,
-        /// The fee to use
+        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
+        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
         #[structopt(default_value, long)]
         fee: FeeSpec,
         /// Make the offer without asking
@@ -60,6 +61,8 @@ pub enum BetOpt {
     /// Spends all "won" bets. Note that this is just shorthand for `gun send` where you send the
     /// coins back to your own wallet address.
     Claim {
+        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
+        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
         #[structopt(long, default_value)]
         fee: FeeSpec,
         /// Also spend bets that are already in the "claiming" state replacing the previous
@@ -86,6 +89,9 @@ pub enum BetOpt {
     Cancel {
         /// The bet to cancel
         bet_ids: Vec<BetId>,
+        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
+        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
+        fee: FeeSpec,
     },
     /// Delete all memory of the bet.
     ///
@@ -95,8 +101,11 @@ pub enum BetOpt {
     Oracle(crate::cmd::OracleOpt),
 }
 
-pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt, sync: bool) -> anyhow::Result<cmd::CmdOutput> {
-
+pub fn run_bet_cmd(
+    wallet_dir: &PathBuf,
+    cmd: BetOpt,
+    sync: bool,
+) -> anyhow::Result<cmd::CmdOutput> {
     if sync {
         let party = cmd::load_party(wallet_dir)?;
         poke_bets(&party)
@@ -238,9 +247,9 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt, sync: bool) -> anyhow::Res
                 None => Ok(CmdOutput::None),
             }
         }
-        BetOpt::Cancel { bet_ids } => {
+        BetOpt::Cancel { bet_ids, fee } => {
             let party = cmd::load_party(wallet_dir)?;
-            let tx = party.cancel(&bet_ids)?;
+            let tx = party.cancel(&bet_ids, fee)?;
             match tx {
                 Some(tx) => Ok(item! { "txid" => Cell::String(tx.txid().to_string())}),
                 None => Ok(CmdOutput::None),
@@ -275,7 +284,7 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt, sync: bool) -> anyhow::Res
                 Ok(CmdOutput::Json(serde_json::to_value(&bet).unwrap()))
             }
         }
-        BetOpt::List  => {
+        BetOpt::List => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
             Ok(list_bets(&bet_db))
         }
@@ -295,11 +304,9 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
         let diff = dt - now;
         if diff.abs() < chrono::Duration::hours(1) {
             format!("{}m", diff.num_minutes())
-        }
-        else if diff.abs() < chrono::Duration::days(1) {
+        } else if diff.abs() < chrono::Duration::days(1) {
             format!("{}h", diff.num_hours())
-        }
-        else {
+        } else {
             format!("{}d", diff.num_days())
         }
     }
@@ -330,7 +337,9 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                     local_proposal
                         .oracle_event
                         .event
-                        .expected_outcome_time.map(format_in).unwrap_or("-".into())
+                        .expected_outcome_time
+                        .map(format_in)
+                        .unwrap_or("-".into()),
                 ),
                 Cell::Amount(local_proposal.proposal.value),
                 Cell::Empty,
@@ -365,11 +374,11 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                         .unwrap_or("-".into()),
                 ),
                 Cell::String(
-                     bet.oracle_event
+                    bet.oracle_event
                         .event
                         .expected_outcome_time
                         .map(format_in)
-                        .unwrap_or("-".into())
+                        .unwrap_or("-".into()),
                 ),
                 Cell::Amount(bet.local_value),
                 Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),

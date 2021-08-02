@@ -9,6 +9,7 @@ mod take_offer;
 
 pub use bet_args::*;
 pub use joint_output::*;
+use miniscript::DescriptorTrait;
 pub use offer::*;
 pub use proposal::*;
 pub use take_offer::*;
@@ -17,7 +18,7 @@ use crate::{
     bet::Bet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     keychain::Keychain,
-    reqwest, OracleInfo,
+    reqwest, FeeSpec, OracleInfo,
 };
 use anyhow::{anyhow, Context};
 use bdk::{
@@ -26,7 +27,7 @@ use bdk::{
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
     wallet::{AddressIndex, Wallet},
-    SignOptions,
+    KeychainKind, SignOptions,
 };
 
 use olivia_core::{http::EventResponse, Attestation, Outcome};
@@ -154,14 +155,13 @@ where
         Ok(())
     }
 
-    pub fn cancel(&self, bet_ids: &[BetId]) -> anyhow::Result<Option<Transaction>> {
+    pub fn cancel(
+        &self,
+        bet_ids: &[BetId],
+        feespec: FeeSpec,
+    ) -> anyhow::Result<Option<Transaction>> {
+        self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
         let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
-        let unspent = self
-            .wallet
-            .list_unspent()?
-            .into_iter()
-            .map(|x| x.outpoint)
-            .collect::<Vec<_>>();
 
         for bet_id in bet_ids {
             let bet_state = self.bet_db().get_entity(*bet_id)?.ok_or(anyhow!(
@@ -180,12 +180,11 @@ where
                     }
                 }
                 BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
-                    let inputs = &bet
-                        .tx
-                        .input
+                    let tx = &bet.tx;
+                    let inputs = bet
+                        .my_input_indexes
                         .iter()
-                        .map(|x| x.previous_output)
-                        .filter(|x| unspent.contains(x))
+                        .map(|i| tx.input[*i as usize].previous_output)
                         .collect::<Vec<_>>();
                     if inputs
                         .iter()
@@ -205,18 +204,34 @@ where
             }
         }
 
-        self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
-
         let mut builder = self.wallet.build_tx();
-        builder.manually_selected_only().enable_rbf();
+        builder
+            .manually_selected_only()
+            .enable_rbf()
+            .only_witness_utxo();
+        feespec.apply_to_builder(self.wallet.client(), &mut builder)?;
 
         for utxo in utxos_that_need_cancelling {
-            match builder.add_utxo(utxo) {
-                Ok(_) | Err(bdk::Error::UnknownUtxo) => {
-                    // if the utxo is maigcally gone don't worry about it
+            // we have to add these as foreign UTXOs because BDK doesn't let you spend
+            // outputs that have been spent by tx in the mempool.
+            let tx = match self.wallet.query_db(|db| db.get_tx(&utxo.txid, true))? {
+                Some(tx) => tx,
+                None => {
+                    debug_assert!(false, "we should always be able to find our tx");
+                    continue;
                 }
-                Err(e) => return Err(e.into()),
-            }
+            };
+            let psbt_input = psbt::Input {
+                witness_utxo: Some(
+                    tx.transaction.as_ref().unwrap().output[utxo.vout as usize].clone(),
+                ),
+                ..Default::default()
+            };
+            let satisfaction_weight = self
+                .wallet
+                .get_descriptor_for_keychain(KeychainKind::External)
+                .max_satisfaction_weight()?;
+            builder.add_foreign_utxo(utxo, psbt_input, satisfaction_weight)?;
         }
 
         builder.drain_to(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
@@ -225,10 +240,19 @@ where
             Ok(res) => res,
             e => e?,
         };
-        let finalized = self.wallet.sign(&mut psbt, SignOptions::default())?;
+        let finalized = self.wallet.sign(
+            &mut psbt,
+            SignOptions {
+                trust_witness_utxo: true,
+                ..Default::default()
+            },
+        )?;
         assert!(finalized, "we should have signed all inputs");
         let cancel_tx = psbt.extract_tx();
         let cancel_txid = cancel_tx.txid();
+
+        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
+            .context("broadcasting cancel transaction")?;
 
         self.bet_db()
             .update_bets(bet_ids, |bet_state, bet_id, _| match bet_state {
@@ -248,9 +272,6 @@ where
                     bet_state.name()
                 )),
             })?;
-
-        bdk::blockchain::Broadcast::broadcast(self.wallet.client(), cancel_tx.clone())
-            .context("broadcasting cancel transaction")?;
 
         Ok(Some(cancel_tx))
     }

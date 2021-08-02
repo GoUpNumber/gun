@@ -149,7 +149,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         );
 
         let mut builder = self.wallet.build_tx();
-        builder.ordering(TxOrdering::Bip69Lexicographic);
+        builder
+            .ordering(TxOrdering::Bip69Lexicographic)
+            .enable_rbf();
 
         let output_script = joint_output.descriptor().script_pubkey();
 

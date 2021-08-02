@@ -5,8 +5,9 @@ use bdk::{
         esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, EsploraBlockchain,
     },
     database::BatchDatabase,
+    testutils::blockchain_tests::TestClient,
     wallet::AddressIndex,
-    Wallet,
+    FeeRate, Wallet,
 };
 use bet_database::BetState;
 use gun_wallet::{
@@ -21,7 +22,10 @@ use olivia_secp256k1::{fun::Scalar, Secp256k1};
 use rand::Rng;
 use std::{str::FromStr, time::Duration};
 
-fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDatabase>> {
+fn create_party(
+    test_client: &mut TestClient,
+    id: u8,
+) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDatabase>> {
     let mut r = [0u8; 64];
     rand::thread_rng().fill(&mut r);
     let keychain = Keychain::new(r);
@@ -30,8 +34,12 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
         bdk::KeychainKind::External,
     );
     let db = bdk::database::MemoryDatabase::new();
-    let esplora_url = "http://localhost:3000".to_string();
+    let esplora_url = format!(
+        "http://{}",
+        test_client.electrsd.esplora_url.as_ref().unwrap()
+    );
     let esplora = EsploraBlockchain::new(&esplora_url, None, 5);
+
     let wallet = Wallet::new(descriptor, None, Network::Regtest, db, esplora)
         .context("Initializing wallet failed")?;
     wallet
@@ -40,8 +48,12 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
 
     let bet_db = bet_database::BetDatabase::test_new();
 
+    let funding_address = wallet.get_address(AddressIndex::New).unwrap().address;
+
+    test_client.generate(1, Some(funding_address));
+    test_client.generate(100, None);
+
     while wallet.get_balance()? < 100_000 {
-        fund_wallet(&wallet)?;
         std::thread::sleep(Duration::from_millis(1_000));
         wallet.sync(noop_progress(), None)?;
         println!("syncing done on party {} -- checking balance", id);
@@ -60,21 +72,11 @@ fn create_party(id: u8) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDat
     Ok(party)
 }
 
-fn fund_wallet(wallet: &Wallet<EsploraBlockchain, impl BatchDatabase>) -> anyhow::Result<()> {
-    let new_address = wallet.get_address(AddressIndex::New)?.address;
-    println!("funding: {}", new_address);
-    gun_wallet::reqwest::blocking::Client::new()
-        .post("http://localhost:3000/faucet")
-        .json(&serde_json::json!({ "address": new_address }))
-        .send()
-        .unwrap();
-    Ok(())
-}
-
 macro_rules! setup_test {
     () => {{
-        let party_1 = create_party(1).unwrap();
-        let party_2 = create_party(2).unwrap();
+        let mut test_client = TestClient::default();
+        let party_1 = create_party(&mut test_client, 1).unwrap();
+        let party_2 = create_party(&mut test_client, 2).unwrap();
         let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
         let announce_keypair =
             olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
@@ -102,6 +104,7 @@ macro_rules! setup_test {
             nonces: vec![oracle_nonce_keypair.public_key().clone().into()],
         };
         (
+            test_client,
             party_1,
             party_2,
             oracle_info,
@@ -146,6 +149,7 @@ macro_rules! wait_for_state {
 #[test]
 pub fn test_happy_path() {
     let (
+        mut test_client,
         party_1,
         party_2,
         oracle_info,
@@ -184,13 +188,15 @@ pub fn test_happy_path() {
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
+    wait_for_state!(party_2, p2_bet_id, "offered");
 
     let validated_offer = party_1
         .decrypt_and_validate_offer(p1_bet_id, encrypted_offer)
         .unwrap();
 
-    let tx = party_1.take_offer(validated_offer).unwrap();
-    party_1.wallet().broadcast(tx).unwrap();
+    let _ = party_1.take_offer(validated_offer).unwrap();
+    wait_for_state!(party_1, p1_bet_id, "unconfirmed");
+    test_client.generate(1, None);
 
     wait_for_state!(party_1, p1_bet_id, "confirmed");
     wait_for_state!(party_2, p2_bet_id, "confirmed");
@@ -238,6 +244,7 @@ pub fn test_happy_path() {
     wait_for_state!(winner, winner_id, "claiming");
 
     winner.wallet().broadcast(winner_claim_tx).unwrap();
+    test_client.generate(1, None);
     winner.wallet().sync(noop_progress(), None).unwrap();
 
     assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
@@ -246,7 +253,8 @@ pub fn test_happy_path() {
 
 #[test]
 pub fn cancel_proposal() {
-    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
+        setup_test!();
 
     let (p1_bet_id, proposal) = party_1
         .make_proposal(
@@ -290,16 +298,19 @@ pub fn cancel_proposal() {
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
-    party_1.cancel(&[p1_bet_id]).unwrap();
+    party_1.cancel(&[p1_bet_id], FeeSpec::default()).unwrap();
 
+    wait_for_state!(party_1, p1_bet_id, "cancelling");
+    test_client.generate(1, None);
+    wait_for_state!(party_1, bet_id_overlap, "cancelled");
     wait_for_state!(party_1, p1_bet_id, "cancelled");
     wait_for_state!(party_2, p2_bet_id, "cancelled");
-    wait_for_state!(party_1, bet_id_overlap, "cancelled");
 }
 
 #[test]
-pub fn cancel_offer() {
-    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+pub fn test_cancel_offer() {
+    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
+        setup_test!();
 
     let (_, proposal) = party_1
         .make_proposal(
@@ -331,13 +342,17 @@ pub fn cancel_offer() {
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
     };
 
-    party_2.cancel(&[p2_bet_id]).unwrap();
+    party_2.cancel(&[p2_bet_id], FeeSpec::default()).unwrap();
+
+    wait_for_state!(party_2, p2_bet_id, "cancelling");
+    test_client.generate(1, None);
     wait_for_state!(party_2, p2_bet_id, "cancelled");
 }
 
 #[test]
 pub fn cancel_offer_after_offer_taken() {
-    let (party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) = setup_test!();
+    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
+        setup_test!();
 
     let (p1_bet_id, proposal) = party_1
         .make_proposal(
@@ -383,7 +398,7 @@ pub fn cancel_offer_after_offer_taken() {
                     must_overlap: &[first_p2_bet_id],
                     ..Default::default()
                 },
-                FeeSpec::default(),
+                FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
             )
             .unwrap();
         party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
@@ -395,10 +410,18 @@ pub fn cancel_offer_after_offer_taken() {
 
     party_1.take_offer(second_validated_offer).unwrap();
 
-    wait_for_state!(party_1, p1_bet_id, "confirmed");
+    wait_for_state!(party_1, p1_bet_id, "unconfirmed");
     party_2
-        .cancel(&[first_p2_bet_id, second_p2_bet_id])
+        .cancel(
+            &[first_p2_bet_id, second_p2_bet_id],
+            FeeSpec::Rate(FeeRate::from_sat_per_vb(5.0)),
+        )
+        .unwrap()
         .unwrap();
-    wait_for_state!(party_2, second_p2_bet_id, "confirmed");
+
+    wait_for_state!(party_2, second_p2_bet_id, "cancelling");
+    wait_for_state!(party_2, first_p2_bet_id, "cancelling");
+    test_client.generate(1, None);
+    wait_for_state!(party_2, second_p2_bet_id, "cancelled");
     wait_for_state!(party_2, first_p2_bet_id, "cancelled");
 }
