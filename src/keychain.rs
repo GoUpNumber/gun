@@ -20,6 +20,19 @@ pub struct KeyPair {
     pub secret_key: Scalar,
 }
 
+impl KeyPair {
+    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let mut secret_key = Scalar::from_slice_mod_order(&bytes[..32])
+            .expect("is 32 bytes long")
+            .mark::<NonZero>()?;
+        let public_key = Point::<EvenY>::from_scalar_mul(G, &mut secret_key);
+        Some(KeyPair {
+            public_key,
+            secret_key,
+        })
+    }
+}
+
 impl Keychain {
     pub fn new(seed: [u8; 64]) -> Self {
         let proposal_hmac = {
@@ -54,7 +67,7 @@ impl Keychain {
         let bin = crate::encode::serialize(&proposal);
         proposal_hmac.input(&bin[..]);
         let res = Hmac::from_engine(proposal_hmac);
-        let keypair = Self::keypair_from_slice(&res[..]);
+        let keypair = KeyPair::from_slice(&res[..]).expect("computationally unreachable");
         proposal.public_key = keypair.public_key;
         keypair
     }
@@ -64,18 +77,6 @@ impl Keychain {
         let bin = crate::encode::serialize(proposal);
         offer_hmac.input(&bin[..]);
         let res = Hmac::from_engine(offer_hmac);
-        Self::keypair_from_slice(&res[..])
-    }
-
-    fn keypair_from_slice(hmac: &[u8]) -> KeyPair {
-        let mut secret_key = Scalar::from_slice_mod_order(&hmac[..32])
-            .expect("is 32 bytes long")
-            .mark::<NonZero>()
-            .expect("Computationally unreachable");
-        let public_key = Point::<EvenY>::from_scalar_mul(G, &mut secret_key);
-        KeyPair {
-            public_key,
-            secret_key,
-        }
+        KeyPair::from_slice(&res[..]).expect("computationally unreachable")
     }
 }

@@ -6,7 +6,11 @@ pub fn serialize_base2048<S: serde::Serialize>(thing: &S) -> String {
 
 pub fn serialize<S: serde::Serialize>(thing: &S) -> Vec<u8> {
     // this might fail if the thing has a #[serde(flatten)] in it.
-    bincode::options().serialize(thing).unwrap()
+    bincode::options()
+        .allow_trailing_bytes()
+        .with_varint_encoding()
+        .serialize(thing)
+        .unwrap()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -25,5 +29,19 @@ pub fn deserialize_base2048<D: serde::de::DeserializeOwned>(
 }
 
 pub fn deserialize<D: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<D, bincode::Error> {
-    bincode::options().deserialize(bytes)
+    bincode::options()
+        .allow_trailing_bytes()
+        .with_varint_encoding()
+        .deserialize(bytes)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn make_sure_extra_bytes_not_added() {
+        let bytes = vec![42u8; 11];
+        assert_eq!(serialize(&bytes).len(), 12);
+        assert_eq!(serialize_base2048(&bytes).chars().count(), 9);
+    }
 }

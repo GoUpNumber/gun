@@ -1,4 +1,7 @@
-use crate::bet_database::{BetId, BetOrProp, BetState, CancelReason};
+use crate::{
+    bet::Bet,
+    bet_database::{BetId, BetOrProp, BetState, CancelReason},
+};
 use anyhow::anyhow;
 use bdk::{bitcoin::OutPoint, blockchain::UtxoExists};
 
@@ -46,7 +49,11 @@ where
         Ok(None)
     }
 
-    pub fn take_next_action(&self, bet_id: BetId) -> anyhow::Result<()> {
+    /// Look at current state and see if we can progress it.
+    ///
+    /// The `try_learn_outcome` exists so during tests it can be turned off so this doesn't try and contact a non-existent oracle.
+    /// TODO: fix this with an oracle trait that can be mocked in tests.
+    pub fn take_next_action(&self, bet_id: BetId, try_learn_outcome: bool) -> anyhow::Result<()> {
         let bet_state = self
             .bet_db
             .get_entity(bet_id)?
@@ -58,6 +65,7 @@ where
             | BetState::Cancelled { .. }
             | BetState::Lost { .. } => {}
             BetState::Cancelling { bet_or_prop, .. } => {
+                // success cancelling
                 if let Some(reason) = self.check_cancelled(&bet_or_prop.inputs())? {
                     update_bet! {
                         self, bet_id,
@@ -66,6 +74,16 @@ where
                             reason: reason.clone()
                         }
                     };
+                }
+                // failed to cancel
+                if let BetOrProp::Bet(bet) = bet_or_prop {
+                    if let Some(height) =
+                        self.is_confirmed(bet.tx().txid(), bet.joint_output.wallet_descriptor())?
+                    {
+                        update_bet! { self, bet_id,
+                            BetState::Cancelling { .. } => BetState::Confirmed { bet: bet.clone(), height }
+                        }
+                    }
                 }
             }
             BetState::Proposed { local_proposal } => {
@@ -86,6 +104,7 @@ where
                     update_bet! { self, bet_id,
                         BetState::Offered { bet, .. } => BetState::Confirmed { bet, height }
                     };
+                    self.take_next_action(bet_id, try_learn_outcome)?;
                 }
 
                 let inputs_to_check_for_cancellation = bet
@@ -96,11 +115,7 @@ where
                     .collect::<Vec<_>>();
                 if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
                     update_bet! { self, bet_id,
-                        BetState::Cancelling { bet_or_prop, .. } => BetState::Cancelled {
-                            bet_or_prop,
-                            reason: reason.clone()
-                        },
-                        BetState::Offered { bet, .. } => BetState::Cancelled {
+                         BetState::Offered { bet, .. } => BetState::Cancelled {
                             bet_or_prop: BetOrProp::Bet(bet),
                             reason: reason.clone()
                         }
@@ -116,7 +131,7 @@ where
                     update_bet! { self, bet_id,
                         BetState::Unconfirmed { bet, .. } => BetState::Confirmed { bet, height }
                     };
-                    self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
+                    self.take_next_action(bet_id, try_learn_outcome)?;
                 } else {
                     let inputs_to_check_for_cancellation = bet
                         .tx()
@@ -126,9 +141,9 @@ where
                         .collect::<Vec<_>>();
                     if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
                         update_bet! { self, bet_id,
-                            BetState::Cancelling { bet_or_prop, .. } => {
+                            BetState::Unconfirmed { bet, .. } => {
                                 BetState::Cancelled {
-                                    bet_or_prop,
+                                    bet_or_prop: BetOrProp::Bet(bet),
                                     reason: reason.clone()
                                 }
                             }
@@ -137,7 +152,9 @@ where
                 }
             }
             BetState::Confirmed { bet, height: _ } => {
-                self.try_get_outcome(bet_id, bet)?;
+                if try_learn_outcome {
+                    self.try_get_outcome(bet_id, bet)?;
+                }
             }
             BetState::Claiming { bet, .. } => {
                 if let Some(tx_that_claimed) =
@@ -149,6 +166,23 @@ where
                 }
             }
         }
+        Ok(())
+    }
+
+    fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
+        let event_id = bet.oracle_event.event.id;
+        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
+        let event_response = self
+            .client
+            .get(event_url)
+            .send()?
+            .error_for_status()?
+            .json::<crate::EventResponse>()?;
+
+        if let Some(attestation) = event_response.attestation {
+            self.learn_outcome(bet_id, attestation)?;
+        }
+
         Ok(())
     }
 }

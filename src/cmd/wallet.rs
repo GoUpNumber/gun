@@ -36,10 +36,11 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         .map(|tx_details| (tx_details.txid, tx_details.confirmation_time.is_some()))
         .collect::<Vec<_>>();
     let unspent = party.wallet().list_unspent()?;
+    let currently_used = party.bet_db().currently_used_utxos(&[])?;
 
-    let (confirmed, unconfirmed) = unspent.into_iter().fold(
-        (Amount::ZERO, Amount::ZERO),
-        |(confirmed, unconfirmed), local_utxo| {
+    let (confirmed, unconfirmed, in_use) = unspent.into_iter().fold(
+        (Amount::ZERO, Amount::ZERO, Amount::ZERO),
+        |(confirmed, unconfirmed, in_use), local_utxo| {
             let is_confirmed = tx_list
                 .iter()
                 .find_map(|(txid, is_confirmed)| {
@@ -51,12 +52,19 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
                 })
                 .unwrap_or(false);
             let value = Amount::from_sat(local_utxo.txout.value);
-            if is_confirmed {
-                (confirmed + value, unconfirmed)
+
+            if currently_used
+                .iter()
+                .find(|outpoint| local_utxo.outpoint == **outpoint)
+                .is_some()
+            {
+                (confirmed, unconfirmed, in_use + value)
+            } else if is_confirmed {
+                (confirmed + value, unconfirmed, in_use)
             } else {
                 match local_utxo.keychain {
-                    KeychainKind::External => (confirmed, unconfirmed + value),
-                    KeychainKind::Internal => (confirmed + value, unconfirmed),
+                    KeychainKind::External => (confirmed, unconfirmed + value, in_use),
+                    KeychainKind::Internal => (confirmed + value, unconfirmed, in_use),
                 }
             }
         },
@@ -66,8 +74,9 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         "confirmed" => Cell::Amount(confirmed),
         "unconfirmed" => Cell::Amount(unconfirmed),
         "unclaimed" => Cell::Amount(unclaimed),
-        "total" => Cell::Amount(confirmed + unconfirmed + unclaimed),
+        "available" => Cell::Amount(confirmed + unconfirmed + unclaimed),
         "locked" => Cell::Amount(in_bet),
+        "in-use" => Cell::Amount(in_use),
     })
 }
 
@@ -224,8 +233,14 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
         .enable_rbf()
         .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
 
-    if !spend_in_use {
-        builder.unspendable(party.bet_db().currently_used_utxos(&[])?);
+    let in_use = party.bet_db().currently_used_utxos(&[])?;
+
+    if !spend_in_use && in_use.len() > 0 {
+        eprintln!(
+            "note that {} utxos are not availble becuase they are in use",
+            in_use.len()
+        );
+        builder.unspendable(in_use);
     }
 
     fee.apply_to_builder(party.wallet().client(), &mut builder)?;

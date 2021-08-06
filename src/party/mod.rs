@@ -15,10 +15,9 @@ pub use proposal::*;
 pub use take_offer::*;
 
 use crate::{
-    bet::Bet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     keychain::Keychain,
-    reqwest, FeeSpec, OracleInfo,
+    FeeSpec, OracleInfo,
 };
 use anyhow::{anyhow, Context};
 use bdk::{
@@ -33,7 +32,7 @@ use bdk::{
     KeychainKind, SignOptions,
 };
 
-use olivia_core::{http::EventResponse, Attestation, Outcome};
+use olivia_core::{Attestation, Outcome};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
     Secp256k1,
@@ -144,23 +143,6 @@ where
                 }
                 old_state => Ok(old_state),
             })?;
-        Ok(())
-    }
-
-    fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
-        let event_id = bet.oracle_event.event.id;
-        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
-        let event_response = self
-            .client
-            .get(event_url)
-            .send()?
-            .error_for_status()?
-            .json::<EventResponse<Secp256k1>>()?;
-
-        if let Some(attestation) = event_response.attestation {
-            self.learn_outcome(bet_id, attestation)?;
-        }
-
         Ok(())
     }
 

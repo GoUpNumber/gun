@@ -141,7 +141,7 @@ macro_rules! wait_for_state {
                 .into();
             cur_state != $state
         } {
-            $party.take_next_action($bet_id).unwrap();
+            $party.take_next_action($bet_id, false).unwrap();
             counter += 1;
             std::thread::sleep(std::time::Duration::from_secs(1));
             if counter > 10 {
@@ -182,7 +182,7 @@ pub fn test_happy_path() {
         .unwrap();
 
     let (p2_bet_id, encrypted_offer) = {
-        let (bet, offer, cipher) = party_2
+        let (bet, offer, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -197,7 +197,9 @@ pub fn test_happy_path() {
                 FeeSpec::default(),
             )
             .unwrap();
-        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+        party_2
+            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .unwrap()
     };
     wait_for_state!(party_2, p2_bet_id, "offered");
 
@@ -300,7 +302,7 @@ pub fn cancel_proposal() {
         .unwrap();
 
     let (p2_bet_id, _) = {
-        let (bet, offer, cipher) = party_2
+        let (bet, offer, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -315,7 +317,9 @@ pub fn cancel_proposal() {
                 FeeSpec::default(),
             )
             .unwrap();
-        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+        party_2
+            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .unwrap()
     };
 
     let psbt = party_1
@@ -351,7 +355,7 @@ pub fn test_cancel_offer() {
         .unwrap();
 
     let (p2_bet_id, _) = {
-        let (bet, offer, cipher) = party_2
+        let (bet, offer, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -366,7 +370,9 @@ pub fn test_cancel_offer() {
                 FeeSpec::default(),
             )
             .unwrap();
-        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+        party_2
+            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .unwrap()
     };
 
     let psbt = party_2
@@ -401,7 +407,7 @@ pub fn cancel_offer_after_offer_taken() {
         .unwrap();
 
     let (first_p2_bet_id, _) = {
-        let (bet, offer, cipher) = party_2
+        let (bet, offer, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -416,11 +422,13 @@ pub fn cancel_offer_after_offer_taken() {
                 FeeSpec::default(),
             )
             .unwrap();
-        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+        party_2
+            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .unwrap()
     };
 
     let (second_p2_bet_id, second_encrypted_offer) = {
-        let (bet, offer, cipher) = party_2
+        let (bet, offer, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -436,7 +444,9 @@ pub fn cancel_offer_after_offer_taken() {
                 FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
             )
             .unwrap();
-        party_2.save_and_encrypt_offer(bet, offer, cipher).unwrap()
+        party_2
+            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .unwrap()
     };
 
     let second_validated_offer = party_1

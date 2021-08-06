@@ -145,7 +145,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         args: BetArgs,
     ) -> anyhow::Result<(BetId, Proposal)> {
         let event_id = &oracle_event.event.id;
-        if !event_id.is_binary() {
+        if !event_id.n_outcomes() == 2 {
             return Err(anyhow!(
                 "Cannot make a bet on {} since it isn't binary",
                 event_id
@@ -153,6 +153,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let mut builder = self.wallet.build_tx();
+        // we use a 0 feerate because the offerer will pay the fee
         builder.fee_rate(FeeRate::from_sat_per_vb(0.0));
 
         match args.value {

@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{self, Amount, Transaction},
+    bitcoin::{self, secp256k1, Amount, Transaction},
     database::BatchDatabase,
     descriptor::ExtendedDescriptor,
     miniscript::DescriptorTrait,
@@ -16,7 +16,10 @@ use bdk::{
     SignOptions,
 };
 use chacha20::cipher::StreamCipher;
-use olivia_secp256k1::fun::{marker::*, Point, XOnly};
+use olivia_secp256k1::{
+    ecdsa_fun,
+    fun::{marker::*, Point, XOnly},
+};
 use std::{convert::TryInto, str::FromStr};
 
 use super::{randomize::Randomize, BetArgs, Either};
@@ -26,7 +29,41 @@ pub type OfferId = XOnly;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SignedInput {
     pub outpoint: bdk::bitcoin::OutPoint,
-    pub witness: Vec<Vec<u8>>,
+    pub witness: Witness,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum Witness {
+    P2wpkh {
+        key: secp256k1::PublicKey,
+        // using ecdsa_fun::Signature here ebcause it serializes to 64 bytes rather than DER
+        signature: ecdsa_fun::Signature,
+    },
+}
+
+impl Witness {
+    pub fn encode(&self) -> Vec<Vec<u8>> {
+        match self {
+            Witness::P2wpkh { key, signature } => {
+                let mut sig_bytes = secp256k1::Signature::from_compact(&signature.to_bytes())
+                    .unwrap()
+                    .serialize_der()
+                    .to_vec();
+                sig_bytes.push(0x01);
+                let pk_bytes = key.serialize().to_vec();
+                vec![sig_bytes, pk_bytes]
+            }
+        }
+    }
+
+    pub fn decode_p2wpkh(mut w: Vec<Vec<u8>>) -> Option<Self> {
+        let key_bytes = w.pop()?;
+        let mut sig_bytes = w.pop()?;
+        let _sighash = sig_bytes.pop()?;
+        let signature = secp256k1::Signature::from_der(&sig_bytes).ok()?.into();
+        let key = secp256k1::PublicKey::from_slice(&key_bytes).ok()?;
+        Some(Witness::P2wpkh { key, signature })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -67,6 +104,7 @@ impl Offer {
         };
         let mut ciphertext = crate::encode::serialize(&payload);
         cipher.apply_keystream(&mut ciphertext);
+
         EncryptedOffer {
             public_key: self.public_key,
             ciphertext,
@@ -83,9 +121,21 @@ pub struct EncryptedOffer {
     pub public_key: Point<EvenY>,
     pub ciphertext: Vec<u8>,
 }
+
 impl EncryptedOffer {
     pub fn to_string(&self) -> String {
         crate::encode::serialize_base2048(self)
+    }
+
+    pub fn to_string_padded(&self, pad_to: usize, pad_cipher: &mut impl StreamCipher) -> String {
+        let mut bytes = crate::encode::serialize(self);
+        if bytes.len() < pad_to {
+            let mut padding = vec![0u8; pad_to - bytes.len()];
+            pad_cipher.apply_keystream(&mut padding);
+            bytes.append(&mut padding);
+        }
+
+        base2048::encode(&bytes)
     }
 
     pub fn decrypt(self, cipher: &mut impl StreamCipher) -> anyhow::Result<Offer> {
@@ -122,7 +172,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
         let remote_public_key = &proposal.public_key;
         let event_id = &oracle_event.event.id;
-        if !event_id.is_binary() {
+        if !event_id.n_outcomes() == 2 {
             return Err(anyhow!(
                 "Cannot make a bet on {} since it isn't binary",
                 event_id
@@ -241,11 +291,10 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
                 input
                     .final_script_witness
                     .clone()
-                    .map(|witness| -> SignedInput {
-                        SignedInput {
-                            outpoint: txin.previous_output,
-                            witness,
-                        }
+                    .map(|witness| SignedInput {
+                        outpoint: txin.previous_output,
+                        witness: Witness::decode_p2wpkh(witness)
+                            .expect("we signed it so it must be p2wpkh"),
                     })
             })
             .collect();
@@ -284,13 +333,107 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         &self,
         bet: Bet,
         offer: Offer,
-        mut cipher: impl StreamCipher,
+        cipher: &mut impl StreamCipher,
     ) -> anyhow::Result<(BetId, EncryptedOffer)> {
-        let encrypted_offer = offer.encrypt(&mut cipher);
+        let encrypted_offer = offer.encrypt(cipher);
         let bet_id = self.bet_db.insert_bet(BetState::Offered {
             bet,
             encrypted_offer: encrypted_offer.clone(),
         })?;
         Ok((bet_id, encrypted_offer))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use bdk::bitcoin::{Address, OutPoint};
+    use chacha20::{cipher::NewCipher, ChaCha20};
+
+    use super::*;
+    use crate::keychain::KeyPair;
+
+    fn test_offer() -> Offer {
+        let offer_keypair = KeyPair::from_slice(&[42u8; 32]).unwrap();
+        Offer {
+            public_key: offer_keypair.public_key,
+            inputs: vec![
+                SignedInput {
+                    outpoint: OutPoint::default(),
+                    witness: Witness::P2wpkh {
+                        key: Point::random(&mut rand::thread_rng()).into(),
+                        signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+                    },
+                },
+                SignedInput {
+                    outpoint: OutPoint::default(),
+                    witness: Witness::P2wpkh {
+                        key: Point::random(&mut rand::thread_rng()).into(),
+                        signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+                    },
+                },
+            ],
+            change: None,
+            choose_right: false,
+            value: Amount::from_str_with_denomination("1 BTC").unwrap(),
+        }
+    }
+
+    #[test]
+    pub fn encrypt_decrypt_roundtrip() {
+        let offer = test_offer();
+        let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+        let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+
+        let encrypted_offer = offer.clone().encrypt(&mut cipher1);
+
+        let decrypted_offer = encrypted_offer.decrypt(&mut cipher2).unwrap();
+
+        assert_eq!(decrypted_offer, offer);
+    }
+
+    #[test]
+    pub fn encrypt_decrypt_padded_offer_of_different_sizes() {
+        let offer = test_offer();
+        let encrypted_offer1 = {
+            let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+            let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+
+            let encrypted_offer = offer.clone().encrypt(&mut cipher1);
+            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let decrypted_offer = EncryptedOffer::from_str(&enc_string_offer)
+                .unwrap()
+                .decrypt(&mut cipher2)
+                .unwrap();
+
+            assert_eq!(decrypted_offer, offer);
+            enc_string_offer
+        };
+
+        let encrypted_offer2 = {
+            let mut cipher1 = ChaCha20::new(&[3u8; 32].into(), &[2u8; 12].into());
+            let mut cipher2 = ChaCha20::new(&[3u8; 32].into(), &[2u8; 12].into());
+
+            let mut offer = offer.clone();
+            offer.change = Some(Change::new(
+                5_000,
+                Address::from_str("bc1qwxhv5aqc6xahxedh7m2wm333lgkjpmllz4j248")
+                    .unwrap()
+                    .script_pubkey(),
+            ));
+            let encrypted_offer = offer.clone().encrypt(&mut cipher1);
+            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let decrypted_offer = EncryptedOffer::from_str(&enc_string_offer)
+                .unwrap()
+                .decrypt(&mut cipher2)
+                .unwrap();
+
+            assert_eq!(decrypted_offer, offer);
+            enc_string_offer
+        };
+
+        assert_eq!(
+            encrypted_offer1.chars().count(),
+            encrypted_offer2.chars().count(),
+        );
     }
 }

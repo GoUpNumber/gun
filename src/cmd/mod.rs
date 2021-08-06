@@ -23,14 +23,14 @@ pub use wallet::*;
 
 use crate::{
     bet_database::BetDatabase, chrono::NaiveDateTime, config::Config, keychain::Keychain,
-    party::Party, FeeSpec, ValueChoice,
+    party::Party, psbt_ext::PsbtFeeRate, FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
 use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Clone, Debug, structopt::StructOpt)]
 pub struct BetArgs {
-    /// The value you want to risk on the bet
+    /// The value you want to risk on the bet e.g all, 0.05BTC
     pub value: ValueChoice,
 }
 
@@ -103,7 +103,7 @@ pub fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
     Ok(bet_db)
 }
 
-fn load_party(
+pub fn load_party(
     wallet_dir: &PathBuf,
 ) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
     let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
@@ -425,19 +425,14 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
             format_amount(Amount::from_sat(txout.value)),
         ]));
     }
-    let input_value: u64 = psbt
-        .inputs
-        .iter()
-        .map(|x| x.witness_utxo.as_ref().map(|x| x.value).unwrap_or(0))
-        .sum();
-    let output_value: u64 = psbt.global.unsigned_tx.output.iter().map(|x| x.value).sum();
-    let fee = input_value - output_value;
-    let feerate = fee as f32 / (psbt.clone().extract_tx().get_weight() as f32 / 4.0);
+
+    let (fee, feerate) = psbt.fee();
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{} (rate)", &feerate),
-        &format_amount(Amount::from_sat(fee)),
+        &format!("{} (rate s/vb)", feerate.as_sat_vb()),
+        &format_amount(fee),
     ]));
+
     table.render()
 }
 
@@ -451,7 +446,7 @@ pub fn decide_to_broadcast(
     use crate::item;
     if yes
         || read_answer(format!(
-            "Is this transaction ok?\n{}",
+            "This is the transaction taht will be broadcast. Ok?\n{}",
             display_psbt(network, &psbt)
         ))
     {

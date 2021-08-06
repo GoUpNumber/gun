@@ -67,7 +67,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
                 .outpoint_to_psbt_input(input.outpoint)
                 .context("Failed to find proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
-            psbt_input.final_script_witness = Some(input.witness.clone());
+            psbt_input.final_script_witness = Some(input.witness.encode());
             psbt_inputs.push(psbt_input);
         }
 

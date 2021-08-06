@@ -52,14 +52,22 @@ fn main() -> anyhow::Result<()> {
         default_dir
     });
 
-    if sync && !matches!(opt.command, Commands::Bet(_)) {
-        let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;
-        eprintln!("syncing wallet with {:?}", config.blockchain);
-        wallet.sync(bdk::blockchain::noop_progress(), None)?;
+    if sync {
+        use Commands::*;
+        if let Balance | Bet(_) = opt.command {
+            let party = cmd::load_party(&wallet_dir)?;
+            cmd::poke_bets(&party);
+        }
+
+        if let Balance | Address(_) | Send(_) | Tx(_) | Utxo(_) = opt.command {
+            let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;
+            eprintln!("syncing wallet with {:?}", config.blockchain);
+            wallet.sync(bdk::blockchain::noop_progress(), None)?;
+        }
     }
 
     let res = match opt.command {
-        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt, sync),
+        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt),
         Commands::Balance => cmd::run_balance(wallet_dir),
         Commands::Address(opt) => cmd::get_address(&wallet_dir, opt),
         Commands::Send(opt) => cmd::run_send(&wallet_dir, opt),
