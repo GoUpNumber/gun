@@ -451,14 +451,12 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
             BetOrProp::Proposal(local_proposal) => rows.push(vec![
                 Cell::Int(bet_id.into()),
                 Cell::String(name),
-                Cell::String(
-                    local_proposal
-                        .oracle_event
-                        .event
-                        .expected_outcome_time
-                        .map(|x| format!("{}", x))
-                        .unwrap_or("-".into()),
-                ),
+                local_proposal
+                    .oracle_event
+                    .event
+                    .expected_outcome_time
+                    .map(Cell::datetime)
+                    .unwrap_or(Cell::Empty),
                 Cell::String(
                     local_proposal
                         .oracle_event
@@ -478,13 +476,11 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
             BetOrProp::Bet(bet) => rows.push(vec![
                 Cell::Int(bet_id.into()),
                 Cell::String(name),
-                Cell::String(
-                    bet.oracle_event
-                        .event
-                        .expected_outcome_time
-                        .map(|x| format!("{}", x))
-                        .unwrap_or("-".into()),
-                ),
+                bet.oracle_event
+                   .event
+                   .expected_outcome_time
+                   .map(Cell::datetime)
+                   .unwrap_or(Cell::Empty),
                 Cell::String(
                     bet.oracle_event
                         .event
