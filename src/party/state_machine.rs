@@ -60,8 +60,7 @@ where
             .ok_or(anyhow!("Bet {} does not exist"))?;
 
         match bet_state {
-            BetState::Won { .. }
-            | BetState::Claimed { .. }
+            BetState::Claimed { .. }
             | BetState::Cancelled { .. }
             | BetState::Lost { .. } => {}
             BetState::Cancelling { bet_or_prop, .. } => {
@@ -156,12 +155,23 @@ where
                     self.try_get_outcome(bet_id, bet)?;
                 }
             }
+            BetState::Won { bet, .. } => {
+                // It should never happen that you go from "Won" to "Claimed" without going through
+                // claiming but just in case someone steals your keys somehow we handle it.
+                if let Some(tx_that_claimed) = self.get_spending_tx(bet.outpoint(), bet.joint_output.wallet_descriptor())? {
+                    update_bet! {
+                        self, bet_id,
+                        BetState::Won { bet, .. } => BetState::Claimed { bet, expecting: None, txid: tx_that_claimed }
+                    }
+                }
+            },
             BetState::Claiming { bet, .. } => {
                 if let Some(tx_that_claimed) =
                     self.get_spending_tx(bet.outpoint(), bet.joint_output.wallet_descriptor())?
                 {
-                    update_bet! { self, bet_id,
-                                 BetState::Claiming { bet, claim_txid, .. } => BetState::Claimed { bet, expecting: Some(claim_txid), txid: tx_that_claimed  }
+                    update_bet! {
+                        self, bet_id,
+                        BetState::Claiming { bet, claim_txid, .. } => BetState::Claimed { bet, expecting: Some(claim_txid), txid: tx_that_claimed  }
                     }
                 }
             }
