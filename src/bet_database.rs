@@ -21,7 +21,7 @@ pub type BetId = u32;
 pub enum MapKey {
     BetId,
     OracleInfo(OracleId),
-    Bet(u32),
+    Bet(BetId),
     ClaimTx(Txid),
 }
 

@@ -110,7 +110,7 @@ pub enum BetOpt {
     },
     /// Delete all memory of the bet.
     ///
-    /// Be careful when using this.
+    /// Think carefully before using on unfinished bets. It's usually better to use cancel.
     Forget { bet_ids: Vec<BetId> },
     /// Edit list of trusted oracles
     Oracle(crate::cmd::OracleOpt),
@@ -313,14 +313,33 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
         }
         BetOpt::Forget { bet_ids } => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
-            let mut removed = vec![];
-            for bet_id in bet_ids.iter() {
-                if bet_db.remove_entity::<BetState>(*bet_id)?.is_some() {
-                    removed.push(bet_id);
+            let mut to_remove = vec![];
+            for bet_id in bet_ids {
+                match bet_db.get_entity::<BetState>(bet_id) {
+                    Ok(Some(bet_state)) => match bet_state {
+                        BetState::Proposed { .. } => if cmd::read_answer(format!("You should only forget a proposal if you are sure that no one has or will make an offer to it.\nAre you sure you want to forget bet {}", bet_id)) {
+                            to_remove.push(bet_id);
+                        },
+                        BetState::Offered { .. } => if cmd::read_answer(format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}?", bet_id)) {
+                            to_remove.push(bet_id);
+                        },
+                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } => eprintln!("You may not forget bet {} because it is in the {} state", bet_id, bet_state.name()),
+                        _ => to_remove.push(bet_id),
+                    },
+                    Ok(None) => eprintln!("Bet {} doesn't exist", bet_id),
+                    Err(_) => {
+                        eprintln!("Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", bet_id);
+                        to_remove.push(bet_id);
+                    }
                 }
             }
+
+            for bet_id in &to_remove {
+                let _ = bet_db.remove_entity::<BetState>(*bet_id);
+            }
+
             Ok(CmdOutput::List(
-                removed.into_iter().map(|x| Cell::string(x)).collect(),
+                to_remove.into_iter().map(|x| Cell::string(x)).collect(),
             ))
         }
         BetOpt::Show { bet_id, raw } => {
@@ -477,10 +496,10 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 Cell::Int(bet_id.into()),
                 Cell::String(name),
                 bet.oracle_event
-                   .event
-                   .expected_outcome_time
-                   .map(Cell::datetime)
-                   .unwrap_or(Cell::Empty),
+                    .event
+                    .expected_outcome_time
+                    .map(Cell::datetime)
+                    .unwrap_or(Cell::Empty),
                 Cell::String(
                     bet.oracle_event
                         .event
