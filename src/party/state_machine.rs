@@ -25,8 +25,6 @@ where
     fn check_cancelled(&self, inputs: &[OutPoint]) -> anyhow::Result<Option<CancelReason>> {
         for input in inputs {
             if !self.wallet.client().utxo_exists(*input)? {
-                //TOOD: only sync one address
-                self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
                 let tx = self.wallet.list_transactions(true)?.into_iter().find(|tx| {
                     tx.transaction
                         .as_ref()

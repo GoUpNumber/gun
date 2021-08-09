@@ -53,7 +53,7 @@ pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<Cmd
 
                     println!("{}", serde_json::to_string_pretty(&oracle_info).unwrap());
 
-                    if yes || cmd::read_answer(format!("Trust the oracle displayed above")) {
+                    if yes || cmd::read_answer(&format!("Trust the oracle displayed above")) {
                         bet_db.insert_oracle_info(oracle_info.clone())?;
                     }
                 }

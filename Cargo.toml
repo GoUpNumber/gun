@@ -3,6 +3,7 @@ name = "gun_wallet"
 version = "0.1.0"
 authors = ["LLFourn <lloyd.fourn@gmail.com>"]
 edition = "2018"
+license = "0BSD"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

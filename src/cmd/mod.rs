@@ -70,7 +70,7 @@ pub fn load_config(wallet_dir: &PathBuf) -> anyhow::Result<Config> {
     }
 }
 
-pub fn read_answer(question: String) -> bool {
+pub fn read_answer(question: &str) -> bool {
     use std::io::{self, BufRead};
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -445,8 +445,8 @@ pub fn decide_to_broadcast(
 ) -> anyhow::Result<(CmdOutput, Option<Txid>)> {
     use crate::item;
     if yes
-        || read_answer(format!(
-            "This is the transaction taht will be broadcast. Ok?\n{}",
+        || read_answer(&format!(
+            "This is the transaction that will be broadcast. Ok?\n{}",
             display_psbt(network, &psbt)
         ))
     {

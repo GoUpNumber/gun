@@ -358,7 +358,9 @@ pub enum UtxoOpt {
 pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
     match opt {
         UtxoOpt::List => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
+            let party = load_party(&wallet_dir)?;
+            let in_use_utxos = party.bet_db().currently_used_utxos(&[])?;
+            let wallet = party.wallet();
             let rows = wallet
                 .list_unspent()?
                 .into_iter()
@@ -367,32 +369,38 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
                         .query_db(|db| db.get_tx(&utxo.outpoint.txid, false))
                         .unwrap_or(None);
                     vec![
-                        Cell::String(utxo.outpoint.to_string()),
+                        Cell::string(utxo.outpoint),
                         Address::from_script(&utxo.txout.script_pubkey, wallet.network())
                             .map(|address| Cell::String(address.to_string()))
                             .unwrap_or(Cell::Empty),
                         Cell::Amount(Amount::from_sat(utxo.txout.value)),
-                        Cell::String(
-                            match utxo.keychain {
-                                KeychainKind::Internal => "internal",
-                                KeychainKind::External => "external",
-                            }
-                            .into(),
-                        ),
+                        Cell::string(match utxo.keychain {
+                            KeychainKind::Internal => "internal",
+                            KeychainKind::External => "external",
+                        }),
                         tx.map(|tx| Cell::String(tx.confirmation_time.is_some().to_string()))
                             .unwrap_or(Cell::Empty),
+                        Cell::string(in_use_utxos.contains(&utxo.outpoint)),
                     ]
                 })
                 .collect();
 
             // TODO: list won bet utxos
             Ok(CmdOutput::table(
-                vec!["outpoint", "address", "value", "keychain", "confirmed"],
+                vec![
+                    "outpoint",
+                    "address",
+                    "value",
+                    "keychain",
+                    "confirmed",
+                    "in-use",
+                ],
                 rows,
             ))
         }
         UtxoOpt::Show { outpoint } => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
+            let party = load_party(wallet_dir)?;
+            let wallet = party.wallet();
             let utxo = wallet
                 .query_db(|db| db.get_utxo(&outpoint))?
                 .ok_or(anyhow!("UTXO {} not in wallet database", outpoint))?;
@@ -418,6 +426,10 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
                 .get_descriptor_for_script_pubkey(&script_pubkey)?
                 .map(|desc| Cell::String(desc.to_string()))
                 .unwrap_or(Cell::Empty);
+            let in_use = party
+                .bet_db()
+                .currently_used_utxos(&[])?
+                .contains(&utxo.outpoint);
 
             // TODO: show utxos that are associated with won bets
             Ok(item! {
@@ -434,6 +446,7 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
                     KeychainKind::External => "external",
                     KeychainKind::Internal => "internal",
                 }.into()),
+                "in-use" => Cell::string(in_use),
             })
         }
     }

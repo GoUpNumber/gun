@@ -244,24 +244,36 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             ))?;
 
         if !proposal_excess.is_dust() {
-            let change_script = proposal.change_script.ok_or(anyhow!(
+            let change_script = proposal.change_script.as_ref().ok_or(anyhow!(
                 "proposal had excess coins but did not provide change address"
             ))?;
-            builder.add_recipient(change_script.into(), proposal_excess);
+            builder.add_recipient(change_script.clone().into(), proposal_excess);
         }
 
         let (mut psbt, _tx_details) = builder
             .finish()
             .context("Unable to create offer transaction")?;
 
+        // the inputs we own have witnesses
+        let my_input_indexes = psbt
+            .global
+            .unsigned_tx
+            .input
+            .iter()
+            .enumerate()
+            .filter(|(_, input)| !proposal.inputs.contains(&input.previous_output))
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+
         let is_final = self
             .wallet
             .sign(&mut psbt, SignOptions::default())
             .context("Unable to sign offer transaction")?;
-        assert!(
-            !is_final,
-            "we haven't got the other party's signature so it can't be final here"
-        );
+
+        if is_final {
+            // the only reason it would be final is that the wallet is doing a bet with itself
+            return Err(anyhow!("sorry you can't do bets with yourself yet!"));
+        }
 
         let (vout, txout) = psbt
             .global
@@ -270,32 +282,27 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .iter()
             .enumerate()
             .find(|(_i, txout)| &txout.script_pubkey == &output_script)
-            .expect("The output must be in there");
+            .expect("The bet output must be in there");
 
         let joint_output_value = Amount::from_sat(txout.value);
         let local_value = joint_output_value - proposal.value;
 
-        // the inputs we own have witnesses
-        let my_input_indexes = psbt
-            .inputs
+        let signed_inputs: Vec<SignedInput> = my_input_indexes
             .iter()
-            .enumerate()
-            .filter_map(|(i, input)| input.final_script_witness.as_ref().map(|_| i))
-            .collect::<Vec<_>>();
-
-        let signed_inputs: Vec<SignedInput> = psbt
-            .inputs
-            .iter()
-            .zip(psbt.global.unsigned_tx.input.iter())
-            .filter_map(|(input, txin)| {
-                input
+            .cloned()
+            .map(|i| {
+                let txin = &psbt.global.unsigned_tx.input[i];
+                let psbt_input = &psbt.inputs[i];
+                let witness = psbt_input
                     .final_script_witness
                     .clone()
-                    .map(|witness| SignedInput {
-                        outpoint: txin.previous_output,
-                        witness: Witness::decode_p2wpkh(witness)
-                            .expect("we signed it so it must be p2wpkh"),
-                    })
+                    .expect("we added this input so we should have signed it");
+
+                SignedInput {
+                    outpoint: txin.previous_output,
+                    witness: Witness::decode_p2wpkh(witness)
+                        .expect("we signed it so it must be p2wpkh"),
+                }
             })
             .collect();
 

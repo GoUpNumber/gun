@@ -25,7 +25,9 @@ use bdk::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
         OutPoint, Txid,
     },
-    blockchain::{AnyBlockchain, AnyBlockchainConfig, Blockchain, ConfigurableBlockchain},
+    blockchain::{
+        noop_progress, AnyBlockchain, AnyBlockchainConfig, Blockchain, ConfigurableBlockchain,
+    },
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
     wallet::{AddressIndex, Wallet},
@@ -151,7 +153,6 @@ where
         bet_ids: &[BetId],
         feespec: FeeSpec,
     ) -> anyhow::Result<Option<Psbt>> {
-        self.wallet.sync(bdk::blockchain::noop_progress(), None)?;
         let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
 
         for bet_id in bet_ids {
@@ -352,5 +353,21 @@ where
             .find(|utxo| utxo.outpoint == outpoint)
             .is_none());
         res
+    }
+
+    // convenience methods
+    pub fn sync(&self) -> anyhow::Result<()> {
+        eprintln!("syncing wallet with {:?}", self.blockchain_config);
+        self.wallet.sync(noop_progress(), None)?;
+        Ok(())
+    }
+
+    pub fn poke_bets(&self) {
+        for (bet_id, _) in self.bet_db().list_entities_print_error::<BetState>() {
+            match self.take_next_action(bet_id, true) {
+                Ok(_updated) => {}
+                Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),
+            }
+        }
     }
 }

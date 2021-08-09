@@ -2,13 +2,14 @@ use super::{run_oralce_cmd, Cell};
 use crate::{
     bet::Bet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
-    cmd, item,
-    party::{EncryptedOffer, Offer, Party, Proposal, VersionedProposal},
+    cmd::{self, read_answer},
+    item,
+    party::{EncryptedOffer, Offer, Proposal, VersionedProposal},
     psbt_ext::PsbtFeeRate,
     FeeSpec, Url,
 };
 use anyhow::*;
-use bdk::{bitcoin::Script, blockchain::EsploraBlockchain, database::BatchDatabase};
+use bdk::bitcoin::Script;
 use cmd::CmdOutput;
 use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
 use std::{path::PathBuf, str::FromStr};
@@ -23,15 +24,18 @@ pub enum BetOpt {
         args: cmd::BetArgs,
         /// the HTTP url for the event
         event_url: Url,
+        /// Print the proposal without asking
+        #[structopt(long, short)]
+        yes: bool,
     },
     /// Make an offer to a proposal
     Offer {
         #[structopt(flatten)]
         args: cmd::BetArgs,
-        /// The propsal string
-        proposal: VersionedProposal,
         /// The outcome to choose
         choice: String,
+        /// The propsal string
+        proposal: VersionedProposal,
         /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
         /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
         #[structopt(default_value, long)]
@@ -95,10 +99,11 @@ pub enum BetOpt {
     },
     /// Cancel a bet
     Cancel {
-        /// The bet to cancel
+        /// The bets to cancel.
         bet_ids: Vec<BetId>,
         /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
         /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
+        #[structopt(long, default_value)]
         fee: FeeSpec,
         /// Don't prompt for answers just say yes
         #[structopt(short, long)]
@@ -133,9 +138,24 @@ pub enum InspectOpt {
     },
 }
 
-pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::CmdOutput> {
+pub fn run_bet_cmd(
+    wallet_dir: &PathBuf,
+    cmd: BetOpt,
+    sync: bool,
+) -> anyhow::Result<cmd::CmdOutput> {
+    // For now just always do this but we may want to do something more fine grained later.
+    if sync {
+        let party = cmd::load_party(wallet_dir)?;
+        party.sync()?;
+        party.poke_bets();
+    }
+
     match cmd {
-        BetOpt::Propose { args, event_url } => {
+        BetOpt::Propose {
+            args,
+            event_url,
+            yes,
+        } => {
             let party = cmd::load_party(wallet_dir)?;
             let oracle_id = event_url.host_str().unwrap().to_string();
             let now = Utc::now().naive_utc();
@@ -145,6 +165,10 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
                 return Err(anyhow!("{} already attested", oracle_event.event.id));
             }
 
+            let mut question = format!(
+                "You are proposing a bet on the {}.",
+                olivia_describe::event_id_short(&oracle_event.event.id)
+            );
             if let Some(expected_outcome_time) = oracle_event.event.expected_outcome_time {
                 if expected_outcome_time <= now {
                     return Err(anyhow!(
@@ -154,10 +178,21 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
                         now
                     ));
                 }
+                question += &format!(
+                    "\nThe outcome is expected to be known at {} UTC (in {}).",
+                    expected_outcome_time,
+                    crate::format_dt_diff_till_now(expected_outcome_time)
+                );
             }
-            let (_bet_id, proposal) = party.make_proposal(oracle_id, oracle_event, args.into())?;
-            eprintln!("post your proposal and let people make offers to it:");
-            Ok(item! { "proposal" => Cell::String(proposal.into_versioned().to_string()) })
+            question += " Ok?";
+            if yes || read_answer(&question) {
+                let (_bet_id, proposal) =
+                    party.make_proposal(oracle_id, oracle_event, args.into())?;
+                eprintln!("post your proposal and let people make offers to it:");
+                Ok(item! { "proposal" => Cell::String(proposal.into_versioned().to_string()) })
+            } else {
+                Ok(CmdOutput::None)
+            }
         }
         BetOpt::Offer {
             args,
@@ -224,7 +259,7 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
                 fee,
             )?;
 
-            if yes || cmd::read_answer(bet_prompt(&bet)) {
+            if yes || cmd::read_answer(&bet_prompt(&bet)) {
                 let (_, encrypted_offer) = party.save_and_encrypt_offer(bet, offer, &mut cipher)?;
                 eprintln!("Post this offer in reponse to the proposal");
                 Ok(
@@ -243,7 +278,7 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
             let party = cmd::load_party(wallet_dir)?;
             let validated_offer = party.decrypt_and_validate_offer(id, encrypted_offer)?;
 
-            if yes || cmd::read_answer(bet_prompt(&validated_offer.bet)) {
+            if yes || cmd::read_answer(&bet_prompt(&validated_offer.bet)) {
                 let (output, txid) = cmd::decide_to_broadcast(
                     party.wallet().network(),
                     party.wallet().client(),
@@ -317,16 +352,16 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
             for bet_id in bet_ids {
                 match bet_db.get_entity::<BetState>(bet_id) {
                     Ok(Some(bet_state)) => match bet_state {
-                        BetState::Proposed { .. } => if cmd::read_answer(format!("You should only forget a proposal if you are sure that no one has or will make an offer to it.\nAre you sure you want to forget bet {}", bet_id)) {
+                        BetState::Proposed { .. } => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", bet_id)) {
                             to_remove.push(bet_id);
                         },
-                        BetState::Offered { .. } => if cmd::read_answer(format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}?", bet_id)) {
+                        BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", bet_id)) {
                             to_remove.push(bet_id);
                         },
-                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } => eprintln!("You may not forget bet {} because it is in the {} state", bet_id, bet_state.name()),
+                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } | BetState::Confirmed { .. } | BetState::Unconfirmed { .. } => return Err(anyhow!("You may not forget bet {} because it is in the {} state", bet_id, bet_state.name())),
                         _ => to_remove.push(bet_id),
                     },
-                    Ok(None) => eprintln!("Bet {} doesn't exist", bet_id),
+                    Ok(None) => return Err(anyhow!("Bet {} doesn't exist", bet_id)),
                     Err(_) => {
                         eprintln!("Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", bet_id);
                         to_remove.push(bet_id);
@@ -369,7 +404,7 @@ pub fn run_bet_cmd(wallet_dir: &PathBuf, cmd: BetOpt) -> anyhow::Result<cmd::Cmd
                     "state" => Cell::string(name),
                     "risk" => Cell::Amount(bet.local_value),
                     "reward" => Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
-                    "I-bet" => Cell::String(Outcome { id: bet.oracle_event.event.id.clone(), value: bet.i_chose_right as u64 }.outcome_string()),
+                    "i-bet" => Cell::String(Outcome { id: bet.oracle_event.event.id.clone(), value: bet.i_chose_right as u64 }.outcome_string()),
                     "event-id" => Cell::string(&bet.oracle_event.event.id),
                     "oracle" => Cell::string(&bet.oracle_id),
                     "outcome-time" => bet.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
@@ -533,15 +568,6 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
     )
 }
 
-pub fn poke_bets<D: BatchDatabase>(party: &Party<EsploraBlockchain, D>) {
-    for (bet_id, _) in party.bet_db().list_entities_print_error::<BetState>() {
-        match party.take_next_action(bet_id, true) {
-            Ok(_updated) => {}
-            Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),
-        }
-    }
-}
-
 fn get_oracle_event_from_url(
     bet_db: &BetDatabase,
     url: Url,
@@ -549,8 +575,15 @@ fn get_oracle_event_from_url(
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
 
     let event_response = reqwest::blocking::get(url.clone())?
-        .error_for_status()?
-        .json::<olivia_core::http::EventResponse<olivia_secp256k1::Secp256k1>>()?;
+        .error_for_status()
+        .with_context(|| format!("while getting {}", url))?
+        .json::<olivia_core::http::EventResponse<olivia_secp256k1::Secp256k1>>()
+        .with_context(|| {
+            format!(
+                "while decoding the response from {}. Are you sure this is a valid event url?",
+                url
+            )
+        })?;
 
     let oracle_info = bet_db
         .get_entity::<crate::OracleInfo>(oracle_id.to_string())?
