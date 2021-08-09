@@ -20,20 +20,20 @@ jobs:
           command: fmt
           args: --all -- --check
 
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        toolchain: [
-           { rust: "stable", args: "" },
-           { rust: "nightly", args: "--features=nightly" }
-        ]
-    steps:
-      - uses: actions/@checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ matrix.toolchain.rust }}
-          override: true
-          profile: minimal
-      - uses: Swatinem/rust-cache@v1.2.0
-      - run: cargo test ${{ matrix.toolchain.args }} --release --verbose
+  # test:
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     matrix:
+  #       toolchain: [
+  #          { rust: "stable", args: "" },
+  #          { rust: "nightly", args: "--features=nightly" }
+  #       ]
+  #   steps:
+  #     - uses: actions/@checkout@v2
+  #     - uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: ${{ matrix.toolchain.rust }}
+  #         override: true
+  #         profile: minimal
+  #     - uses: Swatinem/rust-cache@v1.2.0
+  #     - run: cargo test ${{ matrix.toolchain.args }} --release --verbose
