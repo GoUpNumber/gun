@@ -1,7 +1,7 @@
 # Go Up Number! &emsp; [![actions_badge]][actions_url]
 
-[actions_badge]: https://github.com/llfourn/gun/workflows/test/badge.svg
-[actions_url]: https://github.com/llfourn/gun/actions?query=workflow%3Atest
+[actions_badge]: https://github.com/llfourn/gun/workflows/Tests/badge.svg
+[actions_url]: https://github.com/llfourn/gun/actions?query=workflow%3ATests
 
 
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
