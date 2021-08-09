@@ -1,4 +1,8 @@
-# Go Up Number!
+# Go Up Number! &emsp; [![actions_badge]][actions_url]
+
+[actions_badge]: https://github.com/llfourn/gun/workflows/test/badge.svg
+[actions_url]: https://github.com/llfourn/gun/actions?query=workflow%3Atest
+
 
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
 Its distinguishing features is the ability to do [peer-to-peer betting](./docs/bet.md).
