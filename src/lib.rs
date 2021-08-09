@@ -1,5 +1,4 @@
 #![allow(non_snake_case)]
-#![feature(string_remove_matches)]
 
 use std::str::FromStr;
 

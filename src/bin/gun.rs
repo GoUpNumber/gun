@@ -1,5 +1,3 @@
-#![feature(backtrace)]
-
 use gun_wallet::cmd::{self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, TransactionOpt, UtxoOpt};
 use std::path::PathBuf;
 use structopt::StructOpt;
