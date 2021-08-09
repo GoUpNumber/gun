@@ -11,9 +11,9 @@ Its distinguishing features is the ability to do [peer-to-peer betting](./docs/b
 
 The wallet is alpha quality.
 It is buggy and is missing features.
-The underlying wallet functionality is built with the [Bitcoin Dev Kit](bitcoindevkit.org) but the betting functionality is freshly engineered.
+The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](bitcoindevkit.org) but the betting functionality is freshly engineered.
 Only put into it what you are willing to lose.
-Thanks for testing this for me and thank you in advance for any coins you sacrafice on the way.
+Thanks for testing this for me and thank you in advance for any coins you sacrafice along the way.
 
 ## Install
 
@@ -48,25 +48,12 @@ Note that `gun` uses standard [BIP84] derivation
 gun address new
 ```
 
-### Send coins
-
-
-``` sh
-gun send <address> 0.1BTC
-```
-
-Send all coins in your wallet
-
-``` sh
-gun send <address> all
-```
-
 ### Check balance
 
 Check your wallet's balance:
 
 ``` sh
-gun -s balance
+gun balance
 ```
 
 Check your wallet's balance but sync before:
@@ -76,5 +63,17 @@ gun -s balance
 ```
 
 Before any command you can put `-s` before it to tell the wallet it should sync with the blockchain before continuing.
+
+### Send coins
+
+``` sh
+gun send 0.1BTC <address>
+```
+
+Send all coins in your wallet
+
+``` sh
+gun send all <address>
+```
 
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
