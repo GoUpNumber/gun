@@ -245,7 +245,7 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
 
     fee.apply_to_builder(party.wallet().client(), &mut builder)?;
 
-    let (mut psbt, claiming_bet_ids) = if no_spend_unclaimed {
+    let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
         party
             .spend_won_bets(builder, bump_claiming)?
             .expect("Won't be None since builder we pass in is not manually_selected_only")
