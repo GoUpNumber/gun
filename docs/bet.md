@@ -39,7 +39,7 @@ The [base2048] encoded gibberish contains a public key, your inputs for the bet 
 
 ###  Or Make an offer
 
-Given the above proposal we can make an offer to it:
+Given the above proposal we can make an offer to it. Let's bet on the `heads` outcome. Note you can see the list of outcomes at https://outcome.observer/h00.ooo/random/2021-08-11T04:29:00/heads_tails.winner (but you can guess them from the event url as well).
 
 ```sh
 gun bet offer 0.01BTC heads 📣0.01#h00.ooo#/random/2021-08-09T06:00:00/heads_tails.winner#őŹഥφટȆൠၮஊܣලজݹԩଘѹɲВअۏɵଣȦƍߌźശཝōధಬޑՄҌଧڵѕდŲળມɱϾफრതܚຽےƍۂʌಠఔೲཪయબঋŗԇٴଳऑסњ༎
