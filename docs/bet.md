@@ -10,7 +10,8 @@ The idea and protocol are described in *[How to Make a Prediction Market on Twit
 
 ### Add an oracle
 
-First you need to add the oracle you are going to use to your list of trusted oracles. [`h00.ooo`](https://h00.ooo) is the oracle I've set up for this experiment.
+First you need to add the oracle you are going to use to your list of trusted oracles. [`h00.ooo`](https://h00.ooo) is the oracle I've set up for this experiment. 
+You can explore it at https://outcome.observer/h00.ooo
 
 ```sh
 gun bet oracle add h00.ooo
@@ -129,8 +130,7 @@ The downside is that this means the party making the offer will have to manually
 
 ### What if the oracle doesn't attest to the outcome after we've made a bet
 
-In the future you should be able to jointly close the bet with your counterparty but that's not possible yet.
-
+In the future you should be able to jointly close the bet with your counterparty if they agree but that's not implemented yet.
 
 ### Are there any attacks against this?
 
@@ -139,14 +139,13 @@ The obvious attack is to make a bet confirm only after you know the outcome and 
 To avoid this make sure:
 
 1. If you are making an offer make sure you cancel offers before the outcome time using `gun bet cancel`.
-2. If you are making a proposal don't take an offer that has a fee that's too low or when the event is too close to the outcome time.
+2. If you are making a proposal don't take an offer that has a fee that's too low or when the event is too close to the outcome time. Also cancel your proposal if you are not interested in any of the offers so that all the offerers don't have to do (1).
 
 ## Feeback
 
 This protocol and idea is experimental and I really need people's feedback to know which ways to develop it.
-Please open an issue if you have a question or find a problem.
-
+Please open an issue on github if you have a question or find a problem.
 
 [How to Make a Prediction Market on Twitter with Bitcoin]: https://raw.githubusercontent.com/LLFourn/two-round-dlc/master/main.pdf
-[outcome.observer](https://outcome.observer)
-[base2048](https://github.com/LLFourn/rust-base2048)
+[outcome.observer]: https://outcome.observer
+[base2048]: https://github.com/LLFourn/rust-base2048
