@@ -189,10 +189,8 @@ pub struct SendOpt {
     value: ValueChoice,
     /// The address to send the coins to
     to: Address,
-    /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
-    /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
-    #[structopt(default_value)]
-    fee: FeeSpec,
+    #[structopt(flatten)]
+    fee_args: cmd::FeeArgs,
     /// Allow spending utxos that are currently being used in a protocol (like a bet).
     #[structopt(long)]
     spend_in_use: bool,
@@ -214,7 +212,7 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
     let SendOpt {
         to,
         value,
-        fee,
+        fee_args,
         no_spend_unclaimed,
         bump_claiming,
         yes,
@@ -243,7 +241,9 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
         builder.unspendable(in_use);
     }
 
-    fee.apply_to_builder(party.wallet().client(), &mut builder)?;
+    fee_args
+        .fee
+        .apply_to_builder(party.wallet().client(), &mut builder)?;
 
     let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
         party
