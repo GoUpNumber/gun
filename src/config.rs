@@ -34,22 +34,22 @@ impl Config {
         let concurrency = Some(4);
         let blockchain = match network {
             Bitcoin => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
-                base_url: "https://blockstream.info/api".to_string(),
+                base_url: "https://mempool.space/api".to_string(),
                 concurrency,
                 stop_gap: 10,
-                kind: EsploraKind::Esplora,
+                kind: EsploraKind::Mempool,
             }),
             Testnet => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "https://blockstream.info/testnet/api".to_string(),
                 concurrency,
                 stop_gap: 10,
-                kind: EsploraKind::Esplora,
+                kind: EsploraKind::default(),
             }),
             Regtest => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "http://localhost:3000".to_string(),
                 concurrency,
                 stop_gap: 10,
-                kind: EsploraKind::Esplora,
+                kind: EsploraKind::default(),
             }),
             Signet => unimplemented!("signet not supported yet!"),
         };
