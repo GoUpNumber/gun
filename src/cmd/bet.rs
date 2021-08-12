@@ -6,7 +6,7 @@ use crate::{
     item,
     party::{EncryptedOffer, Offer, Proposal, VersionedProposal},
     psbt_ext::PsbtFeeRate,
-    FeeSpec, Url,
+    Url,
 };
 use anyhow::*;
 use bdk::bitcoin::Script;
@@ -36,16 +36,14 @@ pub enum BetOpt {
         choice: String,
         /// The propsal string
         proposal: VersionedProposal,
-        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
-        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
-        #[structopt(default_value, long)]
-        fee: FeeSpec,
         /// Make the offer without asking
         #[structopt(long, short)]
         yes: bool,
         /// Pad the encrypted offer to a certain number of bytes e.g. 385 for twitter
         #[structopt(long, short, default_value = "385")]
         pad: usize,
+        #[structopt(flatten)]
+        fee_args: cmd::FeeArgs,
     },
     /// Inspect an offer or proposal
     Inspect(InspectOpt),
@@ -73,10 +71,8 @@ pub enum BetOpt {
     /// Spends all "won" bets. Note that this is just shorthand for `gun send` where you send the
     /// coins back to your own wallet address.
     Claim {
-        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
-        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
-        #[structopt(long, default_value)]
-        fee: FeeSpec,
+        #[structopt(flatten)]
+        fee_args: cmd::FeeArgs,
         /// Also spend bets that are already in the "claiming" state replacing the previous
         /// transaction.
         #[structopt(long)]
@@ -101,10 +97,8 @@ pub enum BetOpt {
     Cancel {
         /// The bets to cancel.
         bet_ids: Vec<BetId>,
-        /// The transaction fee to attach e.g. spb:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
-        /// fee), in-blocks:3 (set fee so that it is included in the next three blocks)
-        #[structopt(long, default_value)]
-        fee: FeeSpec,
+        #[structopt(flatten)]
+        fee_args: cmd::FeeArgs,
         /// Don't prompt for answers just say yes
         #[structopt(short, long)]
         yes: bool,
@@ -198,7 +192,7 @@ pub fn run_bet_cmd(
             args,
             proposal,
             choice,
-            fee,
+            fee_args,
             yes,
             pad,
         } => {
@@ -256,7 +250,7 @@ pub fn run_bet_cmd(
                 oracle_event,
                 oracle_info,
                 args.into(),
-                fee,
+                fee_args.fee,
             )?;
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
@@ -295,14 +289,14 @@ pub fn run_bet_cmd(
             }
         }
         BetOpt::Claim {
-            fee,
+            fee_args,
             bump_claiming,
             print_tx,
             yes,
         } => {
             let party = cmd::load_party(wallet_dir)?;
             let wallet = party.wallet();
-            match party.claim(fee, bump_claiming)? {
+            match party.claim(fee_args.fee, bump_claiming)? {
                 Some((bet_ids, claim_psbt)) => {
                     let (output, txid) = cmd::decide_to_broadcast(
                         wallet.network(),
@@ -321,12 +315,12 @@ pub fn run_bet_cmd(
         }
         BetOpt::Cancel {
             bet_ids,
-            fee,
+            fee_args,
             yes,
             print_tx,
         } => {
             let party = cmd::load_party(wallet_dir)?;
-            Ok(match party.generate_cancel_tx(&bet_ids, fee)? {
+            Ok(match party.generate_cancel_tx(&bet_ids, fee_args.fee)? {
                 Some(psbt) => {
                     let (output, txid) = cmd::decide_to_broadcast(
                         party.wallet().network(),

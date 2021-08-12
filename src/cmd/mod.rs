@@ -43,6 +43,14 @@ impl From<BetArgs> for crate::party::BetArgs<'_, '_> {
     }
 }
 
+#[derive(Clone, Debug, structopt::StructOpt)]
+pub struct FeeArgs {
+    /// The transaction fee to attach e.g. rate:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
+    /// fee), in-blocks:3 (set fee so that it is included in the next three blocks).
+    #[structopt(default_value, long)]
+    fee: FeeSpec,
+}
+
 pub enum FeeChoice {
     /// Pay an absolute fee
     Absolute(Amount),
