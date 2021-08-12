@@ -1,6 +1,9 @@
 use bdk::{
     bitcoin::Network,
-    blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
+    blockchain::{
+        esplora::{EsploraBlockchainConfig, EsploraKind},
+        AnyBlockchainConfig,
+    },
 };
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -34,16 +37,19 @@ impl Config {
                 base_url: "https://blockstream.info/api".to_string(),
                 concurrency,
                 stop_gap: 10,
+                kind: EsploraKind::Esplora,
             }),
             Testnet => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "https://blockstream.info/testnet/api".to_string(),
                 concurrency,
                 stop_gap: 10,
+                kind: EsploraKind::Esplora,
             }),
             Regtest => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
                 base_url: "http://localhost:3000".to_string(),
                 concurrency,
                 stop_gap: 10,
+                kind: EsploraKind::Esplora,
             }),
             Signet => unimplemented!("signet not supported yet!"),
         };

@@ -2,8 +2,8 @@ use anyhow::Context;
 use bdk::{
     bitcoin::Network,
     blockchain::{
-        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Broadcast,
-        EsploraBlockchain,
+        esplora::{EsploraBlockchainConfig, EsploraKind},
+        noop_progress, AnyBlockchainConfig, Broadcast, EsploraBlockchain,
     },
     database::BatchDatabase,
     testutils::blockchain_tests::TestClient,
@@ -71,6 +71,7 @@ fn create_party(
             base_url: esplora_url,
             concurrency: None,
             stop_gap: 5,
+            kind: EsploraKind::Esplora,
         }),
     );
     Ok(party)
