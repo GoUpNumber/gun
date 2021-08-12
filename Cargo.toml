@@ -23,12 +23,9 @@ bincode = "1.3"
 anyhow = "1"
 thiserror = "1.0"
 structopt = "0.3"
-miniscript = { version = "5", features = ["serde"] }
+miniscript = { version = "6", features = ["serde"] }
 term-table = {  version = "1", default-features = false }
 reqwest = { version = "0.11", features = ["blocking"] }
-
-[patch.crates-io]
-miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript",  rev = "7bbc3e4" }
 
 
 [features]
@@ -38,3 +35,4 @@ nightly = ["olivia_secp256k1/nightly"]
 [dev-dependencies]
 rand = "0.8"
 bdk = { git = "https://github.com/llfourn/bdk", branch = "gun", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
+# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
