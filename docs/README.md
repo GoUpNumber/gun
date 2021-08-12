@@ -7,7 +7,7 @@
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
 Its distinguishing features is the ability to do [peer-to-peer betting](./docs/bet.md).
 
-** ⚠ WARNING EXPERIMENTAL **
+**⚠ WARNING EXPERIMENTAL**
 
 The wallet is alpha quality.
 It is buggy and is missing features.
@@ -27,6 +27,26 @@ cargo install --path .
 cargo -Z avoid-dev-deps install --features=nightly --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
+
+
+## Configuration
+
+The configuration file is in `~/.gun/config.json`.
+
+By default `gun init` sets [mempool.space](https://mempool.space) as the backend.
+You could choose blockstream's esplora server by setting `blockchain` to:
+
+``` sh
+{
+  "type": "esplora",
+  "base_url": "https://blockstream.info/api",
+  "concurrency": 4,
+  "stop_gap": 10
+}
+```
+
+You could also run your own [esplora](https://github.com/Blockstream/esplora) server.
+
 ## Basic Wallet
 
 The cli is decently documented with `--help` but here's a few things to get you started:
