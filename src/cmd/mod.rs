@@ -29,21 +29,6 @@ use anyhow::anyhow;
 use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Clone, Debug, structopt::StructOpt)]
-pub struct BetArgs {
-    /// The value you want to risk on the bet e.g all, 0.05BTC
-    pub value: ValueChoice,
-}
-
-impl From<BetArgs> for crate::party::BetArgs<'_, '_> {
-    fn from(args: BetArgs) -> Self {
-        crate::party::BetArgs {
-            value: args.value,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Debug, structopt::StructOpt)]
 pub struct FeeArgs {
     /// The transaction fee to attach e.g. rate:4.5 (4.5 sats-per-byte), abs:300 (300 sats absolute
     /// fee), in-blocks:3 (set fee so that it is included in the next three blocks).

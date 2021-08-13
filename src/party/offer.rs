@@ -331,6 +331,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             local_value,
             joint_output_value,
             i_chose_right: choose_right,
+            tags: args.tags,
         };
 
         Ok((bet, offer, cipher))

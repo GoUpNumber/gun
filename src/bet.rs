@@ -18,6 +18,8 @@ pub struct Bet {
     #[serde(with = "bitcoin::util::amount::serde::as_sat")]
     pub joint_output_value: Amount,
     pub i_chose_right: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Bet {

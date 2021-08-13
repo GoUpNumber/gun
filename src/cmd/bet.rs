@@ -6,14 +6,33 @@ use crate::{
     item,
     party::{EncryptedOffer, Offer, Proposal, VersionedProposal},
     psbt_ext::PsbtFeeRate,
-    Url,
+    Url, ValueChoice,
 };
 use anyhow::*;
-use bdk::bitcoin::Script;
+use bdk::bitcoin::{Address, Script};
 use cmd::CmdOutput;
 use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
+
+#[derive(Clone, Debug, structopt::StructOpt)]
+pub struct BetArgs {
+    /// The value you want to risk on the bet e.g all, 0.05BTC
+    pub value: ValueChoice,
+    /// tag the bet with short string
+    #[structopt(short, long)]
+    pub tags: Vec<String>,
+}
+
+impl From<BetArgs> for crate::party::BetArgs<'_, '_> {
+    fn from(args: BetArgs) -> Self {
+        crate::party::BetArgs {
+            value: args.value,
+            tags: args.tags,
+            ..Default::default()
+        }
+    }
+}
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(about = "Make or take a bet", rename_all = "kebab")]
@@ -87,6 +106,7 @@ pub enum BetOpt {
     },
     /// List bets
     List,
+    /// Show details of a particular bet
     Show {
         bet_id: BetId,
         /// Show the raw entry in the database
@@ -113,10 +133,13 @@ pub enum BetOpt {
     Forget { bet_ids: Vec<BetId> },
     /// Edit list of trusted oracles
     Oracle(crate::cmd::OracleOpt),
+
+    /// Attach a string to a bet
+    Tag(TagOpt),
 }
 
 #[derive(Clone, Debug, StructOpt)]
-#[structopt(about = "Make or take a bet", rename_all = "kebab")]
+#[structopt(about = "Inspect a base2048", rename_all = "kebab")]
 pub enum InspectOpt {
     /// Inspect a proposal
     Proposal {
@@ -129,6 +152,22 @@ pub enum InspectOpt {
         bet_id: BetId,
         /// The encrypted offer.
         encrypted_offer: EncryptedOffer,
+    },
+}
+
+#[derive(Clone, Debug, StructOpt)]
+pub enum TagOpt {
+    Add {
+        /// The bet to attach the tag to.
+        bet_id: BetId,
+        /// The tag.
+        tag: String,
+    },
+    Remove {
+        /// The bet to remove the tag from.
+        bet_id: BetId,
+        /// The tag to remove.
+        tag: String,
     },
 }
 
@@ -372,7 +411,8 @@ pub fn run_bet_cmd(
             ))
         }
         BetOpt::Show { bet_id, raw } => {
-            let bet_db = cmd::load_bet_db(wallet_dir)?;
+            let party = cmd::load_party(wallet_dir)?;
+            let bet_db = party.bet_db();
             let bet_state = bet_db
                 .get_entity::<BetState>(bet_id)?
                 .ok_or(anyhow!("Bet {} doesn't exist", bet_id))?;
@@ -390,8 +430,10 @@ pub fn run_bet_cmd(
                     "event-id" => Cell::string(&local_proposal.proposal.event_id),
                     "oracle" => Cell::string(&local_proposal.proposal.oracle),
                     "outcome-time" => local_proposal.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
-                    "my-inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
-                    "change-addr" => Cell::string(&local_proposal.proposal.change_script.is_some()),
+                    "inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                    "change-addr" => local_proposal.change.as_ref().and_then(|change| Address::from_script(change.script(), party.wallet().network())).map(Cell::string).unwrap_or(Cell::Empty),
+                    "change-value" => local_proposal.change.as_ref().map(|change| Cell::Amount(change.value())).unwrap_or(Cell::Empty),
+                    "tags" => Cell::List(local_proposal.tags.iter().map(Cell::string).map(Box::new).collect()),
                     "string" => Cell::string(local_proposal.proposal.clone().into_versioned()),
                 },
                 BetOrProp::Bet(bet) => item! {
@@ -405,6 +447,7 @@ pub fn run_bet_cmd(
                     "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
+                    "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect()),
                 },
             })
         }
@@ -487,6 +530,27 @@ pub fn run_bet_cmd(
                 }
             }
         }),
+        BetOpt::Tag(tagopt) => {
+            let bet_db = cmd::load_bet_db(wallet_dir)?;
+            match tagopt {
+                TagOpt::Add { bet_id, tag } => {
+                    bet_db.update_bets(&[bet_id], |mut bet_state, _, _| {
+                        bet_state.tags_mut().push(tag.clone());
+                        Ok(bet_state)
+                    })?;
+                    Ok(CmdOutput::None)
+                }
+                TagOpt::Remove { bet_id, tag } => {
+                    bet_db.update_bets(&[bet_id], |mut bet_state, _, _| {
+                        bet_state
+                            .tags_mut()
+                            .retain(|existing_tag| existing_tag != &tag);
+                        Ok(bet_state)
+                    })?;
+                    Ok(CmdOutput::None)
+                }
+            }
+        }
     }
 }
 
@@ -516,6 +580,14 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 Cell::Amount(local_proposal.proposal.value),
                 Cell::Empty,
                 Cell::Empty,
+                Cell::List(
+                    local_proposal
+                        .tags
+                        .iter()
+                        .map(Cell::string)
+                        .map(Box::new)
+                        .collect(),
+                ),
                 Cell::String(format!(
                     "https://{}{}",
                     local_proposal.proposal.oracle, local_proposal.proposal.event_id
@@ -539,6 +611,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 Cell::Amount(bet.local_value),
                 Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
                 Cell::String(bet.my_outcome().outcome_string()),
+                Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect()),
                 Cell::String(format!(
                     "https://{}{}",
                     bet.oracle_id, bet.oracle_event.event.id
@@ -556,6 +629,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
             "risk",
             "reward",
             "i-bet",
+            "tags",
             "event-url",
         ],
         rows,

@@ -16,6 +16,7 @@ pub struct BetArgs<'a, 'b> {
     pub value: ValueChoice,
     pub may_overlap: &'a [BetId],
     pub must_overlap: &'b [BetId],
+    pub tags: Vec<String>,
 }
 
 impl Default for BetArgs<'_, '_> {
@@ -25,6 +26,7 @@ impl Default for BetArgs<'_, '_> {
             value: ValueChoice::Amount(Amount::ZERO),
             may_overlap: &EMPTY,
             must_overlap: &EMPTY,
+            tags: vec![],
         }
     }
 }

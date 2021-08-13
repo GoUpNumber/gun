@@ -60,6 +60,8 @@ pub struct LocalProposal {
     pub proposal: Proposal,
     pub oracle_event: OracleEvent<Secp256k1>,
     pub change: Option<Change>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -224,6 +226,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             proposal: proposal.clone(),
             oracle_event,
             change,
+            tags: args.tags,
         };
 
         let new_bet = BetState::Proposed { local_proposal };
