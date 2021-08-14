@@ -66,8 +66,8 @@ pub struct LocalProposal {
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Payload {
-    pub inputs: Vec<bdk::bitcoin::OutPoint>,
     pub public_key: Point<EvenY>,
+    pub inputs: Vec<bdk::bitcoin::OutPoint>,
     pub change_script: Option<BinScript>,
 }
 
