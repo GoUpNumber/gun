@@ -447,7 +447,12 @@ pub fn run_bet_cmd(
                     "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
-                    "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect()),
+                    "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
+                    "claiming-txid" => match bet_state {
+                        BetState::Claiming { claim_txid, .. } => Cell::string(claim_txid),
+                        _ => Cell::Empty
+                    },
+                    "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect())
                 },
             })
         }
