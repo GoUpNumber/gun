@@ -16,7 +16,7 @@ use olivia_secp256k1::{
 
 use super::BetArgs;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum VersionedProposal {
     One(Proposal),
 }
@@ -270,5 +270,35 @@ mod test {
         let encoded = proposal.clone().into_versioned().to_string();
         let decoded = VersionedProposal::from_str(&encoded).unwrap();
         assert_eq!(proposal, decoded.into());
+    }
+
+    #[test]
+    fn to_and_from_string_fixed() {
+        // so we don't accidentally break parsing
+        use bdk::bitcoin::Address;
+        use std::str::FromStr;
+        let fixed = VersionedProposal::One(Proposal {
+            oracle: "h00.ooo".into(),
+            event_id: EventId::from_str("/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win").unwrap(),
+            value: Amount::from_str("0.01000000 BTC").unwrap(),
+            inputs: vec![OutPoint::from_str(
+                "d407fe2bd55b6076ce4c78028dc95b4097dd1e5acbf6ccaa741559a0903f1565:1",
+            )
+            .unwrap()],
+            public_key: Point::from_str(
+                "119cfc5a4dd8cffeebe9cfb1b42ef3d46d2dc38decebc67826d33ec8d44030c0",
+            )
+            .unwrap(),
+            change_script: Some(
+                Address::from_str("bc1qvkswtx2t4y8t6237q753htu4hl4mxm5a9swfjw")
+                    .unwrap()
+                    .script_pubkey()
+                    .into(),
+            ),
+        });
+
+        let string =  "📣0.01#h00.ooo#/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win#ǔ༖ǼभݸჷતϧષগழਞഹเϕॐಋచଚڮݻɈపŉɋʍҞɒŴݦസӫၒӵݎஜؽͼɹঊڄՓॠఖஷߣၦაŐƍۂʎӯسՉهƽཀލǂޞඤӖყଋم༎";
+        assert_eq!(VersionedProposal::from_str(string).unwrap(), fixed);
+        assert_eq!(fixed.to_string(), string);
     }
 }
