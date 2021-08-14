@@ -18,14 +18,11 @@ pub struct Bet {
     #[serde(with = "bitcoin::util::amount::serde::as_sat")]
     pub joint_output_value: Amount,
     pub i_chose_right: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 impl Bet {
-    /// Get a mutable reference to the bet's joint output value.
-    pub fn joint_output_value_mut(&mut self) -> &mut Amount {
-        &mut self.joint_output_value
-    }
-
     pub fn outpoint(&self) -> OutPoint {
         OutPoint {
             txid: self.tx().txid(),

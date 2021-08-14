@@ -191,6 +191,35 @@ impl BetState {
             | BetState::Claimed { bet, .. } => BetOrProp::Bet(bet),
         }
     }
+
+    pub fn tags_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            BetState::Proposed { local_proposal }
+            | BetState::Cancelling {
+                bet_or_prop: BetOrProp::Proposal(local_proposal),
+                ..
+            }
+            | BetState::Cancelled {
+                bet_or_prop: BetOrProp::Proposal(local_proposal),
+                ..
+            } => &mut local_proposal.tags,
+            BetState::Offered { bet, .. }
+            | BetState::Unconfirmed { bet, .. }
+            | BetState::Confirmed { bet, .. }
+            | BetState::Won { bet, .. }
+            | BetState::Lost { bet, .. }
+            | BetState::Claiming { bet, .. }
+            | BetState::Claimed { bet, .. }
+            | BetState::Cancelling {
+                bet_or_prop: BetOrProp::Bet(bet),
+                ..
+            }
+            | BetState::Cancelled {
+                bet_or_prop: BetOrProp::Bet(bet),
+                ..
+            } => &mut bet.tags,
+        }
+    }
 }
 
 pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {

@@ -220,6 +220,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             local_value: proposal.value,
             joint_output_value,
             i_chose_right: !offer.choose_right,
+            tags: local_proposal.tags,
         };
 
         Ok(ValidatedOffer { bet_id, bet })
