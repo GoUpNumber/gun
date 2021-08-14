@@ -23,11 +23,6 @@ pub struct Bet {
 }
 
 impl Bet {
-    /// Get a mutable reference to the bet's joint output value.
-    pub fn joint_output_value_mut(&mut self) -> &mut Amount {
-        &mut self.joint_output_value
-    }
-
     pub fn outpoint(&self) -> OutPoint {
         OutPoint {
             txid: self.tx().txid(),

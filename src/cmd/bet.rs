@@ -579,7 +579,6 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 ),
                 Cell::Amount(local_proposal.proposal.value),
                 Cell::Empty,
-                Cell::Empty,
                 Cell::List(
                     local_proposal
                         .tags
@@ -588,10 +587,9 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                         .map(Box::new)
                         .collect(),
                 ),
-                Cell::String(format!(
-                    "https://{}{}",
-                    local_proposal.proposal.oracle, local_proposal.proposal.event_id
-                )),
+                Cell::string(local_proposal.proposal.oracle),
+                Cell::Empty,
+                Cell::string(local_proposal.proposal.event_id.short_id()),
             ]),
             BetOrProp::Bet(bet) => rows.push(vec![
                 Cell::Int(bet_id.into()),
@@ -610,12 +608,10 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 ),
                 Cell::Amount(bet.local_value),
                 Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
-                Cell::String(bet.my_outcome().outcome_string()),
                 Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect()),
-                Cell::String(format!(
-                    "https://{}{}",
-                    bet.oracle_id, bet.oracle_event.event.id
-                )),
+                Cell::string(&bet.oracle_id),
+                Cell::String(bet.my_outcome().outcome_string()),
+                Cell::string(bet.oracle_event.event.id.short_id()),
             ]),
         }
     }
@@ -628,9 +624,10 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
             "in",
             "risk",
             "reward",
-            "i-bet",
             "tags",
-            "event-url",
+            "oracle",
+            "i-bet",
+            "short-id",
         ],
         rows,
     )
