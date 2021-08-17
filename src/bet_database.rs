@@ -1,8 +1,4 @@
-use crate::{
-    bet::Bet,
-    party::{EncryptedOffer, LocalProposal},
-    OracleInfo,
-};
+use crate::{bet::Bet, ciphertext::Ciphertext, party::LocalProposal, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{secp256k1::SecretKey, OutPoint, Transaction, Txid},
@@ -71,7 +67,7 @@ pub enum BetState {
     },
     Offered {
         bet: Bet,
-        encrypted_offer: EncryptedOffer,
+        encrypted_offer: Ciphertext,
     },
     Unconfirmed {
         bet: Bet,

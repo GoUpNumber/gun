@@ -42,7 +42,7 @@ use olivia_secp256k1::{
 
 pub struct Party<B, D> {
     wallet: Wallet<B, D>,
-    keychain: Keychain,
+    pub(crate) keychain: Keychain,
     client: crate::reqwest::blocking::Client,
     bet_db: BetDatabase,
     blockchain_config: AnyBlockchainConfig,
