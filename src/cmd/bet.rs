@@ -66,6 +66,9 @@ pub enum BetOpt {
         pad: usize,
         #[structopt(flatten)]
         fee_args: cmd::FeeArgs,
+        /// Attach an additional message to the offer
+        #[structopt(long, short)]
+        message: Option<String>,
     },
     /// Inspect an offer or proposal
     Inspect(InspectOpt),
@@ -241,6 +244,7 @@ pub fn run_bet_cmd(
             fee_args,
             yes,
             pad,
+            message,
         } => {
             let party = cmd::load_party(wallet_dir)?;
             let proposal: Proposal = proposal.into();
@@ -301,12 +305,22 @@ pub fn run_bet_cmd(
                 )?;
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
-                let (_, encrypted_offer) =
-                    party.save_and_encrypt_offer(bet, offer, local_public_key, &mut cipher)?;
+                let (_, encrypted_offer) = party.save_and_encrypt_offer(
+                    bet,
+                    offer,
+                    message,
+                    local_public_key,
+                    &mut cipher,
+                )?;
                 eprintln!("Post this offer in reponse to the proposal");
-                Ok(
-                    item! { "offer" => Cell::String(encrypted_offer.to_string_padded(pad, &mut cipher)) },
-                )
+                let (padded_encrypted_offer, overflow) =
+                    encrypted_offer.to_string_padded(pad, &mut cipher);
+                if let Some(overflow) = overflow {
+                    if pad != 0 {
+                        eprintln!("WARNING: this offer is longer than {} bytes -- it needs to be cut down by {}", pad, overflow);
+                    }
+                }
+                Ok(item! { "offer" =>  Cell::string(padded_encrypted_offer )})
             } else {
                 Ok(CmdOutput::None)
             }
@@ -320,7 +334,10 @@ pub fn run_bet_cmd(
             let party = cmd::load_party(wallet_dir)?;
             let (plaintext, offer_public_key, rng) = party.decrypt_offer(id, encrypted_offer)?;
             match plaintext {
-                Plaintext::Offerv1(offer) => {
+                Plaintext::Offerv1 { offer, message } => {
+                    if let Some(message) = message {
+                        eprintln!("This message was attached to the offer:\n{}", message);
+                    }
                     let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
                     if yes || cmd::read_answer(&bet_prompt(&validated_offer.bet)) {
                         let (output, txid) = cmd::decide_to_broadcast(
@@ -516,7 +533,7 @@ pub fn run_bet_cmd(
                             party.decrypt_offer(bet_id, encrypted_offer)?;
 
                         match plaintext {
-                            Plaintext::Offerv1(offer) => {
+                            Plaintext::Offerv1 { offer, message } => {
                                 let (fee, feerate, valid) = match party.validate_offer(
                                     bet_id,
                                     offer.clone(),
@@ -550,7 +567,8 @@ pub fn run_bet_cmd(
                                     "inputs" => Cell::List(inputs.into_iter().map(|x| Cell::string(x.outpoint)).map(Box::new).collect()),
                                     "valid" => Cell::string(valid),
                                     "fee" => fee.map(Cell::Amount).unwrap_or(Cell::Empty),
-                                    "feerate" => feerate.map(|x| Cell::string(x.as_sat_vb())).unwrap_or(Cell::Empty)
+                                    "feerate" => feerate.map(|x| Cell::string(x.as_sat_vb())).unwrap_or(Cell::Empty),
+                                    "message" => message.map(Cell::string).unwrap_or(Cell::Empty)
                                 }
                             }
                             Plaintext::Messagev1(message) => {
@@ -602,9 +620,14 @@ pub fn run_bet_cmd(
             });
             let party = cmd::load_party(wallet_dir)?;
             let (ciphertext, mut cipher) = reply(&party.keychain, proposal, message);
-            Ok(
-                item! { "ciphertext" => Cell::string(ciphertext.to_string_padded(pad, &mut cipher)) },
-            )
+            let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
+            if let Some(overflow) = overflow {
+                eprintln!(
+                    "WARNING: ciphertext is longer than {} -- it needs to be cut down by {} to fit",
+                    pad, overflow
+                );
+            }
+            Ok(item! { "ciphertext" => Cell::string(ciphertext_str) })
         }
     }
 }
@@ -828,8 +851,9 @@ mod test {
         });
 
         let (ciphertext, mut pad_cipher) = reply(&keychain, fixed, "a test message".into());
-        let ciphertext =
-            Ciphertext::from_str(&ciphertext.to_string_padded(385, &mut pad_cipher)).unwrap();
+        let (ciphertext_str, overflow) = &ciphertext.to_string_padded(385, &mut pad_cipher);
+        assert!(!overflow.is_some());
+        let ciphertext = Ciphertext::from_str(ciphertext_str).unwrap();
         let (mut cipher, _) = ecdh(&proposal_keypair, &ciphertext.public_key);
         match ciphertext.decrypt(&mut cipher).unwrap() {
             Plaintext::Messagev1(message) => assert_eq!(&message, "a test message"),

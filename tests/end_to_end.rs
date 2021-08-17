@@ -199,7 +199,7 @@ pub fn test_happy_path() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, local_public_key, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
             .unwrap()
     };
     wait_for_state!(party_2, p2_bet_id, "offered");
@@ -327,7 +327,7 @@ pub fn cancel_proposal() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, offer_public_key, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -380,7 +380,7 @@ pub fn test_cancel_offer() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, offer_public_key, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -432,7 +432,7 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, offer_public_key, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -454,7 +454,7 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, offer_public_key, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 

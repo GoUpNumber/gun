@@ -28,15 +28,22 @@ impl Ciphertext {
         crate::encode::serialize_base2048(self)
     }
 
-    pub fn to_string_padded(&self, pad_to: usize, pad_cipher: &mut impl StreamCipher) -> String {
+    pub fn to_string_padded(
+        &self,
+        pad_to: usize,
+        pad_cipher: &mut impl StreamCipher,
+    ) -> (String, Option<usize>) {
         let mut bytes = crate::encode::serialize(self);
+        let mut overflow = None;
         if bytes.len() < pad_to {
             let mut padding = vec![0u8; pad_to - bytes.len()];
             pad_cipher.apply_keystream(&mut padding);
             bytes.append(&mut padding);
+        } else if bytes.len() > pad_to {
+            overflow = Some(bytes.len() - pad_to);
         }
 
-        base2048::encode(&bytes)
+        (base2048::encode(&bytes), overflow)
     }
 
     pub fn decrypt(&self, cipher: &mut impl StreamCipher) -> anyhow::Result<Plaintext> {
@@ -48,14 +55,17 @@ impl Ciphertext {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum Plaintext {
-    Offerv1(Offer),
+    Offerv1 {
+        offer: Offer,
+        message: Option<String>,
+    },
     Messagev1(String),
 }
 
 impl Plaintext {
     pub fn into_offer(self) -> Offer {
         match self {
-            Self::Offerv1(offer) => offer,
+            Self::Offerv1 { offer, .. } => offer,
             _ => panic!("expected offer"),
         }
     }

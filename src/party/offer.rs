@@ -264,11 +264,18 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         &self,
         bet: Bet,
         offer: Offer,
+        message: Option<String>,
         local_public_key: Point<EvenY>,
         cipher: &mut impl StreamCipher,
     ) -> anyhow::Result<(BetId, Ciphertext)> {
-        let encrypted_offer =
-            Ciphertext::create(local_public_key, cipher, Plaintext::Offerv1(offer.clone()));
+        let encrypted_offer = Ciphertext::create(
+            local_public_key,
+            cipher,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message,
+            },
+        );
         let bet_id = self.bet_db.insert_bet(BetState::Offered {
             bet,
             encrypted_offer: encrypted_offer.clone(),
@@ -320,13 +327,46 @@ mod test {
         let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
         let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
 
-        let encrypted_offer =
-            Ciphertext::create(public_key, &mut cipher1, Plaintext::Offerv1(offer.clone()));
+        let encrypted_offer = Ciphertext::create(
+            public_key,
+            &mut cipher1,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message: None,
+            },
+        );
 
         assert_eq!(
             encrypted_offer.decrypt(&mut cipher2).unwrap().into_offer(),
             offer
         );
+    }
+
+    #[test]
+    fn offer_with_message_attached() {
+        let (public_key, offer) = test_offer();
+        let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+        let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+
+        let encrypted_offer = Ciphertext::create(
+            public_key,
+            &mut cipher1,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message: Some("a message".into()),
+            },
+        );
+
+        if let Plaintext::Offerv1 {
+            offer: decrypted_offer,
+            message,
+        } = encrypted_offer.decrypt(&mut cipher2).unwrap()
+        {
+            assert_eq!(decrypted_offer, offer);
+            assert_eq!(message, Some("a message".into()));
+        } else {
+            panic!("expected offer");
+        }
     }
 
     #[test]
@@ -336,9 +376,15 @@ mod test {
             let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
             let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
 
-            let encrypted_offer =
-                Ciphertext::create(public_key, &mut cipher1, Plaintext::Offerv1(offer.clone()));
-            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let encrypted_offer = Ciphertext::create(
+                public_key,
+                &mut cipher1,
+                Plaintext::Offerv1 {
+                    offer: offer.clone(),
+                    message: None,
+                },
+            );
+            let (enc_string_offer, _) = encrypted_offer.to_string_padded(385, &mut cipher1);
             let decrypted_offer = Ciphertext::from_str(&enc_string_offer)
                 .unwrap()
                 .decrypt(&mut cipher2)
@@ -359,9 +405,15 @@ mod test {
                     .unwrap()
                     .script_pubkey(),
             ));
-            let encrypted_offer =
-                Ciphertext::create(public_key, &mut cipher1, Plaintext::Offerv1(offer.clone()));
-            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let encrypted_offer = Ciphertext::create(
+                public_key,
+                &mut cipher1,
+                Plaintext::Offerv1 {
+                    offer: offer.clone(),
+                    message: None,
+                },
+            );
+            let (enc_string_offer, _) = encrypted_offer.to_string_padded(385, &mut cipher1);
             let decrypted_offer = Ciphertext::from_str(&enc_string_offer)
                 .unwrap()
                 .decrypt(&mut cipher2)
