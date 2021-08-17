@@ -183,7 +183,7 @@ pub fn test_happy_path() {
         .unwrap();
 
     let (p2_bet_id, encrypted_offer) = {
-        let (bet, offer, mut cipher) = party_2
+        let (bet, offer, local_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -199,14 +199,22 @@ pub fn test_happy_path() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
             .unwrap()
     };
     wait_for_state!(party_2, p2_bet_id, "offered");
 
+    let (decrypted_offer, offer_public_key, rng) =
+        party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
     let validated_offer = party_1
-        .decrypt_and_validate_offer(p1_bet_id, encrypted_offer)
+        .validate_offer(
+            p1_bet_id,
+            decrypted_offer.into_offer(),
+            offer_public_key,
+            rng,
+        )
         .unwrap();
+
     Broadcast::broadcast(
         party_1.wallet().client(),
         validated_offer.bet.psbt.clone().extract_tx(),
@@ -303,7 +311,7 @@ pub fn cancel_proposal() {
         .unwrap();
 
     let (p2_bet_id, _) = {
-        let (bet, offer, mut cipher) = party_2
+        let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -319,7 +327,7 @@ pub fn cancel_proposal() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -356,7 +364,7 @@ pub fn test_cancel_offer() {
         .unwrap();
 
     let (p2_bet_id, _) = {
-        let (bet, offer, mut cipher) = party_2
+        let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -372,7 +380,7 @@ pub fn test_cancel_offer() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -408,7 +416,7 @@ pub fn cancel_offer_after_offer_taken() {
         .unwrap();
 
     let (first_p2_bet_id, _) = {
-        let (bet, offer, mut cipher) = party_2
+        let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -424,12 +432,12 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
     let (second_p2_bet_id, second_encrypted_offer) = {
-        let (bet, offer, mut cipher) = party_2
+        let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -446,12 +454,20 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, &mut cipher)
+            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
+    let (second_decrypted_offer, second_offer_public_key, rng) = party_1
+        .decrypt_offer(p1_bet_id, second_encrypted_offer)
+        .unwrap();
     let second_validated_offer = party_1
-        .decrypt_and_validate_offer(p1_bet_id, second_encrypted_offer)
+        .validate_offer(
+            p1_bet_id,
+            second_decrypted_offer.into_offer(),
+            second_offer_public_key,
+            rng,
+        )
         .unwrap();
 
     Broadcast::broadcast(party_1.wallet().client(), second_validated_offer.tx()).unwrap();

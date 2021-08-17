@@ -1,7 +1,9 @@
+use super::{randomize::Randomize, BetArgs, Either};
 use crate::{
     bet::Bet,
     bet_database::{BetId, BetState},
     change::Change,
+    ciphertext::{Ciphertext, Plaintext},
     keychain::KeyPair,
     party::{proposal::Proposal, JointOutput, Party},
     FeeSpec, OracleEvent, OracleInfo, ValueChoice,
@@ -20,9 +22,7 @@ use olivia_secp256k1::{
     ecdsa_fun,
     fun::{marker::*, Point, XOnly},
 };
-use std::{convert::TryInto, str::FromStr};
-
-use super::{randomize::Randomize, BetArgs, Either};
+use std::convert::TryInto;
 
 pub type OfferId = XOnly;
 
@@ -67,19 +67,9 @@ impl Witness {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-struct Payload {
-    pub inputs: Vec<SignedInput>,
-    pub change: Option<Change>,
-    pub choose_right: bool,
-    #[serde(with = "bitcoin::util::amount::serde::as_sat")]
-    pub value: Amount,
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Offer {
     pub inputs: Vec<SignedInput>,
     pub change: Option<Change>,
-    pub public_key: Point<EvenY>,
     pub choose_right: bool,
     #[serde(with = "bitcoin::util::amount::serde::as_sat")]
     pub value: Amount,
@@ -94,72 +84,6 @@ pub struct LocalOffer {
     pub joint_output: ExtendedDescriptor,
 }
 
-impl Offer {
-    pub fn encrypt(self, cipher: &mut impl StreamCipher) -> EncryptedOffer {
-        let payload = Payload {
-            inputs: self.inputs,
-            change: self.change,
-            choose_right: self.choose_right,
-            value: self.value,
-        };
-        let mut ciphertext = crate::encode::serialize(&payload);
-        cipher.apply_keystream(&mut ciphertext);
-
-        EncryptedOffer {
-            public_key: self.public_key,
-            ciphertext,
-        }
-    }
-
-    pub fn id(&self) -> OfferId {
-        self.public_key.to_xonly()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct EncryptedOffer {
-    pub public_key: Point<EvenY>,
-    pub ciphertext: Vec<u8>,
-}
-
-impl EncryptedOffer {
-    pub fn to_string(&self) -> String {
-        crate::encode::serialize_base2048(self)
-    }
-
-    pub fn to_string_padded(&self, pad_to: usize, pad_cipher: &mut impl StreamCipher) -> String {
-        let mut bytes = crate::encode::serialize(self);
-        if bytes.len() < pad_to {
-            let mut padding = vec![0u8; pad_to - bytes.len()];
-            pad_cipher.apply_keystream(&mut padding);
-            bytes.append(&mut padding);
-        }
-
-        base2048::encode(&bytes)
-    }
-
-    pub fn decrypt(self, cipher: &mut impl StreamCipher) -> anyhow::Result<Offer> {
-        let mut plaintext = self.ciphertext;
-        cipher.apply_keystream(&mut plaintext);
-        let payload = crate::encode::deserialize::<Payload>(&plaintext)?;
-        Ok(Offer {
-            inputs: payload.inputs,
-            change: payload.change,
-            public_key: self.public_key,
-            choose_right: payload.choose_right,
-            value: payload.value,
-        })
-    }
-}
-
-impl FromStr for EncryptedOffer {
-    type Err = crate::encode::DecodeError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::encode::deserialize_base2048(s)
-    }
-}
-
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub fn generate_offer_with_oracle_event(
         &self,
@@ -169,7 +93,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         oracle_info: OracleInfo,
         args: BetArgs<'_, '_>,
         fee_spec: FeeSpec,
-    ) -> anyhow::Result<(Bet, Offer, impl StreamCipher)> {
+    ) -> anyhow::Result<(Bet, Offer, Point<EvenY>, impl StreamCipher)> {
         let remote_public_key = &proposal.public_key;
         let event_id = &oracle_event.event.id;
         if !event_id.n_outcomes() == 2 {
@@ -315,7 +239,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let offer = Offer {
-            public_key: local_keypair.public_key,
             change,
             inputs: signed_inputs,
             choose_right,
@@ -334,16 +257,25 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             tags: args.tags,
         };
 
-        Ok((bet, offer, cipher))
+        Ok((bet, offer, local_keypair.public_key, cipher))
     }
 
     pub fn save_and_encrypt_offer(
         &self,
         bet: Bet,
         offer: Offer,
+        message: Option<String>,
+        local_public_key: Point<EvenY>,
         cipher: &mut impl StreamCipher,
-    ) -> anyhow::Result<(BetId, EncryptedOffer)> {
-        let encrypted_offer = offer.encrypt(cipher);
+    ) -> anyhow::Result<(BetId, Ciphertext)> {
+        let encrypted_offer = Ciphertext::create(
+            local_public_key,
+            cipher,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message,
+            },
+        );
         let bet_id = self.bet_db.insert_bet(BetState::Offered {
             bet,
             encrypted_offer: encrypted_offer.clone(),
@@ -354,65 +286,110 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
 #[cfg(test)]
 mod test {
-    use bdk::bitcoin::{Address, OutPoint};
-    use chacha20::{cipher::NewCipher, ChaCha20};
-
     use super::*;
     use crate::keychain::KeyPair;
+    use bdk::bitcoin::{Address, OutPoint};
+    use chacha20::{cipher::NewCipher, ChaCha20};
+    use core::str::FromStr;
 
-    fn test_offer() -> Offer {
+    fn test_offer() -> (Point<EvenY>, Offer) {
         let offer_keypair = KeyPair::from_slice(&[42u8; 32]).unwrap();
-        Offer {
-            public_key: offer_keypair.public_key,
-            inputs: vec![
-                SignedInput {
-                    outpoint: OutPoint::default(),
-                    witness: Witness::P2wpkh {
-                        key: Point::random(&mut rand::thread_rng()).into(),
-                        signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+        let public_key = offer_keypair.public_key;
+        (
+            public_key,
+            Offer {
+                inputs: vec![
+                    SignedInput {
+                        outpoint: OutPoint::default(),
+                        witness: Witness::P2wpkh {
+                            key: Point::random(&mut rand::thread_rng()).into(),
+                            signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+                        },
                     },
-                },
-                SignedInput {
-                    outpoint: OutPoint::default(),
-                    witness: Witness::P2wpkh {
-                        key: Point::random(&mut rand::thread_rng()).into(),
-                        signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+                    SignedInput {
+                        outpoint: OutPoint::default(),
+                        witness: Witness::P2wpkh {
+                            key: Point::random(&mut rand::thread_rng()).into(),
+                            signature: ecdsa_fun::Signature::from_bytes([43u8; 64]).unwrap(),
+                        },
                     },
-                },
-            ],
-            change: None,
-            choose_right: false,
-            value: Amount::from_str_with_denomination("1 BTC").unwrap(),
-        }
+                ],
+                change: None,
+                choose_right: false,
+                value: Amount::from_str_with_denomination("1 BTC").unwrap(),
+            },
+        )
     }
 
     #[test]
     pub fn encrypt_decrypt_roundtrip() {
-        let offer = test_offer();
+        let (public_key, offer) = test_offer();
         let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
         let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
 
-        let encrypted_offer = offer.clone().encrypt(&mut cipher1);
+        let encrypted_offer = Ciphertext::create(
+            public_key,
+            &mut cipher1,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message: None,
+            },
+        );
 
-        let decrypted_offer = encrypted_offer.decrypt(&mut cipher2).unwrap();
+        assert_eq!(
+            encrypted_offer.decrypt(&mut cipher2).unwrap().into_offer(),
+            offer
+        );
+    }
 
-        assert_eq!(decrypted_offer, offer);
+    #[test]
+    fn offer_with_message_attached() {
+        let (public_key, offer) = test_offer();
+        let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+        let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
+
+        let encrypted_offer = Ciphertext::create(
+            public_key,
+            &mut cipher1,
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message: Some("a message".into()),
+            },
+        );
+
+        if let Plaintext::Offerv1 {
+            offer: decrypted_offer,
+            message,
+        } = encrypted_offer.decrypt(&mut cipher2).unwrap()
+        {
+            assert_eq!(decrypted_offer, offer);
+            assert_eq!(message, Some("a message".into()));
+        } else {
+            panic!("expected offer");
+        }
     }
 
     #[test]
     pub fn encrypt_decrypt_padded_offer_of_different_sizes() {
-        let offer = test_offer();
+        let (public_key, offer) = test_offer();
         let encrypted_offer1 = {
             let mut cipher1 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
             let mut cipher2 = ChaCha20::new(&[2u8; 32].into(), &[2u8; 12].into());
 
-            let encrypted_offer = offer.clone().encrypt(&mut cipher1);
-            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
-            let decrypted_offer = EncryptedOffer::from_str(&enc_string_offer)
+            let encrypted_offer = Ciphertext::create(
+                public_key,
+                &mut cipher1,
+                Plaintext::Offerv1 {
+                    offer: offer.clone(),
+                    message: None,
+                },
+            );
+            let (enc_string_offer, _) = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let decrypted_offer = Ciphertext::from_str(&enc_string_offer)
                 .unwrap()
                 .decrypt(&mut cipher2)
-                .unwrap();
-
+                .unwrap()
+                .into_offer();
             assert_eq!(decrypted_offer, offer);
             enc_string_offer
         };
@@ -428,13 +405,20 @@ mod test {
                     .unwrap()
                     .script_pubkey(),
             ));
-            let encrypted_offer = offer.clone().encrypt(&mut cipher1);
-            let enc_string_offer = encrypted_offer.to_string_padded(385, &mut cipher1);
-            let decrypted_offer = EncryptedOffer::from_str(&enc_string_offer)
+            let encrypted_offer = Ciphertext::create(
+                public_key,
+                &mut cipher1,
+                Plaintext::Offerv1 {
+                    offer: offer.clone(),
+                    message: None,
+                },
+            );
+            let (enc_string_offer, _) = encrypted_offer.to_string_padded(385, &mut cipher1);
+            let decrypted_offer = Ciphertext::from_str(&enc_string_offer)
                 .unwrap()
                 .decrypt(&mut cipher2)
-                .unwrap();
-
+                .unwrap()
+                .into_offer();
             assert_eq!(decrypted_offer, offer);
             enc_string_offer
         };

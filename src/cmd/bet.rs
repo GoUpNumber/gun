@@ -2,14 +2,17 @@ use super::{run_oralce_cmd, Cell};
 use crate::{
     bet::Bet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
+    ciphertext::{Ciphertext, Plaintext},
     cmd::{self, read_answer},
     item,
-    party::{EncryptedOffer, Offer, Proposal, VersionedProposal},
+    keychain::Keychain,
+    party::{Offer, Proposal, VersionedProposal},
     psbt_ext::PsbtFeeRate,
     Url, ValueChoice,
 };
 use anyhow::*;
 use bdk::bitcoin::{Address, Script};
+use chacha20::cipher::StreamCipher;
 use cmd::CmdOutput;
 use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
 use std::{path::PathBuf, str::FromStr};
@@ -63,21 +66,18 @@ pub enum BetOpt {
         pad: usize,
         #[structopt(flatten)]
         fee_args: cmd::FeeArgs,
+        /// Attach an additional message to the offer
+        #[structopt(long, short)]
+        message: Option<String>,
     },
     /// Inspect an offer or proposal
     Inspect(InspectOpt),
-    // Msg {
-    //     /// Proposal to make the message to
-    //     proposal: VersionedProposal,
-    //     ///
-    //     message: String
-    // },
     /// Take on offer made to your proposal
     Take {
         /// The bet id you are taking the bet from
         id: BetId,
         /// The offer string (a base20248 string)
-        encrypted_offer: EncryptedOffer,
+        encrypted_offer: Ciphertext,
         /// Take the offer and broadacast tx without prompting.
         #[structopt(short, long)]
         yes: bool,
@@ -133,9 +133,19 @@ pub enum BetOpt {
     Forget { bet_ids: Vec<BetId> },
     /// Edit list of trusted oracles
     Oracle(crate::cmd::OracleOpt),
-
-    /// Attach a string to a bet
+    /// Tag a bet
     Tag(TagOpt),
+    /// Make a encrypted reply to a proposal
+    Reply {
+        /// The proposal to send an encrypted message to.
+        proposal: VersionedProposal,
+        /// The message to send. If not set reads from stdin.
+        #[structopt(short, long)]
+        message: Option<String>,
+        /// Pad the ciphertext to be at least this length.
+        #[structopt(short, long, default_value = "385")]
+        pad: usize,
+    },
 }
 
 #[derive(Clone, Debug, StructOpt)]
@@ -150,8 +160,8 @@ pub enum InspectOpt {
     Offer {
         /// The bet id the offer is for.
         bet_id: BetId,
-        /// The encrypted offer.
-        encrypted_offer: EncryptedOffer,
+        /// The encrypted offer as a base2048 string.
+        encrypted_offer: Ciphertext,
     },
 }
 
@@ -234,6 +244,7 @@ pub fn run_bet_cmd(
             fee_args,
             yes,
             pad,
+            message,
         } => {
             let party = cmd::load_party(wallet_dir)?;
             let proposal: Proposal = proposal.into();
@@ -283,21 +294,33 @@ pub fn run_bet_cmd(
                 }
             }
 
-            let (bet, offer, mut cipher) = party.generate_offer_with_oracle_event(
-                proposal,
-                outcome.value == 1,
-                oracle_event,
-                oracle_info,
-                args.into(),
-                fee_args.fee,
-            )?;
+            let (bet, offer, local_public_key, mut cipher) = party
+                .generate_offer_with_oracle_event(
+                    proposal,
+                    outcome.value == 1,
+                    oracle_event,
+                    oracle_info,
+                    args.into(),
+                    fee_args.fee,
+                )?;
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
-                let (_, encrypted_offer) = party.save_and_encrypt_offer(bet, offer, &mut cipher)?;
+                let (_, encrypted_offer) = party.save_and_encrypt_offer(
+                    bet,
+                    offer,
+                    message,
+                    local_public_key,
+                    &mut cipher,
+                )?;
                 eprintln!("Post this offer in reponse to the proposal");
-                Ok(
-                    item! { "offer" => Cell::String(encrypted_offer.to_string_padded(pad, &mut cipher)) },
-                )
+                let (padded_encrypted_offer, overflow) =
+                    encrypted_offer.to_string_padded(pad, &mut cipher);
+                if let Some(overflow) = overflow {
+                    if pad != 0 {
+                        eprintln!("WARNING: this offer is longer than {} bytes -- it needs to be cut down by {}", pad, overflow);
+                    }
+                }
+                Ok(item! { "offer" =>  Cell::string(padded_encrypted_offer )})
             } else {
                 Ok(CmdOutput::None)
             }
@@ -309,22 +332,33 @@ pub fn run_bet_cmd(
             print_tx,
         } => {
             let party = cmd::load_party(wallet_dir)?;
-            let validated_offer = party.decrypt_and_validate_offer(id, encrypted_offer)?;
-
-            if yes || cmd::read_answer(&bet_prompt(&validated_offer.bet)) {
-                let (output, txid) = cmd::decide_to_broadcast(
-                    party.wallet().network(),
-                    party.wallet().client(),
-                    validated_offer.bet.psbt.clone(),
-                    yes,
-                    print_tx,
-                )?;
-                if let Some(_) = txid {
-                    party.set_offer_taken(validated_offer)?;
+            let (plaintext, offer_public_key, rng) = party.decrypt_offer(id, encrypted_offer)?;
+            match plaintext {
+                Plaintext::Offerv1 { offer, message } => {
+                    if let Some(message) = message {
+                        eprintln!("This message was attached to the offer:\n{}", message);
+                    }
+                    let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
+                    if yes || cmd::read_answer(&bet_prompt(&validated_offer.bet)) {
+                        let (output, txid) = cmd::decide_to_broadcast(
+                            party.wallet().network(),
+                            party.wallet().client(),
+                            validated_offer.bet.psbt.clone(),
+                            yes,
+                            print_tx,
+                        )?;
+                        if let Some(_) = txid {
+                            party.set_offer_taken(validated_offer)?;
+                        }
+                        Ok(output)
+                    } else {
+                        Ok(CmdOutput::None)
+                    }
                 }
-                Ok(output)
-            } else {
-                Ok(CmdOutput::None)
+                Plaintext::Messagev1(message) => {
+                    eprintln!("The ciphertext contained a secret message:");
+                    Ok(item! { "message" => Cell::string(message) })
+                }
             }
         }
         BetOpt::Claim {
@@ -495,36 +529,52 @@ pub fn run_bet_cmd(
                 match bet_state {
                     BetState::Proposed { local_proposal } => {
                         let event_id = &local_proposal.oracle_event.event.id;
-                        let Offer {
-                            inputs,
-                            change,
-                            public_key,
-                            choose_right,
-                            value,
-                        } = party.decrypt_offer(bet_id, encrypted_offer.clone())?.offer;
-                        let (fee, feerate, valid) =
-                            match party.decrypt_and_validate_offer(bet_id, encrypted_offer) {
-                                Ok(validated_offer) => {
-                                    let (fee, feerate) = validated_offer.bet.psbt.fee();
-                                    (Some(fee), Some(feerate), true)
+                        let (plaintext, offer_public_key, rng) =
+                            party.decrypt_offer(bet_id, encrypted_offer)?;
+
+                        match plaintext {
+                            Plaintext::Offerv1 { offer, message } => {
+                                let (fee, feerate, valid) = match party.validate_offer(
+                                    bet_id,
+                                    offer.clone(),
+                                    offer_public_key,
+                                    rng,
+                                ) {
+                                    Ok(validated_offer) => {
+                                        let (fee, feerate) = validated_offer.bet.psbt.fee();
+                                        (Some(fee), Some(feerate), true)
+                                    }
+                                    Err(_) => (None, None, false),
+                                };
+
+                                let Offer {
+                                    inputs,
+                                    change,
+                                    choose_right,
+                                    value,
+                                } = offer;
+
+                                let chosen_outcome = Outcome {
+                                    id: event_id.clone(),
+                                    value: choose_right as u64,
+                                };
+
+                                item! {
+                                    "value" => Cell::Amount(value),
+                                    "their-choice" => Cell::string(chosen_outcome.outcome_string()),
+                                    "public-key" => Cell::string(&offer_public_key),
+                                    "change-script" => change.map(|x| Cell::string(x.script())).unwrap_or(Cell::Empty),
+                                    "inputs" => Cell::List(inputs.into_iter().map(|x| Cell::string(x.outpoint)).map(Box::new).collect()),
+                                    "valid" => Cell::string(valid),
+                                    "fee" => fee.map(Cell::Amount).unwrap_or(Cell::Empty),
+                                    "feerate" => feerate.map(|x| Cell::string(x.as_sat_vb())).unwrap_or(Cell::Empty),
+                                    "message" => message.map(Cell::string).unwrap_or(Cell::Empty)
                                 }
-                                Err(_) => (None, None, false),
-                            };
-
-                        let chosen_outcome = Outcome {
-                            id: event_id.clone(),
-                            value: choose_right as u64,
-                        };
-
-                        item! {
-                            "value" => Cell::Amount(value),
-                            "their-choice" => Cell::string(chosen_outcome.outcome_string()),
-                            "public-key" => Cell::string(&public_key),
-                            "change-script" => change.map(|x| Cell::string(x.script())).unwrap_or(Cell::Empty),
-                            "inputs" => Cell::List(inputs.into_iter().map(|x| Cell::string(x.outpoint)).map(Box::new).collect()),
-                            "valid" => Cell::string(valid),
-                            "fee" => fee.map(Cell::Amount).unwrap_or(Cell::Empty),
-                            "feerate" => feerate.map(|x| Cell::string(x.as_sat_vb())).unwrap_or(Cell::Empty)
+                            }
+                            Plaintext::Messagev1(message) => {
+                                eprintln!("This ciphertext contained a secret message:");
+                                item! { "message" => Cell::string(message) }
+                            }
                         }
                     }
                     _ => {
@@ -556,7 +606,50 @@ pub fn run_bet_cmd(
                 }
             }
         }
+        BetOpt::Reply {
+            proposal,
+            message,
+            pad,
+        } => {
+            let message = message.unwrap_or_else(|| {
+                use std::io::Read;
+                let mut words = String::new();
+                eprintln!("Type your reply and use CTRL-D to finish it.");
+                std::io::stdin().read_to_string(&mut words).unwrap();
+                words
+            });
+            let party = cmd::load_party(wallet_dir)?;
+            let (ciphertext, mut cipher) = reply(&party.keychain, proposal, message);
+            let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
+            if let Some(overflow) = overflow {
+                eprintln!(
+                    "WARNING: ciphertext is longer than {} -- it needs to be cut down by {} to fit",
+                    pad, overflow
+                );
+            }
+            Ok(item! { "ciphertext" => Cell::string(ciphertext_str) })
+        }
     }
+}
+
+fn reply(
+    keychain: &Keychain,
+    proposal: VersionedProposal,
+    message: String,
+) -> (Ciphertext, impl StreamCipher) {
+    let (remote_public_key, local_keypair) = match proposal {
+        VersionedProposal::One(proposal) => {
+            (proposal.public_key, keychain.keypair_for_offer(&proposal))
+        }
+    };
+    let (mut cipher, _) = crate::ecdh::ecdh(&local_keypair, &remote_public_key);
+    let ciphertext = Ciphertext::create(
+        local_keypair.public_key,
+        &mut cipher,
+        Plaintext::Messagev1(message),
+    );
+
+    (ciphertext, cipher)
 }
 
 fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
@@ -724,4 +817,47 @@ fn bet_prompt(bet: &Bet) -> String {
     write!(&mut res, "\n").unwrap();
     write!(&mut res, "Do you want to take this bet?").unwrap();
     res
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        ecdh::ecdh,
+        keychain::{KeyPair, Keychain},
+    };
+    use bdk::bitcoin::{Amount, OutPoint};
+    use olivia_core::EventId;
+
+    #[test]
+    fn make_reply_to_proposal() {
+        let keychain = Keychain::new([42u8; 64]);
+        let proposal_keypair = KeyPair::from_slice(&[43u8; 32]).unwrap();
+        let fixed = VersionedProposal::One(Proposal {
+            oracle: "h00.ooo".into(),
+            event_id: EventId::from_str("/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win").unwrap(),
+            value: Amount::from_str("0.01000000 BTC").unwrap(),
+            inputs: vec![OutPoint::from_str(
+                "d407fe2bd55b6076ce4c78028dc95b4097dd1e5acbf6ccaa741559a0903f1565:1",
+            )
+            .unwrap()],
+            public_key: proposal_keypair.public_key,
+            change_script: Some(
+                Address::from_str("bc1qvkswtx2t4y8t6237q753htu4hl4mxm5a9swfjw")
+                    .unwrap()
+                    .script_pubkey()
+                    .into(),
+            ),
+        });
+
+        let (ciphertext, mut pad_cipher) = reply(&keychain, fixed, "a test message".into());
+        let (ciphertext_str, overflow) = &ciphertext.to_string_padded(385, &mut pad_cipher);
+        assert!(!overflow.is_some());
+        let ciphertext = Ciphertext::from_str(ciphertext_str).unwrap();
+        let (mut cipher, _) = ecdh(&proposal_keypair, &ciphertext.public_key);
+        match ciphertext.decrypt(&mut cipher).unwrap() {
+            Plaintext::Messagev1(message) => assert_eq!(&message, "a test message"),
+            _ => panic!("expected a message"),
+        }
+    }
 }

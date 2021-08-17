@@ -1,6 +1,8 @@
+use super::{randomize::Randomize, Either, JointOutput, LocalProposal, Offer, Party};
 use crate::{
     bet::Bet,
     bet_database::{BetId, BetState},
+    ciphertext::{Ciphertext, Plaintext},
     OracleInfo,
 };
 use anyhow::{anyhow, Context};
@@ -15,16 +17,8 @@ use bdk::{
     SignOptions,
 };
 use chacha20::ChaCha20Rng;
+use olivia_secp256k1::fun::{marker::EvenY, Point};
 use std::convert::TryInto;
-
-use super::{
-    randomize::Randomize, Either, EncryptedOffer, JointOutput, LocalProposal, Offer, Party,
-};
-
-pub struct DecryptedOffer {
-    pub offer: Offer,
-    pub rng: ChaCha20Rng,
-}
 
 pub struct ValidatedOffer {
     pub bet_id: BetId,
@@ -41,8 +35,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub fn decrypt_offer(
         &self,
         bet_id: BetId,
-        encrypted_offer: EncryptedOffer,
-    ) -> anyhow::Result<DecryptedOffer> {
+        encrypted_offer: Ciphertext,
+    ) -> anyhow::Result<(Plaintext, Point<EvenY>, ChaCha20Rng)> {
         let local_proposal = self
             .bet_db
             .get_entity(bet_id)?
@@ -52,8 +46,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             BetState::Proposed { local_proposal } => {
                 let keypair = self.keychain.get_key_for_proposal(&local_proposal.proposal);
                 let (mut cipher, rng) = crate::ecdh::ecdh(&keypair, &encrypted_offer.public_key);
-                let offer = encrypted_offer.decrypt(&mut cipher)?;
-                Ok(DecryptedOffer { offer, rng })
+                let plaintext = encrypted_offer.decrypt(&mut cipher)?;
+
+                Ok((plaintext, encrypted_offer.public_key, rng))
             }
             _ => Err(anyhow!("Offer has been taken for this proposal already")),
         }
@@ -74,12 +69,13 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         Ok((psbt_inputs, Amount::from_sat(input_value)))
     }
 
-    pub fn decrypt_and_validate_offer(
+    pub fn validate_offer(
         &self,
         bet_id: BetId,
-        encrypted_offer: EncryptedOffer,
+        offer: Offer,
+        offer_public_key: Point<EvenY>,
+        mut rng: ChaCha20Rng,
     ) -> anyhow::Result<ValidatedOffer> {
-        let DecryptedOffer { offer, mut rng } = self.decrypt_offer(bet_id, encrypted_offer)?;
         let (offer_psbt_inputs, offer_input_value) = self.lookup_offer_inputs(&offer)?;
 
         let randomize = Randomize::new(&mut rng);
@@ -120,7 +116,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .map_err(|_| anyhow!("wrong number of attestations"))?;
 
         let joint_output = JointOutput::new(
-            [keypair.public_key, offer.public_key],
+            [keypair.public_key, offer_public_key],
             Either::Left(keypair.secret_key),
             anticipated_attestations,
             offer.choose_right,

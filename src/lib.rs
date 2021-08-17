@@ -8,6 +8,7 @@ pub mod amount_ext;
 pub mod bet;
 pub mod bet_database;
 mod change;
+pub mod ciphertext;
 pub mod cmd;
 pub mod config;
 pub mod ecdh;
