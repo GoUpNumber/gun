@@ -5,7 +5,7 @@
 
 
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
-Its distinguishing features is the ability to do [peer-to-peer betting](./docs/bet.md).
+Its distinguishing feature is the ability to do [peer-to-peer betting](./docs/bet.md).
 
 **⚠ WARNING EXPERIMENTAL**
 
