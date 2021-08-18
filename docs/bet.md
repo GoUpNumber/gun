@@ -33,7 +33,7 @@ This is your proposal.
 You can see in plain-text it contains the oracle `h00.ooo` and the event id `/random/2021-08-11T04:29:00/heads_tails.winner`.
 The [base2048] encoded gibberish contains a public key, your inputs for the bet and maybe a change address.
 
-**⚠ Since the proposal contains your on on-chain inputs for the bet. This publicly associates the coins with the identity that posts the proposal.**
+**⚠ The proposal contains your on on-chain inputs for the bet. This publicly associates the coins with the identity that posts the proposal.**
 
 **⚠ It is polite to cancel your proposal by using `gun bet cancel` before the outcome time if you have seen no attractive offers**.
 
