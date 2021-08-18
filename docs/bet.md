@@ -92,7 +92,7 @@ Once it's in the `won` state you can do:
 gun bet claim
 ```
 
-Note there is no hurry to do this except that while it is in the `won` state but the coins won't be recoverable from your seedwords until you do.
+Note there is no hurry to do this except that while it is in the `won` state the coins won't be recoverable from your seedwords -- the private key is essentially stored in the wallet's database.
 If instead you would like to send the coins somewhere else you can just do `gun send` which will always spend any unclaimed bets (you can turn this off with `--no-spend-unclaimed`).
 
 ## Potentially Asked Questions
@@ -100,6 +100,11 @@ If instead you would like to send the coins somewhere else you can just do `gun 
 ### Can I recover my bet if I lose my database?
 
 Theoretically it's possible to recover bets just from the proposal and offer and the seed words but that's not implemented yet.
+
+### Can I be an oracle?
+
+The oracle server that powers https://h00.ooo is called [`olivia`](https://github.com/LLFourn/olivia).
+It lacks documentation at the moment.
 
 ### What privacy is actually guaranteed by this protocol?
 
