@@ -70,7 +70,7 @@ pub enum BetOpt {
         #[structopt(long, short)]
         message: Option<String>,
     },
-    /// Inspect an offer or proposal
+    /// Inspect an offer or proposal string
     Inspect(InspectOpt),
     /// Take on offer made to your proposal
     Take {
@@ -235,7 +235,10 @@ pub fn run_bet_cmd(
                     .bet_db()
                     .insert_bet(BetState::Proposed { local_proposal })?;
                 eprintln!("post your proposal and let people make offers to it:");
-                Ok(item! { "proposal" => Cell::String(proposal.into_versioned().to_string()) })
+                Ok(CmdOutput::EmphasisedItem {
+                    main: ("proposal", Cell::string(proposal_string)),
+                    other: vec![("id", Cell::string(bet_id))],
+                })
             } else {
                 Ok(CmdOutput::None)
             }
@@ -308,13 +311,14 @@ pub fn run_bet_cmd(
                 )?;
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
-                let (_, encrypted_offer) = party.save_and_encrypt_offer(
+                let (bet_id, encrypted_offer) = party.save_and_encrypt_offer(
                     bet,
                     offer,
                     message,
                     local_public_key,
                     &mut cipher,
                 )?;
+
                 eprintln!("Post this offer in reponse to the proposal");
                 let (padded_encrypted_offer, overflow) =
                     encrypted_offer.to_string_padded(pad, &mut cipher);
@@ -323,7 +327,10 @@ pub fn run_bet_cmd(
                         eprintln!("WARNING: this offer is longer than {} bytes -- it needs to be cut down by {}", pad, overflow);
                     }
                 }
-                Ok(item! { "offer" =>  Cell::string(padded_encrypted_offer )})
+                Ok(CmdOutput::EmphasisedItem {
+                    main: ("offer", Cell::string(padded_encrypted_offer)),
+                    other: vec![("id", Cell::string(bet_id))],
+                })
             } else {
                 Ok(CmdOutput::None)
             }

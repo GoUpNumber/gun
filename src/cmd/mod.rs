@@ -277,6 +277,10 @@ pub enum CmdOutput {
     Table(TableData),
     Json(serde_json::Value),
     Item(Vec<(&'static str, Cell)>),
+    EmphasisedItem {
+        main: (&'static str, Cell),
+        other: Vec<(&'static str, Cell)>,
+    },
     List(Vec<Cell>),
     None,
 }
@@ -289,9 +293,10 @@ impl CmdOutput {
         })
     }
 
-    pub fn render(self) -> String {
+    pub fn render(self) -> Option<String> {
         use CmdOutput::*;
-        match self {
+
+        Some(match self {
             Table(table_data) => {
                 let mut table = term_table::Table::new();
                 table.add_row(Row::new(table_data.col_names.to_vec()));
@@ -302,9 +307,6 @@ impl CmdOutput {
             }
             Json(json) => serde_json::to_string_pretty(&json).unwrap(),
             Item(item) => {
-                if item.len() == 1 {
-                    return item.into_iter().next().unwrap().1.render();
-                }
                 let mut table = term_table::Table::new();
                 for (key, value) in item {
                     if matches!(value, Cell::Amount(_)) {
@@ -322,8 +324,9 @@ impl CmdOutput {
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
-            None => String::new(),
-        }
+            EmphasisedItem { main, .. } => main.1.render(),
+            None => return Option::None,
+        })
     }
 
     pub fn render_simple(self) -> String {
@@ -341,15 +344,16 @@ impl CmdOutput {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Json(json) => serde_json::to_string(&json).unwrap(),
-            Item(item) => {
-                if item.len() == 1 {
-                    return item.into_iter().next().unwrap().1.render();
-                }
-                item.into_iter()
-                    .map(|(k, v)| format!("{}\t{}", k, v.render()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            Item(item) => item
+                .into_iter()
+                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            EmphasisedItem { main, other } => core::iter::once(main)
+                .chain(other.into_iter())
+                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .collect::<Vec<_>>()
+                .join("\n"),
             List(list) => {
                 format!(
                     "{}",
@@ -381,7 +385,15 @@ impl CmdOutput {
 
                 serde_json::to_value(&hash_maps).unwrap()
             }
-            Item(item) => serde_json::to_value(&item).unwrap(),
+            Item(item) => {
+                serde_json::to_value(&item.into_iter().collect::<HashMap<_, _>>()).unwrap()
+            }
+            EmphasisedItem { main, other } => serde_json::to_value(
+                core::iter::once(main)
+                    .chain(other.into_iter())
+                    .collect::<HashMap<_, _>>(),
+            )
+            .unwrap(),
             Json(item) => item,
             List(list) => serde_json::to_value(list).unwrap(),
             None => serde_json::Value::Null,

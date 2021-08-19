@@ -86,7 +86,9 @@ fn main() -> anyhow::Result<()> {
             } else if opt.tabs {
                 println!("{}", output.render_simple())
             } else {
-                println!("{}", output.render())
+                if let Some(output) = output.render() {
+                    println!("{}", output)
+                }
             }
         }
         Err(e) => {
