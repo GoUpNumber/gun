@@ -15,7 +15,7 @@ use gun_wallet::{
     bet_database,
     bitcoin::Amount,
     keychain::Keychain,
-    party::{BetArgs, Party},
+    party::{BetArgs, Party, Proposal, VersionedProposal},
     FeeSpec, ValueChoice,
 };
 use olivia_core::{
@@ -170,7 +170,7 @@ pub fn test_happy_path() {
         oracle_event,
     ) = setup_test!();
 
-    let (p1_bet_id, proposal) = party_1
+    let local_proposal = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
@@ -181,10 +181,17 @@ pub fn test_happy_path() {
         )
         .unwrap();
 
+    let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
+    let p1_bet_id = party_1
+        .bet_db()
+        .insert_bet(BetState::Proposed { local_proposal })
+        .unwrap();
+
     let (p2_bet_id, encrypted_offer) = {
+        let proposal = VersionedProposal::from_str(&proposal_string).unwrap();
         let (bet, offer, local_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
-                proposal.clone(),
+                proposal.into(),
                 true,
                 oracle_event,
                 oracle_info,
@@ -286,7 +293,7 @@ pub fn cancel_proposal() {
     let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
         setup_test!();
 
-    let (p1_bet_id, proposal) = party_1
+    let local_proposal_1 = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
@@ -297,7 +304,20 @@ pub fn cancel_proposal() {
         )
         .unwrap();
 
-    let (bet_id_overlap, _tmp) = party_1
+    let proposal_1 = local_proposal_1
+        .proposal
+        .clone()
+        .into_versioned()
+        .to_string();
+
+    let p1_bet_id = party_1
+        .bet_db()
+        .insert_bet(BetState::Proposed {
+            local_proposal: local_proposal_1,
+        })
+        .unwrap();
+
+    let local_proposal_2 = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
@@ -309,10 +329,18 @@ pub fn cancel_proposal() {
         )
         .unwrap();
 
+    let bet_id_overlap = party_1
+        .bet_db()
+        .insert_bet(BetState::Proposed {
+            local_proposal: local_proposal_2,
+        })
+        .unwrap();
+
     let (p2_bet_id, _) = {
+        let proposal = VersionedProposal::from_str(&proposal_1).unwrap();
         let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
-                proposal.clone(),
+                proposal.into(),
                 true,
                 oracle_event,
                 oracle_info,
@@ -351,7 +379,7 @@ pub fn test_cancel_offer() {
     let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
         setup_test!();
 
-    let (_, proposal) = party_1
+    let local_proposal = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
@@ -362,10 +390,13 @@ pub fn test_cancel_offer() {
         )
         .unwrap();
 
+    let proposal_str = local_proposal.proposal.clone().into_versioned().to_string();
+
     let (p2_bet_id, _) = {
+        let proposal = VersionedProposal::from_str(&proposal_str).unwrap();
         let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
-                proposal.clone(),
+                proposal.into(),
                 true,
                 oracle_event,
                 oracle_info,
@@ -403,7 +434,7 @@ pub fn cancel_offer_after_offer_taken() {
     let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
         setup_test!();
 
-    let (p1_bet_id, proposal) = party_1
+    let local_proposal = party_1
         .make_proposal(
             oracle_id.clone(),
             oracle_event.clone(),
@@ -413,6 +444,13 @@ pub fn cancel_offer_after_offer_taken() {
             },
         )
         .unwrap();
+
+    let proposal_str = local_proposal.proposal.clone().into_versioned().to_string();
+    let p1_bet_id = party_1
+        .bet_db()
+        .insert_bet(BetState::Proposed { local_proposal })
+        .unwrap();
+    let proposal = Proposal::from(VersionedProposal::from_str(&proposal_str).unwrap());
 
     let (first_p2_bet_id, _) = {
         let (bet, offer, offer_public_key, mut cipher) = party_2
@@ -438,7 +476,7 @@ pub fn cancel_offer_after_offer_taken() {
     let (second_p2_bet_id, second_encrypted_offer) = {
         let (bet, offer, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
-                proposal.clone(),
+                proposal,
                 true,
                 oracle_event,
                 oracle_info,

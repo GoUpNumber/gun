@@ -229,8 +229,11 @@ pub fn run_bet_cmd(
             }
             question += " Ok?";
             if yes || read_answer(&question) {
-                let (_bet_id, proposal) =
-                    party.make_proposal(oracle_id, oracle_event, args.into())?;
+                let local_proposal = party.make_proposal(oracle_id, oracle_event, args.into())?;
+                let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
+                let bet_id = party
+                    .bet_db()
+                    .insert_bet(BetState::Proposed { local_proposal })?;
                 eprintln!("post your proposal and let people make offers to it:");
                 Ok(item! { "proposal" => Cell::String(proposal.into_versioned().to_string()) })
             } else {

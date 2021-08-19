@@ -1,5 +1,4 @@
 use crate::{
-    bet_database::{BetId, BetState},
     bitcoin::{Amount, Script},
     change::{BinScript, Change},
     party::Party,
@@ -145,7 +144,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         oracle_id: OracleId,
         oracle_event: OracleEvent<Secp256k1>,
         args: BetArgs,
-    ) -> anyhow::Result<(BetId, Proposal)> {
+    ) -> anyhow::Result<LocalProposal> {
         let event_id = &oracle_event.event.id;
         if !event_id.n_outcomes() == 2 {
             return Err(anyhow!(
@@ -229,10 +228,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             tags: args.tags,
         };
 
-        let new_bet = BetState::Proposed { local_proposal };
-        let bet_id = self.bet_db.insert_bet(new_bet)?;
-
-        Ok((bet_id, proposal))
+        Ok(local_proposal)
     }
 }
 
