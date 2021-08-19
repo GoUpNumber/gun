@@ -158,13 +158,11 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         builder.fee_rate(FeeRate::from_sat_per_vb(0.0));
 
         match args.value {
-            ValueChoice::All => {
-                builder.drain_wallet().drain_to(Script::default());
-            }
+            ValueChoice::All => builder.drain_wallet().drain_to(Script::default()),
             ValueChoice::Amount(amount) => {
-                builder.add_recipient(Script::default(), amount.as_sat());
+                builder.add_recipient(Script::default(), amount.as_sat())
             }
-        }
+        };
 
         args.apply_args(self.bet_db(), &mut builder)?;
 
@@ -172,7 +170,12 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .finish()
             .context("Failed to gather proposal outputs")?;
 
-        assert_eq!(txdetails.fee, Some(0));
+        debug_assert!(
+            // The tx fee *should* be nothing but it's possible the bet value is so close to the
+            // UTXO value that it gets added to fee rather than creating a dust output.
+            txdetails.fee.unwrap() < 546,
+            "the fee should only be there if it's dust"
+        );
 
         let outputs = &psbt.global.unsigned_tx.output;
         let tx_inputs = psbt

@@ -130,26 +130,25 @@ macro_rules! setup_test {
 macro_rules! wait_for_state {
     ($party:ident, $bet_id:ident, $state:literal) => {{
         let mut counter: usize = 0;
-        let mut cur_state: String;
+        let mut cur_state;
         while {
             cur_state = $party
                 .bet_db()
                 .get_entity::<BetState>($bet_id)
                 .unwrap()
-                .unwrap()
-                .name()
-                .into();
-            cur_state != $state
+                .unwrap();
+            cur_state.name() != $state
         } {
             $party.take_next_action($bet_id, false).unwrap();
             counter += 1;
             std::thread::sleep(std::time::Duration::from_secs(1));
             if counter > 10 {
                 panic!(
-                    "{}/{} has failed to reach state {}. It ended up in {}",
+                    "{}/{} has failed to reach state {}. It ended up in {}. {:?}",
                     stringify!($party),
                     stringify!($bet_id),
                     $state,
+                    cur_state.name(),
                     cur_state
                 );
             }
@@ -529,4 +528,109 @@ pub fn cancel_offer_after_offer_taken() {
     test_client.generate(1, None);
     wait_for_state!(party_2, second_p2_bet_id, "cancelled");
     wait_for_state!(party_2, first_p2_bet_id, "cancelled");
+}
+
+#[test]
+fn create_proposal_with_dust_change() {
+    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
+        setup_test!();
+
+    let balance = party_1.wallet().get_balance().unwrap();
+    dbg!(&balance);
+    let bet_value = balance - 250;
+
+    let local_proposal = party_1
+        .make_proposal(
+            oracle_id.clone(),
+            oracle_event.clone(),
+            BetArgs {
+                value: ValueChoice::Amount(Amount::from_sat(bet_value)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(local_proposal.change, None);
+    assert_eq!(local_proposal.proposal.value.as_sat(), bet_value);
+
+    let p1_bet_id = party_1
+        .bet_db()
+        .insert_bet(BetState::Proposed {
+            local_proposal: local_proposal.clone(),
+        })
+        .unwrap();
+
+    let (p2_bet_id, encrypted_offer) = {
+        let balance = party_2.wallet().get_balance().unwrap();
+        let bet_value = balance - 250;
+
+        assert!(
+            matches!(
+                party_2
+                    .generate_offer_with_oracle_event(
+                        local_proposal.proposal.clone(),
+                        true,
+                        oracle_event.clone(),
+                        oracle_info.clone(),
+                        BetArgs {
+                            value: ValueChoice::Amount(Amount::from_sat(bet_value)),
+                            ..Default::default()
+                        },
+                        FeeSpec::Absolute(Amount::from_sat(501)),
+                    )
+                    .map(|_| ())
+                    .unwrap_err()
+                    .downcast()
+                    .unwrap(),
+                bdk::Error::InsufficientFunds { .. }
+            ),
+            "we can't afford 501 fee even with extra proposal fee"
+        );
+
+        let (bet, offer, local_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(
+                local_proposal.proposal,
+                true,
+                oracle_event,
+                oracle_info,
+                BetArgs {
+                    value: ValueChoice::Amount(Amount::from_sat(bet_value)),
+                    ..Default::default()
+                },
+                // we can afford 500
+                FeeSpec::Absolute(Amount::from_sat(500)),
+            )
+            .unwrap();
+
+        assert_eq!(offer.change, None);
+        assert_eq!(offer.value.as_sat(), bet_value);
+
+        party_2
+            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
+            .unwrap()
+    };
+
+    wait_for_state!(party_2, p2_bet_id, "offered");
+
+    let (decrypted_offer, offer_public_key, rng) =
+        party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
+    let validated_offer = party_1
+        .validate_offer(
+            p1_bet_id,
+            decrypted_offer.into_offer(),
+            offer_public_key,
+            rng,
+        )
+        .unwrap();
+
+    Broadcast::broadcast(
+        party_1.wallet().client(),
+        validated_offer.bet.psbt.clone().extract_tx(),
+    )
+    .unwrap();
+    party_1.set_offer_taken(validated_offer).unwrap();
+    test_client.generate(1, None);
+
+    wait_for_state!(party_1, p1_bet_id, "confirmed");
+    wait_for_state!(party_2, p2_bet_id, "confirmed");
 }
