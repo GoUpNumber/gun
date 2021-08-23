@@ -33,7 +33,6 @@ use bdk::{
     wallet::{AddressIndex, Wallet},
     KeychainKind, SignOptions,
 };
-
 use olivia_core::{Attestation, Outcome};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},

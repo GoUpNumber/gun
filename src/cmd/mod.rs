@@ -404,37 +404,53 @@ impl CmdOutput {
 pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut table = Table::new();
     let mut header = Some("in".to_string());
+    let mut input_total = Amount::ZERO;
     for (i, psbt_input) in psbt.inputs.iter().enumerate() {
         let txout = psbt_input.witness_utxo.as_ref().unwrap();
         let input = &psbt.global.unsigned_tx.input[i];
         let _address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
-
+        let value = Amount::from_sat(txout.value);
         table.add_row(Row::new(vec![
             header.take().unwrap_or("".to_string()),
             input.previous_output.to_string(),
-            format_amount(Amount::from_sat(txout.value)),
+            format_amount(value),
         ]));
+        input_total += value;
     }
+    table.add_row(Row::new(vec![
+        "".to_string(),
+        "total".into(),
+        format_amount(input_total),
+    ]));
 
+    let mut output_total = Amount::ZERO;
     let mut header = Some("out".to_string());
     for (i, _) in psbt.outputs.iter().enumerate() {
         let txout = &psbt.global.unsigned_tx.output[i];
         let address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
+        let value = Amount::from_sat(txout.value);
         table.add_row(Row::new(vec![
             header.take().unwrap_or("".to_string()),
             address,
-            format_amount(Amount::from_sat(txout.value)),
+            format_amount(value),
         ]));
+        output_total += value;
     }
 
+    table.add_row(Row::new(vec![
+        "".to_string(),
+        "total".into(),
+        format_amount(output_total),
+    ]));
     let (fee, feerate) = psbt.fee();
+
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{} (rate s/vb)", feerate.as_sat_vb()),
+        &format!("{} sats/vb", feerate.as_sat_vb()),
         &format_amount(fee),
     ]));
 

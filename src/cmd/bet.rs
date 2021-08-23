@@ -228,12 +228,17 @@ pub fn run_bet_cmd(
                 );
             }
             question += " Ok?";
+            let local_proposal = party.make_proposal(oracle_id, oracle_event, args.into())?;
+            if let Some(change) = &local_proposal.change {
+                eprintln!("This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  change.value(), local_proposal.proposal.value);
+            }
+
             if yes || read_answer(&question) {
-                let local_proposal = party.make_proposal(oracle_id, oracle_event, args.into())?;
                 let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
                 let bet_id = party
                     .bet_db()
                     .insert_bet(BetState::Proposed { local_proposal })?;
+
                 eprintln!("post your proposal and let people make offers to it:");
                 Ok(CmdOutput::EmphasisedItem {
                     main: ("proposal", Cell::string(proposal_string)),
@@ -309,6 +314,10 @@ pub fn run_bet_cmd(
                     args.into(),
                     fee_args.fee,
                 )?;
+
+            if let Some(change) = &offer.change {
+                eprintln!("This offer will put {} “in-use” unnecessarily because the offer value {} does not much a sum of available UTXOs.\nYou can get a UTXO with the exact amount by using `gun split` first", change.value(), offer.value);
+            }
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
                 let (bet_id, encrypted_offer) = party.save_and_encrypt_offer(
@@ -429,8 +438,13 @@ pub fn run_bet_cmd(
             for bet_id in bet_ids {
                 match bet_db.get_entity::<BetState>(bet_id) {
                     Ok(Some(bet_state)) => match bet_state {
-                        BetState::Proposed { .. } => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", bet_id)) {
-                            to_remove.push(bet_id);
+                        BetState::Proposed { local_proposal } => {
+                            match local_proposal.oracle_event.event.expected_outcome_time {
+                                Some(expected_outcome_time) if expected_outcome_time < Utc::now().naive_utc() => to_remove.push(bet_id),
+                                _ => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", bet_id)) {
+                                    to_remove.push(bet_id);
+                                }
+                            }
                         },
                         BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", bet_id)) {
                             to_remove.push(bet_id);
