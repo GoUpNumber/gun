@@ -20,15 +20,6 @@ pub enum VersionedProposal {
     One(Proposal),
 }
 
-impl VersionedProposal {
-    fn version_marker(&self) -> String {
-        match self {
-            VersionedProposal::One(..) => "📣",
-        }
-        .into()
-    }
-}
-
 impl From<VersionedProposal> for Proposal {
     fn from(vp: VersionedProposal) -> Self {
         match vp {
@@ -90,8 +81,7 @@ impl core::fmt::Display for VersionedProposal {
                 };
                 write!(
                     f,
-                    "{}{}#{}#{}#{}",
-                    self.version_marker(),
+                    "{}#{}#{}#{}",
                     proposal
                         .value
                         .to_string_in(Denomination::Bitcoin)
@@ -110,7 +100,6 @@ impl FromStr for VersionedProposal {
     type Err = anyhow::Error;
 
     fn from_str(string: &str) -> Result<Self, Self::Err> {
-        let string = string.trim_start_matches("📣");
         let mut segments = string.split("#");
         let value = Amount::from_str_in(
             segments.next().ok_or(anyhow!("missing amount"))?,
@@ -296,7 +285,7 @@ mod test {
             ),
         });
 
-        let string =  "📣0.01#h00.ooo#/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win#ǔ༖ǼभݸჷતϧષগழਞഹเϕॐಋచଚڮݻɈపŉɋʍҞɒŴݦസӫၒӵݎஜؽͼɹঊڄՓॠఖஷߣၦაŐƍۂʎӯسՉهƽཀލǂޞඤӖყଋم༎";
+        let string =  "0.01#h00.ooo#/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win#ǔ༖ǼभݸჷતϧષগழਞഹเϕॐಋచଚڮݻɈపŉɋʍҞɒŴݦസӫၒӵݎஜؽͼɹঊڄՓॠఖஷߣၦაŐƍۂʎӯسՉهƽཀލǂޞඤӖყଋم༎";
         assert_eq!(VersionedProposal::from_str(string).unwrap(), fixed);
         assert_eq!(fixed.to_string(), string);
     }
