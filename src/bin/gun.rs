@@ -1,4 +1,6 @@
-use gun_wallet::cmd::{self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, TransactionOpt, UtxoOpt};
+use gun_wallet::cmd::{
+    self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
+};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -37,6 +39,8 @@ pub enum Commands {
     Send(SendOpt),
     /// Initialize a wallet
     Init(InitOpt),
+    /// Split coins into evenly sized outputs.
+    Split(SplitOpt),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -74,6 +78,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Init(opt) => cmd::run_init(&wallet_dir, opt),
         Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet_dir, opt),
         Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet_dir, opt),
+        Commands::Split(opt) => cmd::run_split_cmd(&wallet_dir, opt),
     };
 
     match res {
@@ -86,7 +91,9 @@ fn main() -> anyhow::Result<()> {
             } else if opt.tabs {
                 println!("{}", output.render_simple())
             } else {
-                println!("{}", output.render())
+                if let Some(output) = output.render() {
+                    println!("{}", output)
+                }
             }
         }
         Err(e) => {

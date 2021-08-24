@@ -1,5 +1,4 @@
 use crate::{
-    bet_database::{BetId, BetState},
     bitcoin::{Amount, Script},
     change::{BinScript, Change},
     party::Party,
@@ -145,7 +144,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         oracle_id: OracleId,
         oracle_event: OracleEvent<Secp256k1>,
         args: BetArgs,
-    ) -> anyhow::Result<(BetId, Proposal)> {
+    ) -> anyhow::Result<LocalProposal> {
         let event_id = &oracle_event.event.id;
         if !event_id.n_outcomes() == 2 {
             return Err(anyhow!(
@@ -159,13 +158,11 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         builder.fee_rate(FeeRate::from_sat_per_vb(0.0));
 
         match args.value {
-            ValueChoice::All => {
-                builder.drain_wallet().drain_to(Script::default());
-            }
+            ValueChoice::All => builder.drain_wallet().drain_to(Script::default()),
             ValueChoice::Amount(amount) => {
-                builder.add_recipient(Script::default(), amount.as_sat());
+                builder.add_recipient(Script::default(), amount.as_sat())
             }
-        }
+        };
 
         args.apply_args(self.bet_db(), &mut builder)?;
 
@@ -173,7 +170,12 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .finish()
             .context("Failed to gather proposal outputs")?;
 
-        assert_eq!(txdetails.fee, Some(0));
+        debug_assert!(
+            // The tx fee *should* be nothing but it's possible the bet value is so close to the
+            // UTXO value that it gets added to fee rather than creating a dust output.
+            txdetails.fee.unwrap() < 546,
+            "the fee should only be there if it's dust"
+        );
 
         let outputs = &psbt.global.unsigned_tx.output;
         let tx_inputs = psbt
@@ -229,10 +231,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             tags: args.tags,
         };
 
-        let new_bet = BetState::Proposed { local_proposal };
-        let bet_id = self.bet_db.insert_bet(new_bet)?;
-
-        Ok((bet_id, proposal))
+        Ok(local_proposal)
     }
 }
 

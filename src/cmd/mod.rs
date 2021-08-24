@@ -277,6 +277,10 @@ pub enum CmdOutput {
     Table(TableData),
     Json(serde_json::Value),
     Item(Vec<(&'static str, Cell)>),
+    EmphasisedItem {
+        main: (&'static str, Cell),
+        other: Vec<(&'static str, Cell)>,
+    },
     List(Vec<Cell>),
     None,
 }
@@ -289,9 +293,10 @@ impl CmdOutput {
         })
     }
 
-    pub fn render(self) -> String {
+    pub fn render(self) -> Option<String> {
         use CmdOutput::*;
-        match self {
+
+        Some(match self {
             Table(table_data) => {
                 let mut table = term_table::Table::new();
                 table.add_row(Row::new(table_data.col_names.to_vec()));
@@ -302,9 +307,6 @@ impl CmdOutput {
             }
             Json(json) => serde_json::to_string_pretty(&json).unwrap(),
             Item(item) => {
-                if item.len() == 1 {
-                    return item.into_iter().next().unwrap().1.render();
-                }
                 let mut table = term_table::Table::new();
                 for (key, value) in item {
                     if matches!(value, Cell::Amount(_)) {
@@ -322,8 +324,9 @@ impl CmdOutput {
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
-            None => String::new(),
-        }
+            EmphasisedItem { main, .. } => main.1.render(),
+            None => return Option::None,
+        })
     }
 
     pub fn render_simple(self) -> String {
@@ -341,15 +344,16 @@ impl CmdOutput {
                 .collect::<Vec<_>>()
                 .join("\n"),
             Json(json) => serde_json::to_string(&json).unwrap(),
-            Item(item) => {
-                if item.len() == 1 {
-                    return item.into_iter().next().unwrap().1.render();
-                }
-                item.into_iter()
-                    .map(|(k, v)| format!("{}\t{}", k, v.render()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            Item(item) => item
+                .into_iter()
+                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            EmphasisedItem { main, other } => core::iter::once(main)
+                .chain(other.into_iter())
+                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .collect::<Vec<_>>()
+                .join("\n"),
             List(list) => {
                 format!(
                     "{}",
@@ -381,7 +385,15 @@ impl CmdOutput {
 
                 serde_json::to_value(&hash_maps).unwrap()
             }
-            Item(item) => serde_json::to_value(&item).unwrap(),
+            Item(item) => {
+                serde_json::to_value(&item.into_iter().collect::<HashMap<_, _>>()).unwrap()
+            }
+            EmphasisedItem { main, other } => serde_json::to_value(
+                core::iter::once(main)
+                    .chain(other.into_iter())
+                    .collect::<HashMap<_, _>>(),
+            )
+            .unwrap(),
             Json(item) => item,
             List(list) => serde_json::to_value(list).unwrap(),
             None => serde_json::Value::Null,
@@ -392,37 +404,53 @@ impl CmdOutput {
 pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut table = Table::new();
     let mut header = Some("in".to_string());
+    let mut input_total = Amount::ZERO;
     for (i, psbt_input) in psbt.inputs.iter().enumerate() {
         let txout = psbt_input.witness_utxo.as_ref().unwrap();
         let input = &psbt.global.unsigned_tx.input[i];
         let _address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
-
+        let value = Amount::from_sat(txout.value);
         table.add_row(Row::new(vec![
             header.take().unwrap_or("".to_string()),
             input.previous_output.to_string(),
-            format_amount(Amount::from_sat(txout.value)),
+            format_amount(value),
         ]));
+        input_total += value;
     }
+    table.add_row(Row::new(vec![
+        "".to_string(),
+        "total".into(),
+        format_amount(input_total),
+    ]));
 
+    let mut output_total = Amount::ZERO;
     let mut header = Some("out".to_string());
     for (i, _) in psbt.outputs.iter().enumerate() {
         let txout = &psbt.global.unsigned_tx.output[i];
         let address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
+        let value = Amount::from_sat(txout.value);
         table.add_row(Row::new(vec![
             header.take().unwrap_or("".to_string()),
             address,
-            format_amount(Amount::from_sat(txout.value)),
+            format_amount(value),
         ]));
+        output_total += value;
     }
 
+    table.add_row(Row::new(vec![
+        "".to_string(),
+        "total".into(),
+        format_amount(output_total),
+    ]));
     let (fee, feerate) = psbt.fee();
+
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{} (rate s/vb)", feerate.as_sat_vb()),
+        &format!("{} sats/vb", feerate.as_sat_vb()),
         &format_amount(fee),
     ]));
 

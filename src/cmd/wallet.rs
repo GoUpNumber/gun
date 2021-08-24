@@ -1,10 +1,11 @@
 use super::*;
-use crate::{bet_database::BetState, cmd, item};
+use crate::{amount_ext::FromCliStr, bet_database::BetState, cmd, item};
 use bdk::{
     bitcoin::{Address, OutPoint, Script, Txid},
+    blockchain::EsploraBlockchain,
     database::Database,
-    wallet::AddressIndex,
-    KeychainKind, LocalUtxo, SignOptions,
+    wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
+    KeychainKind, LocalUtxo, SignOptions, TxBuilder,
 };
 use std::collections::HashMap;
 use structopt::StructOpt;
@@ -190,17 +191,24 @@ pub struct SendOpt {
     /// The address to send the coins to
     to: Address,
     #[structopt(flatten)]
+    spend_opt: SpendOpt,
+}
+
+#[derive(Clone, Debug, StructOpt)]
+pub struct SpendOpt {
+    #[structopt(flatten)]
     fee_args: cmd::FeeArgs,
     /// Allow spending utxos that are currently being used in a protocol (like a bet).
     #[structopt(long)]
     spend_in_use: bool,
-    /// Don't spend unclaimed coins -- e.g. coins you won from bets
+    /// Don't spend unclaimed coins e.g. coins you won from bets
     #[structopt(long)]
     no_spend_unclaimed: bool,
     /// Also spend bets that are already in the "claiming" state replacing the previous
     /// transaction.
     #[structopt(long)]
     bump_claiming: bool,
+    /// Don't prompt for answers just answer yes.
     #[structopt(long, short)]
     yes: bool,
     /// Print the resulting transaction out in hex instead of broadcasting it.
@@ -208,16 +216,76 @@ pub struct SendOpt {
     print_tx: bool,
 }
 
+impl SpendOpt {
+    pub fn spend_coins<D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
+        self,
+        party: &Party<EsploraBlockchain, D>,
+        mut builder: TxBuilder<'_, EsploraBlockchain, D, Cs, Ctx>,
+    ) -> anyhow::Result<CmdOutput> {
+        let SpendOpt {
+            fee_args,
+            spend_in_use,
+            no_spend_unclaimed,
+            bump_claiming,
+            yes,
+            print_tx,
+        } = self;
+
+        builder
+            .enable_rbf()
+            .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
+
+        let in_use = party.bet_db().currently_used_utxos(&[])?;
+
+        if !spend_in_use && in_use.len() > 0 {
+            eprintln!(
+                "note that {} utxos are not availble becuase they are in use",
+                in_use.len()
+            );
+            builder.unspendable(in_use);
+        }
+
+        fee_args
+            .fee
+            .apply_to_builder(party.wallet().client(), &mut builder)?;
+
+        let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
+            party
+                .spend_won_bets(builder, bump_claiming)?
+                .expect("Won't be None since builder we pass in is not manually_selected_only")
+        } else {
+            let (psbt, _) = builder.finish()?;
+            (psbt, vec![])
+        };
+
+        party.wallet().sign(&mut psbt, SignOptions::default())?;
+
+        let finalized = party
+            .wallet()
+            .finalize_psbt(&mut psbt, SignOptions::default())?;
+
+        assert!(finalized, "transaction must be finalized at this point");
+
+        let (output, txid) = cmd::decide_to_broadcast(
+            party.wallet().network(),
+            party.wallet().client(),
+            psbt,
+            yes,
+            print_tx,
+        )?;
+
+        if let Some(txid) = txid {
+            party.set_bets_to_claiming(&claiming_bet_ids, txid)?;
+        }
+
+        Ok(output)
+    }
+}
 pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
     let SendOpt {
         to,
         value,
-        fee_args,
-        no_spend_unclaimed,
-        bump_claiming,
-        yes,
-        print_tx,
-        spend_in_use,
+        spend_opt,
     } = send_opt;
     let party = load_party(wallet_dir)?;
     let mut builder = party.wallet().build_tx();
@@ -227,52 +295,7 @@ pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOu
         ValueChoice::Amount(amount) => builder.add_recipient(to.script_pubkey(), amount.as_sat()),
     };
 
-    builder
-        .enable_rbf()
-        .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
-
-    let in_use = party.bet_db().currently_used_utxos(&[])?;
-
-    if !spend_in_use && in_use.len() > 0 {
-        eprintln!(
-            "note that {} utxos are not availble becuase they are in use",
-            in_use.len()
-        );
-        builder.unspendable(in_use);
-    }
-
-    fee_args
-        .fee
-        .apply_to_builder(party.wallet().client(), &mut builder)?;
-
-    let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
-        party
-            .spend_won_bets(builder, bump_claiming)?
-            .expect("Won't be None since builder we pass in is not manually_selected_only")
-    } else {
-        let (psbt, _) = builder.finish()?;
-        (psbt, vec![])
-    };
-
-    party.wallet().sign(&mut psbt, SignOptions::default())?;
-
-    let finalized = party
-        .wallet()
-        .finalize_psbt(&mut psbt, SignOptions::default())?;
-
-    assert!(finalized, "transaction must be finalized at this point");
-
-    let (output, txid) = cmd::decide_to_broadcast(
-        party.wallet().network(),
-        party.wallet().client(),
-        psbt,
-        yes,
-        print_tx,
-    )?;
-    if let Some(txid) = txid {
-        party.set_bets_to_claiming(&claiming_bet_ids, txid)?;
-    }
-    Ok(output)
+    spend_opt.spend_coins(&party, builder)
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -450,4 +473,62 @@ pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOut
             })
         }
     }
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub struct SplitOpt {
+    /// The value of each output (best if this divides total)
+    #[structopt(parse(try_from_str = FromCliStr::from_cli_str))]
+    output_size: Amount,
+    /// Number of outputs to create. If omitted it will use the maximum possible.
+    n: Option<usize>,
+    #[structopt(flatten)]
+    spend_opt: SpendOpt,
+}
+
+pub fn run_split_cmd(wallet_dir: &PathBuf, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+    let SplitOpt {
+        output_size,
+        n,
+        spend_opt,
+    } = opt;
+    let party = load_party(wallet_dir)?;
+    let wallet = party.wallet();
+    let mut builder = wallet.build_tx();
+
+    let already_correct = wallet
+        .list_unspent()?
+        .into_iter()
+        .filter(|utxo| utxo.txout.value == output_size.as_sat());
+
+    builder.unspendable(already_correct.map(|utxo| utxo.outpoint).collect());
+
+    match n {
+        Some(n) => {
+            for _ in 0..n {
+                builder.add_recipient(
+                    wallet
+                        .get_change_address(AddressIndex::New)?
+                        .address
+                        .script_pubkey(),
+                    output_size.as_sat(),
+                );
+            }
+        }
+        None => {
+            builder
+                .drain_wallet()
+                // add one recipient so we at least get one split utxo of the correct size.
+                .add_recipient(
+                    wallet
+                        .get_change_address(AddressIndex::New)?
+                        .address
+                        .script_pubkey(),
+                    output_size.as_sat(),
+                )
+                .split_change(output_size.as_sat(), usize::MAX);
+        }
+    };
+
+    spend_opt.spend_coins(&party, builder)
 }
