@@ -6,6 +6,26 @@ An agreed upon oracle decides the outcome.
 
 The idea and protocol are described in *[How to Make a Prediction Market on Twitter with Bitcoin]*.
 
+## Traditional betting terminology
+
+A 'bet' (noun) is an pledge between to parties (bettors) on the outcome of an event. There are two 'sides' to a bet, the success outcome and the unsuccess outcome.
+Technically a bettor 'lays' on the unsuccessful outcome and 'bets' on the successful outcome, however these two terms are not widely known and common parlance uses the term 'bet' or 'wager' for either success or unsuccess.
+
+## Gun protocol terminology
+
+A bet is between two bettors, the announcer and the offerer.
+
+1. The announcer proposes a bet, or said another way, the desire to be involved in a bet (locks in announcer's wager amount and the event).
+2. The offerer offers to bet (technically, lay or bet) with the announcer (locks in offerer's wager amount and whose on which side of the event).
+3. The announcer accepts any offer he wishes. 
+
+- The offerer controls:
+  - his bet amount
+  - the event (available outcomes, end time etc.)
+- The announce controls:
+  - his bet amount (coupled with offerer's amount implies the odds)
+  - which side of the bet he is on
+
 ## Usage
 
 ### Add an oracle
@@ -63,7 +83,8 @@ Note that regardless of what data is contained the output should always be the s
 
 **⚠Offers last forever. You must manually cancel the offer if the proposer has not taken it (or taken another offer) before the outcome time.**
 
-### Take an offer
+#
+## Take an offer
 
 If you see an offer for a proposal you made that you like you can take it and broadcast the bet transaction:
 
