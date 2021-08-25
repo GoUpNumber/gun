@@ -1,6 +1,6 @@
 # Bet
 
-The the `gun bet` commands allow two people to make a bet by copy and pasting two messages back and forth.
+The `gun bet` commands allow two people to make a bet by copy and pasting two messages back and forth.
 The messages are usually small enough to fit into a single tweet.
 An agreed upon oracle decides the outcome.
 
@@ -10,7 +10,8 @@ The idea and protocol are described in *[How to Make a Prediction Market on Twit
 
 ### Add an oracle
 
-First you need to add the oracle you are going to use to your list of trusted oracles. [`h00.ooo`](https://h00.ooo) is the oracle I've set up for this experiment. 
+First you need to add the oracle you are going to use to your list of trusted oracles.
+[`h00.ooo`](https://h00.ooo) is the oracle I've set up for this experiment.
 You can explore it at https://outcome.observer/h00.ooo
 
 ```sh
@@ -39,7 +40,8 @@ The [base2048] encoded gibberish contains a public key, your inputs for the bet 
 
 ###  Or Make an offer
 
-Given the above proposal we can make an offer to it. Let's bet on the `heads` outcome. Note you can see the list of outcomes at https://outcome.observer/h00.ooo/random/2021-08-11T04:29:00/heads_tails.winner (but you can guess them from the event url as well).
+Given the above proposal we can make an offer to it. Let's bet on the `heads` outcome. 
+Note you can see the list of outcomes at https://outcome.observer/h00.ooo/random/2021-08-11T04:29:00/heads_tails.winner (but you can guess them from the event url as well).
 
 ```sh
 gun bet offer 0.01BTC heads 📣0.01#h00.ooo#/random/2021-08-09T06:00:00/heads_tails.winner#őŹഥφટȆൠၮஊܣලজݹԩଘѹɲВअۏɵଣȦƍߌźശཝōధಬޑՄҌଧڵѕდŲળມɱϾफრതܚຽےƍۂʌಠఔೲཪయબঋŗԇٴଳऑסњ༎
@@ -79,7 +81,7 @@ note the `-s` means it's going to go out and look at the chain to see if anythin
 
 ### Claim your winnings
 
-Once the outcome-time has been reached is worth checking if you've won or not.
+Once the outcome-time has been reached it is worth checking if you've won or not.
 A simple way to do this is to do:
 
 ```
@@ -111,10 +113,9 @@ It lacks documentation at the moment.
 Assuming it's implemented correctly and the adversary only has access to the proposal, a list of offers and the blockchain they can figure out:
 
 1. What event the bet was on.
-2. Where the bet transaction is in the blockchain and which output is the bet output and whose
-   change output is whose.
+2. Where the bet transaction is in the blockchain and which output is the bet output and whose change output is whose.
 3. Which inputs belong to the proposer and which belong to the offerer.
-4. How much was bet from each party.
+4. How much was bet by each party.
 
 They should be unable to determine:
 
@@ -127,7 +128,7 @@ Also note that any blockchain observer even if they didn't see the proposal and 
 
 ### Can the privacy be improved?
 
-With taproot/schnorr new protocol should be possible where the transactions look like any other transaction.
+With taproot/schnorr a new protocol should be possible where the transactions look like any other transaction.
 This will be very private if done via a direct message.
 
 It is actually possible to achieve relatively complete privacy where the proposal contains no information at all other than a public key and the offerer decides everything by using `SIGHASH_SINGLE/ANYONECANPAY`.
