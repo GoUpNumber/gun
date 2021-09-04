@@ -135,7 +135,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         args: BetArgs,
     ) -> anyhow::Result<LocalProposal> {
         let event_id = &oracle_event.event.id;
-        if !event_id.n_outcomes() == 2 {
+        if event_id.n_outcomes() != 2 {
             return Err(anyhow!(
                 "Cannot make a bet on {} since it isn't binary",
                 event_id
