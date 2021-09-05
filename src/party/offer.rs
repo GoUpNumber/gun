@@ -96,7 +96,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     ) -> anyhow::Result<(Bet, Offer, Point<EvenY>, impl StreamCipher)> {
         let remote_public_key = &proposal.public_key;
         let event_id = &oracle_event.event.id;
-        if !event_id.n_outcomes() == 2 {
+        if event_id.n_outcomes() != 2 {
             return Err(anyhow!(
                 "Cannot make a bet on {} since it isn't binary",
                 event_id
