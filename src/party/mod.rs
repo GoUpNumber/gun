@@ -225,7 +225,11 @@ where
             builder.add_foreign_utxo(utxo, psbt_input, satisfaction_weight)?;
         }
 
-        builder.drain_to(self.wallet.get_address(AddressIndex::New)?.script_pubkey());
+        builder.drain_to(
+            self.wallet
+                .get_change_address(AddressIndex::New)?
+                .script_pubkey(),
+        );
         let (mut psbt, _) = match builder.finish() {
             Err(bdk::Error::NoUtxosSelected) => return Ok(None),
             Ok(res) => res,

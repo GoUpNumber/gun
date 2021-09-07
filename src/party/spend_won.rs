@@ -34,7 +34,9 @@ where
 
         fee.apply_to_builder(wallet.client(), &mut builder)?;
 
-        let recipient = wallet.get_address(AddressIndex::New)?.script_pubkey();
+        let recipient = wallet
+            .get_change_address(AddressIndex::New)?
+            .script_pubkey();
 
         builder.drain_to(recipient);
 
