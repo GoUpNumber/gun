@@ -16,7 +16,6 @@ use bdk::{
 pub use init::*;
 pub mod bet;
 pub use bet::*;
-pub mod dev;
 pub use oracle::*;
 use term_table::{row::Row, Table};
 pub use wallet::*;
