@@ -506,8 +506,8 @@ pub fn run_bet_cmd(
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
                     "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
-                    "claiming-txid" => match bet_state {
-                        BetState::Claiming { claim_txid, .. } => Cell::string(claim_txid),
+                    "claim-txid" => match bet_state {
+                        BetState::Claiming { claim_txid: txid, .. } | BetState::Claimed { txid, .. } => Cell::string(txid),
                         _ => Cell::Empty
                     },
                     "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect())
