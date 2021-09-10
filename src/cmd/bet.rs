@@ -81,7 +81,7 @@ pub enum BetOpt {
         /// Take the offer and broadacast tx without prompting.
         #[structopt(short, long)]
         yes: bool,
-        #[structopt(short, long)]
+        #[structopt(long)]
         /// Print the bet transaction as hex instead of broadcasting it.
         print_tx: bool,
     },
@@ -98,7 +98,7 @@ pub enum BetOpt {
         bump_claiming: bool,
         /// Print the claim transaction hex but don't broadcast (this assumes you will broadcast the
         /// transaction yourself)
-        #[structopt(short, long)]
+        #[structopt(long)]
         print_tx: bool,
         /// Do not prompt for answers just say yes
         #[structopt(short, long)]
@@ -124,7 +124,7 @@ pub enum BetOpt {
         yes: bool,
         /// Print the cancel transaction hex but don't broadcast it (this assumes you will broadcast
         /// the transaction yourself).
-        #[structopt(short, long)]
+        #[structopt(long)]
         print_tx: bool,
     },
     /// Delete all memory of the bet.
