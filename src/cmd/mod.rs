@@ -277,6 +277,8 @@ pub enum CmdOutput {
     Table(TableData),
     Json(serde_json::Value),
     Item(Vec<(&'static str, Cell)>),
+    /// An item where one field is deemed the "main" one.
+    /// Normally the main one will be printed.
     EmphasisedItem {
         main: (&'static str, Cell),
         other: Vec<(&'static str, Cell)>,

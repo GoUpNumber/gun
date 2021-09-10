@@ -98,12 +98,18 @@ pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result
         AddressOpt::New => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let address = wallet.get_address(AddressIndex::New)?;
-            Ok(item! { "address" => address.to_string().into() })
+            Ok(CmdOutput::EmphasisedItem {
+                main: ("address", Cell::string(address)),
+                other: vec![],
+            })
         }
         AddressOpt::LastUnused => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;
             let address = wallet.get_address(AddressIndex::LastUnused)?;
-            Ok(item! { "address" => address.to_string().into() })
+            Ok(CmdOutput::EmphasisedItem {
+                main: ("address", Cell::string(address)),
+                other: vec![],
+            })
         }
         AddressOpt::List => {
             let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
