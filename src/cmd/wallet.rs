@@ -212,7 +212,7 @@ pub struct SpendOpt {
     #[structopt(long, short)]
     yes: bool,
     /// Print the resulting transaction out in hex instead of broadcasting it.
-    #[structopt(long, short)]
+    #[structopt(long)]
     print_tx: bool,
 }
 
