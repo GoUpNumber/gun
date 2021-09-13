@@ -148,8 +148,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let mut input_value = 0;
         for proposal_input in &proposal.inputs {
             let psbt_input = self
-                .outpoint_to_psbt_input(*proposal_input)
-                .context("Failed to find proposal input")?;
+                .p2wpkh_outpoint_to_psbt_input(*proposal_input)
+                .context("retrieving proposal input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             builder.add_foreign_utxo(
                 *proposal_input,

@@ -59,8 +59,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let mut input_value = 0;
         for input in &offer.inputs {
             let mut psbt_input = self
-                .outpoint_to_psbt_input(input.outpoint)
-                .context("Failed to find proposal input")?;
+                .p2wpkh_outpoint_to_psbt_input(input.outpoint)
+                .context("retrieving offer input")?;
             input_value += psbt_input.witness_utxo.as_ref().unwrap().value;
             psbt_input.final_script_witness = Some(input.witness.encode());
             psbt_inputs.push(psbt_input);
