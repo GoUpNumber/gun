@@ -108,7 +108,8 @@ pub enum BetOpt {
     List,
     /// Show details of a particular bet
     Show {
-        bet_id: BetId,
+        /// The id of the bet you want to show.
+        id: BetId,
         /// Show the raw entry in the database
         #[structopt(long, short)]
         raw: bool,
@@ -116,7 +117,7 @@ pub enum BetOpt {
     /// Cancel a bet
     Cancel {
         /// The bets to cancel.
-        bet_ids: Vec<BetId>,
+        ids: Vec<BetId>,
         #[structopt(flatten)]
         fee_args: cmd::FeeArgs,
         /// Don't prompt for answers just say yes
@@ -130,7 +131,10 @@ pub enum BetOpt {
     /// Delete all memory of the bet.
     ///
     /// Think carefully before using on unfinished bets. It's usually better to use cancel.
-    Forget { bet_ids: Vec<BetId> },
+    Forget {
+        /// The list of bet ids to forget about
+        ids: Vec<BetId>,
+    },
     /// Edit list of trusted oracles
     Oracle(crate::cmd::OracleOpt),
     /// Tag a bet
@@ -159,7 +163,7 @@ pub enum InspectOpt {
     /// Inspect an encrypted offer
     Offer {
         /// The bet id the offer is for.
-        bet_id: BetId,
+        id: BetId,
         /// The encrypted offer as a base2048 string.
         encrypted_offer: Ciphertext,
     },
@@ -169,13 +173,13 @@ pub enum InspectOpt {
 pub enum TagOpt {
     Add {
         /// The bet to attach the tag to.
-        bet_id: BetId,
+        id: BetId,
         /// The tag.
         tag: String,
     },
     Remove {
         /// The bet to remove the tag from.
-        bet_id: BetId,
+        id: BetId,
         /// The tag to remove.
         tag: String,
     },
@@ -235,14 +239,14 @@ pub fn run_bet_cmd(
 
             if yes || read_answer(&question) {
                 let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
-                let bet_id = party
+                let id = party
                     .bet_db()
                     .insert_bet(BetState::Proposed { local_proposal })?;
 
                 eprintln!("post your proposal and let people make offers to it:");
                 Ok(CmdOutput::EmphasisedItem {
                     main: ("proposal", Cell::string(proposal_string)),
-                    other: vec![("id", Cell::string(bet_id))],
+                    other: vec![("id", Cell::string(id))],
                 })
             } else {
                 Ok(CmdOutput::None)
@@ -320,7 +324,7 @@ pub fn run_bet_cmd(
             }
 
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
-                let (bet_id, encrypted_offer) = party.save_and_encrypt_offer(
+                let (id, encrypted_offer) = party.save_and_encrypt_offer(
                     bet,
                     offer,
                     message,
@@ -338,7 +342,7 @@ pub fn run_bet_cmd(
                 }
                 Ok(CmdOutput::EmphasisedItem {
                     main: ("offer", Cell::string(padded_encrypted_offer)),
-                    other: vec![("id", Cell::string(bet_id))],
+                    other: vec![("id", Cell::string(id))],
                 })
             } else {
                 Ok(CmdOutput::None)
@@ -389,7 +393,7 @@ pub fn run_bet_cmd(
             let party = cmd::load_party(wallet_dir)?;
             let wallet = party.wallet();
             match party.claim(fee_args.fee, bump_claiming)? {
-                Some((bet_ids, claim_psbt)) => {
+                Some((ids, claim_psbt)) => {
                     let (output, txid) = cmd::decide_to_broadcast(
                         wallet.network(),
                         wallet.client(),
@@ -398,7 +402,7 @@ pub fn run_bet_cmd(
                         print_tx,
                     )?;
                     if let Some(txid) = txid {
-                        party.set_bets_to_claiming(&bet_ids, txid)?;
+                        party.set_bets_to_claiming(&ids, txid)?;
                     }
                     Ok(output)
                 }
@@ -406,13 +410,13 @@ pub fn run_bet_cmd(
             }
         }
         BetOpt::Cancel {
-            bet_ids,
+            ids,
             fee_args,
             yes,
             print_tx,
         } => {
             let party = cmd::load_party(wallet_dir)?;
-            Ok(match party.generate_cancel_tx(&bet_ids, fee_args.fee)? {
+            Ok(match party.generate_cancel_tx(&ids, fee_args.fee)? {
                 Some(psbt) => {
                     let (output, txid) = cmd::decide_to_broadcast(
                         party.wallet().network(),
@@ -422,7 +426,7 @@ pub fn run_bet_cmd(
                         print_tx,
                     )?;
                     if let Some(txid) = txid {
-                        party.set_bets_to_cancelling(&bet_ids[..], txid)?;
+                        party.set_bets_to_cancelling(&ids[..], txid)?;
                     }
                     output
                 }
@@ -432,48 +436,48 @@ pub fn run_bet_cmd(
                 }
             })
         }
-        BetOpt::Forget { bet_ids } => {
+        BetOpt::Forget { ids } => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
             let mut to_remove = vec![];
-            for bet_id in bet_ids {
-                match bet_db.get_entity::<BetState>(bet_id) {
+            for id in ids {
+                match bet_db.get_entity::<BetState>(id) {
                     Ok(Some(bet_state)) => match bet_state {
                         BetState::Proposed { local_proposal } => {
                             match local_proposal.oracle_event.event.expected_outcome_time {
-                                Some(expected_outcome_time) if expected_outcome_time < Utc::now().naive_utc() => to_remove.push(bet_id),
-                                _ => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", bet_id)) {
-                                    to_remove.push(bet_id);
+                                Some(expected_outcome_time) if expected_outcome_time < Utc::now().naive_utc() => to_remove.push(id),
+                                _ => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", id)) {
+                                    to_remove.push(id);
                                 }
                             }
                         },
-                        BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", bet_id)) {
-                            to_remove.push(bet_id);
+                        BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", id)) {
+                            to_remove.push(id);
                         },
-                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } | BetState::Confirmed { .. } | BetState::Unconfirmed { .. } => return Err(anyhow!("You may not forget bet {} because it is in the {} state", bet_id, bet_state.name())),
-                        _ => to_remove.push(bet_id),
+                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } | BetState::Confirmed { .. } | BetState::Unconfirmed { .. } => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
+                        _ => to_remove.push(id),
                     },
-                    Ok(None) => return Err(anyhow!("Bet {} doesn't exist", bet_id)),
+                    Ok(None) => return Err(anyhow!("Bet {} doesn't exist", id)),
                     Err(_) => {
-                        eprintln!("Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", bet_id);
-                        to_remove.push(bet_id);
+                        eprintln!("Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", id);
+                        to_remove.push(id);
                     }
                 }
             }
 
-            for bet_id in &to_remove {
-                let _ = bet_db.remove_entity::<BetState>(*bet_id);
+            for id in &to_remove {
+                let _ = bet_db.remove_entity::<BetState>(*id);
             }
 
             Ok(CmdOutput::List(
                 to_remove.into_iter().map(|x| Cell::string(x)).collect(),
             ))
         }
-        BetOpt::Show { bet_id, raw } => {
+        BetOpt::Show { id, raw } => {
             let party = cmd::load_party(wallet_dir)?;
             let bet_db = party.bet_db();
             let bet_state = bet_db
-                .get_entity::<BetState>(bet_id)?
-                .ok_or(anyhow!("Bet {} doesn't exist", bet_id))?;
+                .get_entity::<BetState>(id)?
+                .ok_or(anyhow!("Bet {} doesn't exist", id))?;
 
             if raw {
                 return Ok(CmdOutput::Json(serde_json::to_value(&bet_state).unwrap()));
@@ -542,24 +546,24 @@ pub fn run_bet_cmd(
                 "change-script" => change_script.map(|x| Cell::string(Script::from(x))).unwrap_or(Cell::Empty)
             },
             InspectOpt::Offer {
-                bet_id,
+                id,
                 encrypted_offer,
             } => {
                 let party = cmd::load_party(wallet_dir)?;
                 let bet_state = party
                     .bet_db()
-                    .get_entity::<BetState>(bet_id)?
-                    .ok_or(anyhow!("unknown bet id {}", bet_id))?;
+                    .get_entity::<BetState>(id)?
+                    .ok_or(anyhow!("unknown bet id {}", id))?;
                 match bet_state {
                     BetState::Proposed { local_proposal } => {
                         let event_id = &local_proposal.oracle_event.event.id;
                         let (plaintext, offer_public_key, rng) =
-                            party.decrypt_offer(bet_id, encrypted_offer)?;
+                            party.decrypt_offer(id, encrypted_offer)?;
 
                         match plaintext {
                             Plaintext::Offerv1 { offer, message } => {
                                 let (fee, feerate, valid) = match party.validate_offer(
-                                    bet_id,
+                                    id,
                                     offer.clone(),
                                     offer_public_key,
                                     rng,
@@ -612,15 +616,15 @@ pub fn run_bet_cmd(
         BetOpt::Tag(tagopt) => {
             let bet_db = cmd::load_bet_db(wallet_dir)?;
             match tagopt {
-                TagOpt::Add { bet_id, tag } => {
-                    bet_db.update_bets(&[bet_id], |mut bet_state, _, _| {
+                TagOpt::Add { id, tag } => {
+                    bet_db.update_bets(&[id], |mut bet_state, _, _| {
                         bet_state.tags_mut().push(tag.clone());
                         Ok(bet_state)
                     })?;
                     Ok(CmdOutput::None)
                 }
-                TagOpt::Remove { bet_id, tag } => {
-                    bet_db.update_bets(&[bet_id], |mut bet_state, _, _| {
+                TagOpt::Remove { id, tag } => {
+                    bet_db.update_bets(&[id], |mut bet_state, _, _| {
                         bet_state
                             .tags_mut()
                             .retain(|existing_tag| existing_tag != &tag);
@@ -679,11 +683,11 @@ fn reply(
 fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
     let mut rows = vec![];
 
-    for (bet_id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
+    for (id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
         match bet_state.into_bet_or_prop() {
             BetOrProp::Proposal(local_proposal) => rows.push(vec![
-                Cell::Int(bet_id.into()),
+                Cell::Int(id.into()),
                 Cell::String(name),
                 local_proposal
                     .oracle_event
@@ -714,7 +718,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 Cell::string(local_proposal.proposal.event_id.short_id()),
             ]),
             BetOrProp::Bet(bet) => rows.push(vec![
-                Cell::Int(bet_id.into()),
+                Cell::Int(id.into()),
                 Cell::String(name),
                 bet.oracle_event
                     .event
