@@ -296,7 +296,9 @@ where
             }))
     }
 
-    pub fn outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
+    // the reason we require p2wpkh inputs here is so the witness is non-malleable.
+    // What to do about TR outputs in the future I haven't decided.
+    pub fn p2wpkh_outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
         let tx = self
             .wallet
             .client()
@@ -312,6 +314,10 @@ where
                 outpoint.txid
             ))?
             .clone();
+
+        if !txout.script_pubkey.is_v0_p2wpkh() {
+            return Err(anyhow!("outpoint {} was not p2wpkh"));
+        }
 
         let psbt_input = psbt::Input {
             witness_utxo: Some(txout),
