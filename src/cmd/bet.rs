@@ -171,12 +171,14 @@ pub enum InspectOpt {
 
 #[derive(Clone, Debug, StructOpt)]
 pub enum TagOpt {
+    /// Add a tag to a bet
     Add {
         /// The bet to attach the tag to.
         id: BetId,
         /// The tag.
         tag: String,
     },
+    /// Remove a tag from a bet
     Remove {
         /// The bet to remove the tag from.
         id: BetId,
