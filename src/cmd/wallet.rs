@@ -138,6 +138,8 @@ pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result
                             Cell::Int(count as u64),
                         ]
                     })
+                    // newest should go first
+                    .rev()
                     .collect(),
                 None => vec![],
             };
