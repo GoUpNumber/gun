@@ -245,13 +245,31 @@ impl Cell {
             Int(integer) => integer.to_string(),
             Empty => "-".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
-                .format("%Y-%m-%dT%H:%M:%SZ")
+                .format("%Y-%m-%dT%H:%M:%S")
                 .to_string(),
             List(list) => list
                 .into_iter()
                 .map(|x| Cell::render(*x))
                 .collect::<Vec<_>>()
                 .join("\n"),
+        }
+    }
+
+    pub fn render_tabs(self) -> String {
+        use Cell::*;
+        match self {
+            String(string) => string,
+            Amount(amount) => amount.as_sat().to_string(),
+            Int(integer) => integer.to_string(),
+            Empty => "".into(),
+            DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string(),
+            List(list) => list
+                .into_iter()
+                .map(|x| Cell::render_tabs(*x))
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -338,7 +356,7 @@ impl CmdOutput {
                 .into_iter()
                 .map(|row| {
                     row.into_iter()
-                        .map(Cell::render)
+                        .map(Cell::render_tabs)
                         .collect::<Vec<_>>()
                         .join("\t")
                 })
@@ -347,21 +365,21 @@ impl CmdOutput {
             Json(json) => serde_json::to_string(&json).unwrap(),
             Item(item) => item
                 .into_iter()
-                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .map(|(k, v)| format!("{}\t{}", k, v.render_tabs()))
                 .collect::<Vec<_>>()
                 .join("\n"),
             EmphasisedItem { main, other } => core::iter::once(main)
                 .chain(other.into_iter())
-                .map(|(k, v)| format!("{}\t{}", k, v.render()))
+                .map(|(k, v)| format!("{}\t{}", k, v.render_tabs()))
                 .collect::<Vec<_>>()
                 .join("\n"),
             List(list) => {
                 format!(
                     "{}",
                     list.into_iter()
-                        .map(Cell::render)
+                        .map(Cell::render_tabs)
                         .collect::<Vec<_>>()
-                        .join("\n")
+                        .join("\t")
                 )
             }
             None => String::new(),
