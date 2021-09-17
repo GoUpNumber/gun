@@ -58,7 +58,6 @@ where
             .ok_or(anyhow!("Bet {} does not exist"))?;
 
         match bet_state {
-            BetState::Claimed { .. } | BetState::Cancelled { .. } | BetState::Lost { .. } => {}
             BetState::Cancelling { bet_or_prop, .. } => {
                 // success cancelling
                 if let Some(reason) = self.check_cancelled(&bet_or_prop.inputs())? {
@@ -78,6 +77,18 @@ where
                         update_bet! { self, bet_id,
                             BetState::Cancelling { .. } => BetState::Confirmed { bet: bet.clone(), height }
                         }
+                    }
+                }
+            }
+            BetState::Cancelled {
+                bet_or_prop: BetOrProp::Bet(bet),
+                ..
+            } => {
+                if let Some(height) =
+                    self.is_confirmed(bet.tx().txid(), bet.joint_output.wallet_descriptor())?
+                {
+                    update_bet! { self, bet_id,
+                                  BetState::Cancelled { .. } => BetState::Confirmed { bet: bet.clone(), height }
                     }
                 }
             }
@@ -173,6 +184,7 @@ where
                     }
                 }
             }
+            BetState::Claimed { .. } | BetState::Cancelled { .. } | BetState::Lost { .. } => {}
         }
         Ok(())
     }
