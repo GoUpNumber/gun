@@ -15,6 +15,7 @@ pub use proposal::*;
 pub use take_offer::*;
 
 use crate::{
+    bet::OfferedBet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     keychain::Keychain,
     FeeSpec, OracleInfo,
@@ -170,7 +171,27 @@ where
                         utxos_that_need_cancelling.push(inputs[0]);
                     }
                 }
-                BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
+                BetState::Cancelled {
+                    height: None,
+                    pre_cancel: BetOrProp::Bet(bet),
+                    ..
+                }
+                | BetState::Cancelled {
+                    height: None,
+                    pre_cancel:
+                        BetOrProp::OfferedBet {
+                            bet: OfferedBet(bet),
+                            ..
+                        },
+                    ..
+                }
+                | BetState::Offered {
+                    bet: OfferedBet(bet),
+                    ..
+                }
+                | BetState::Confirmed {
+                    bet, height: None, ..
+                } => {
                     let tx = bet.tx();
                     let inputs = bet
                         .my_input_indexes
@@ -244,32 +265,6 @@ where
         )?;
         assert!(finalized, "we should have signed all inputs");
         Ok(Some(psbt))
-    }
-
-    pub fn set_bets_to_cancelling(
-        &self,
-        bet_ids: &[BetId],
-        cancel_txid: Txid,
-    ) -> anyhow::Result<()> {
-        self.bet_db()
-            .update_bets(bet_ids, |bet_state, bet_id, _| match bet_state {
-                BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
-                    Ok(BetState::Cancelling {
-                        cancel_txid,
-                        bet_or_prop: BetOrProp::Bet(bet),
-                    })
-                }
-                BetState::Proposed { local_proposal } => Ok(BetState::Cancelling {
-                    cancel_txid,
-                    bet_or_prop: BetOrProp::Proposal(local_proposal),
-                }),
-                _ => Err(anyhow!(
-                    "Canelling bets failed because {} changed transitioned to {} -- try again!",
-                    bet_id,
-                    bet_state.name()
-                )),
-            })?;
-        Ok(())
     }
 
     pub fn is_confirmed(

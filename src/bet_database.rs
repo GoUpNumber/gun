@@ -1,7 +1,12 @@
-use crate::{bet::Bet, ciphertext::Ciphertext, party::LocalProposal, OracleInfo};
+use crate::{
+    bet::{Bet, OfferedBet},
+    ciphertext::Ciphertext,
+    party::LocalProposal,
+    OracleInfo,
+};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{secp256k1::SecretKey, OutPoint, Transaction, Txid},
+    bitcoin::{secp256k1::SecretKey, OutPoint, Txid},
     sled::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
@@ -66,15 +71,12 @@ pub enum BetState {
         local_proposal: LocalProposal,
     },
     Offered {
-        bet: Bet,
+        bet: OfferedBet,
         encrypted_offer: Ciphertext,
-    },
-    Unconfirmed {
-        bet: Bet,
     },
     Confirmed {
         bet: Bet,
-        height: u32,
+        height: Option<u32>,
     },
     Won {
         bet: Bet,
@@ -85,48 +87,42 @@ pub enum BetState {
         bet: Bet,
         attestation: Attestation<Secp256k1>,
     },
-    Claiming {
-        bet: Bet,
-        claim_txid: Txid,
-        secret_key: SecretKey,
-    },
     Claimed {
         bet: Bet,
         txid: Txid,
-        expecting: Option<Txid>,
-    },
-    Cancelling {
-        cancel_txid: Txid,
-        bet_or_prop: BetOrProp,
+        height: Option<u32>,
+        secret_key: SecretKey,
+        attestation: Attestation<Secp256k1>,
     },
     Cancelled {
-        bet_or_prop: BetOrProp,
-        reason: CancelReason,
+        pre_cancel: BetOrProp,
+        bet_spent_vin: u32,
+        cancel_txid: Txid,
+        cancel_vin: u32,
+        height: Option<u32>,
+        /// Whether we intend to cancel the bet.
+        i_intend_cancel: bool,
     },
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum CancelReason {
-    ICancelled {
-        spent: OutPoint,
-        my_cancelling_tx: Txid,
-    },
-    TheyCancelled {
-        spent: OutPoint,
-    },
-    InvalidTx(Transaction),
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BetOrProp {
     Bet(Bet),
     Proposal(LocalProposal),
+    OfferedBet {
+        bet: OfferedBet,
+        encrypted_offer: Ciphertext,
+    },
 }
 
 impl BetOrProp {
     pub fn inputs(&self) -> Vec<OutPoint> {
         match self {
-            BetOrProp::Bet(bet) => bet
+            BetOrProp::Bet(bet)
+            | BetOrProp::OfferedBet {
+                bet: OfferedBet(bet),
+                ..
+            } => bet
                 .tx()
                 .input
                 .iter()
@@ -143,14 +139,20 @@ impl BetState {
         match self {
             Proposed { .. } => "proposed",
             Offered { .. } => "offered",
-            Unconfirmed { .. } => "unconfirmed",
-            Confirmed { .. } => "confirmed",
+            Confirmed { height: None, .. } => "unconfirmed",
+            Confirmed {
+                height: Some(_), ..
+            } => "confirmed",
             Won { .. } => "won",
             Lost { .. } => "lost",
-            Claiming { .. } => "claiming",
-            Claimed { .. } => "claimed",
-            Cancelled { .. } => "cancelled",
-            Cancelling { .. } => "cancelling",
+            Claimed { height: None, .. } => "claiming",
+            Claimed {
+                height: Some(_), ..
+            } => "claimed",
+            Cancelled { height: None, .. } => "cancelling",
+            Cancelled {
+                height: Some(_), ..
+            } => "cancelled",
         }
     }
 
@@ -163,10 +165,14 @@ impl BetState {
                 .iter()
                 .map(Clone::clone)
                 .collect(),
-            Offered { bet, .. } | Unconfirmed { bet, .. } => bet
+            Offered {
+                bet: OfferedBet(bet),
+                ..
+            }
+            | Confirmed { bet, .. } => bet
                 .my_input_indexes
                 .iter()
-                .map(|i| bet.tx().input[*i].previous_output)
+                .map(|i| bet.tx().input[*i as usize].previous_output)
                 .collect(),
             _ => vec![],
         }
@@ -175,15 +181,17 @@ impl BetState {
     pub fn into_bet_or_prop(self) -> BetOrProp {
         match self {
             BetState::Proposed { local_proposal } => BetOrProp::Proposal(local_proposal),
-            BetState::Cancelling { bet_or_prop, .. } | BetState::Cancelled { bet_or_prop, .. } => {
-                bet_or_prop
-            }
-            BetState::Offered { bet, .. }
-            | BetState::Unconfirmed { bet, .. }
-            | BetState::Confirmed { bet, .. }
+            BetState::Offered {
+                bet,
+                encrypted_offer,
+            } => BetOrProp::OfferedBet {
+                bet,
+                encrypted_offer,
+            },
+            BetState::Cancelled { pre_cancel, .. } => pre_cancel,
+            BetState::Confirmed { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
-            | BetState::Claiming { bet, .. }
             | BetState::Claimed { bet, .. } => BetOrProp::Bet(bet),
         }
     }
@@ -191,27 +199,25 @@ impl BetState {
     pub fn tags_mut(&mut self) -> &mut Vec<String> {
         match self {
             BetState::Proposed { local_proposal }
-            | BetState::Cancelling {
-                bet_or_prop: BetOrProp::Proposal(local_proposal),
-                ..
-            }
             | BetState::Cancelled {
-                bet_or_prop: BetOrProp::Proposal(local_proposal),
+                pre_cancel: BetOrProp::Proposal(local_proposal),
                 ..
             } => &mut local_proposal.tags,
-            BetState::Offered { bet, .. }
-            | BetState::Unconfirmed { bet, .. }
+            BetState::Offered {
+                bet: OfferedBet(bet),
+                ..
+            }
             | BetState::Confirmed { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
-            | BetState::Claiming { bet, .. }
             | BetState::Claimed { bet, .. }
-            | BetState::Cancelling {
-                bet_or_prop: BetOrProp::Bet(bet),
-                ..
-            }
             | BetState::Cancelled {
-                bet_or_prop: BetOrProp::Bet(bet),
+                pre_cancel:
+                    BetOrProp::OfferedBet {
+                        bet: OfferedBet(bet),
+                        ..
+                    }
+                    | BetOrProp::Bet(bet),
                 ..
             } => &mut bet.tags,
         }

@@ -1,20 +1,23 @@
 use crate::{
-    bet::Bet,
-    bet_database::{BetId, BetOrProp, BetState, CancelReason},
+    bet::{Bet, OfferedBet},
+    bet_database::{BetId, BetOrProp, BetState},
 };
-use anyhow::anyhow;
-use bdk::{bitcoin::OutPoint, blockchain::UtxoExists};
+use anyhow::{anyhow, Context};
+use bdk::blockchain::{
+    Blockchain, Broadcast, GetInputState, InputState, TransactionState, TxState,
+};
 
 use super::Party;
 
 macro_rules! update_bet {
     ($self:expr, $bet_id:expr, $($tt:tt)+) => {
         $self.bet_db.update_bets(&[$bet_id], |old_state, _, _| {
+            #[allow(unreachable_patterns)]
             Ok(match old_state {
                 $($tt)+,
                 _ => old_state
             })
-        })?;
+        })?
     }
 }
 
@@ -22,31 +25,6 @@ impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
 where
     D: bdk::database::BatchDatabase,
 {
-    fn check_cancelled(&self, inputs: &[OutPoint]) -> anyhow::Result<Option<CancelReason>> {
-        for input in inputs {
-            if !self.wallet.client().utxo_exists(*input)? {
-                let tx = self.wallet.list_transactions(true)?.into_iter().find(|tx| {
-                    tx.transaction
-                        .as_ref()
-                        .unwrap()
-                        .input
-                        .iter()
-                        .find(|txin| txin.previous_output == *input)
-                        .is_some()
-                        && tx.confirmation_time.is_some()
-                });
-                return Ok(Some(match tx {
-                    Some(tx) => CancelReason::ICancelled {
-                        spent: *input,
-                        my_cancelling_tx: tx.txid,
-                    },
-                    None => CancelReason::TheyCancelled { spent: *input },
-                }));
-            }
-        }
-        Ok(None)
-    }
-
     /// Look at current state and see if we can progress it.
     ///
     /// The `try_learn_outcome` exists so during tests it can be turned off so this doesn't try and contact a non-existent oracle.
@@ -56,135 +34,204 @@ where
             .bet_db
             .get_entity(bet_id)?
             .ok_or(anyhow!("Bet {} does not exist"))?;
+        let blockchain = self.wallet.client();
 
         match bet_state {
-            BetState::Cancelling { bet_or_prop, .. } => {
-                // success cancelling
-                if let Some(reason) = self.check_cancelled(&bet_or_prop.inputs())? {
-                    update_bet! {
-                        self, bet_id,
-                        BetState::Cancelling { bet_or_prop, .. } => BetState::Cancelled {
-                            bet_or_prop,
-                            reason: reason.clone()
-                        }
-                    };
-                }
-                // failed to cancel
-                if let BetOrProp::Bet(bet) = bet_or_prop {
-                    if let Some(height) =
-                        self.is_confirmed(bet.tx().txid(), bet.joint_output.wallet_descriptor())?
-                    {
-                        update_bet! { self, bet_id,
-                            BetState::Cancelling { .. } => BetState::Confirmed { bet: bet.clone(), height }
-                        }
-                    }
-                }
-            }
             BetState::Cancelled {
-                bet_or_prop: BetOrProp::Bet(bet),
+                pre_cancel,
+                height,
+                i_intend_cancel,
                 ..
             } => {
-                if let Some(height) =
-                    self.is_confirmed(bet.tx().txid(), bet.joint_output.wallet_descriptor())?
-                {
-                    update_bet! { self, bet_id,
-                                  BetState::Cancelled { .. } => BetState::Confirmed { bet: bet.clone(), height }
+                match &pre_cancel {
+                    BetOrProp::OfferedBet { bet, .. } => {
+                        if let TxState::Present { height } = blockchain.tx_state(&bet.tx())? {
+                            if let Some(tx) = blockchain.get_tx(&bet.tx().txid())? {
+                                let bet = bet.clone().add_counterparty_sigs(tx);
+                                update_bet! {
+                                    self, bet_id, _ => BetState::Confirmed {
+                                        bet: bet.clone(),
+                                        height
+                                    }
+                                };
+                            }
+                        }
+                    }
+                    BetOrProp::Bet(bet) => {
+                        if let TxState::Present { height } = blockchain.tx_state(&bet.tx())? {
+                            update_bet! { self, bet_id, BetState::Cancelled { .. } => BetState::Confirmed { bet: bet.clone(), height } }
+                        }
+                    }
+                    BetOrProp::Proposal(_) => { /* no bet to check */ }
+                }
+
+                if height.is_none() {
+                    match blockchain.input_state(&pre_cancel.inputs())? {
+                        InputState::Spent {
+                            index,
+                            txid,
+                            vin,
+                            height,
+                        } => {
+                            update_bet! {
+                                    self, bet_id,
+                                    BetState::Cancelled { pre_cancel, mut i_intend_cancel, .. } => {
+                                        i_intend_cancel = i_intend_cancel || match &pre_cancel {
+                                            BetOrProp::Bet(bet) | BetOrProp::OfferedBet { bet: OfferedBet(bet), .. } => bet.my_input_indexes.contains(&(index as u32)),
+                                            BetOrProp::Proposal(_) => { debug_assert!(false, "unreachable. i_intend_cancel will be true here if we were in proposal state"); true }
+                                        };
+                                        BetState::Cancelled {
+                                            pre_cancel,
+                                            height,
+                                            cancel_txid: txid,
+                                            cancel_vin: vin,
+                                            bet_spent_vin: index,
+                                            i_intend_cancel
+                                        }
+                                    }
+                            }
+                        }
+                        // Whatever tx that caused us to be in cancelling state has disappeared from mempool so roll back.
+                        // If code is correct here it should be a tx we've broadcast ourselves (otherwise we wouldn't have transitioned).
+                        InputState::Unspent => match &pre_cancel {
+                            BetOrProp::Proposal(local_proposal) => {
+                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Proposed { local_proposal: local_proposal.clone() } }
+                            }
+                            BetOrProp::OfferedBet {
+                                bet,
+                                encrypted_offer,
+                            } => {
+                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Offered { bet: bet.clone(), encrypted_offer: encrypted_offer.clone() }}
+                            }
+                            BetOrProp::Bet(bet) => {
+                                if !i_intend_cancel {
+                                    Broadcast::broadcast(blockchain, bet.tx())
+                                        .context("broadcasting bet tx because it left mempool")?;
+                                }
+                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Confirmed { bet: bet.clone(), height: None } }
+                            }
+                        },
                     }
                 }
             }
             BetState::Proposed { local_proposal } => {
-                if let Some(reason) = self.check_cancelled(&local_proposal.proposal.inputs)? {
-                    update_bet! { self, bet_id,
-                        BetState::Proposed { local_proposal } => BetState::Cancelled {
-                            bet_or_prop: BetOrProp::Proposal(local_proposal),
-                            reason: reason.clone()
-                        }
-                    };
-                }
-            }
-            BetState::Offered { bet, .. } => {
-                let txid = bet.tx().txid();
-                if let Some(height) =
-                    self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
+                if let InputState::Spent {
+                    index,
+                    txid,
+                    vin,
+                    height,
+                } = blockchain.input_state(&local_proposal.proposal.inputs)?
                 {
                     update_bet! { self, bet_id,
-                        BetState::Offered { bet, .. } => BetState::Confirmed { bet, height }
-                    };
-                    self.take_next_action(bet_id, try_learn_outcome)?;
-                }
-
-                let inputs_to_check_for_cancellation = bet
-                    .tx()
-                    .input
-                    .iter()
-                    .map(|x| x.previous_output)
-                    .collect::<Vec<_>>();
-                if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
-                    update_bet! { self, bet_id,
-                         BetState::Offered { bet, .. } => BetState::Cancelled {
-                            bet_or_prop: BetOrProp::Bet(bet),
-                            reason: reason.clone()
-                        }
-                    };
-                }
-            }
-            BetState::Unconfirmed { bet } => {
-                let txid = bet.tx().txid();
-
-                if let Some(height) =
-                    self.is_confirmed(txid, bet.joint_output.wallet_descriptor())?
-                {
-                    update_bet! { self, bet_id,
-                        BetState::Unconfirmed { bet, .. } => BetState::Confirmed { bet, height }
-                    };
-                    self.take_next_action(bet_id, try_learn_outcome)?;
-                } else {
-                    let inputs_to_check_for_cancellation = bet
-                        .tx()
-                        .input
-                        .iter()
-                        .map(|x| x.previous_output)
-                        .collect::<Vec<_>>();
-                    if let Some(reason) = self.check_cancelled(&inputs_to_check_for_cancellation)? {
-                        update_bet! { self, bet_id,
-                            BetState::Unconfirmed { bet, .. } => {
-                                BetState::Cancelled {
-                                    bet_or_prop: BetOrProp::Bet(bet),
-                                    reason: reason.clone()
-                                }
-                            }
-                        };
+                       BetState::Proposed { local_proposal, .. } => BetState::Cancelled {
+                           pre_cancel: BetOrProp::Proposal(local_proposal),
+                           bet_spent_vin: index,
+                           cancel_txid: txid,
+                           cancel_vin: vin,
+                           height,
+                           i_intend_cancel: true
+                       }
                     }
                 }
             }
-            BetState::Confirmed { bet, height: _ } => {
+            BetState::Offered { bet, .. } => {
+                match blockchain.tx_state(&bet.0.tx())? {
+                    TxState::Present { height } => {
+                        if let Ok(Some(tx)) = blockchain.get_tx(&bet.0.tx().txid()) {
+                            // when we offer a bet we don't have the full tx with signatures so if it's
+                            // there lets get it from the blockchain.
+                            update_bet! { self, bet_id,
+                               BetState::Offered { bet, .. } => {
+                                   let bet = bet.add_counterparty_sigs(tx.clone());
+                                   BetState::Confirmed { bet: bet.clone(), height }
+                               }
+                            }
+                        }
+                    }
+                    TxState::Conflict {
+                        txid,
+                        vin,
+                        vin_target,
+                        height,
+                    } => {
+                        let i_intend_cancel = bet.my_input_indexes.contains(&vin_target);
+                        if height.is_some() || i_intend_cancel {
+                            update_bet! { self, bet_id,
+                               BetState::Offered { bet, encrypted_offer } => BetState::Cancelled {
+                                   pre_cancel: BetOrProp::OfferedBet{ bet, encrypted_offer },
+                                   bet_spent_vin: vin_target,
+                                   cancel_txid: txid,
+                                   cancel_vin: vin,
+                                   height: height,
+                                   i_intend_cancel,
+                               }
+                            }
+                        }
+                    }
+                    TxState::NotFound => { /* we're waiting for proposer to broadcast */ }
+                }
+            }
+            BetState::Confirmed { bet, .. } => {
+                match blockchain.tx_state(&bet.tx())? {
+                    // If there's a conflict with the bet tx then we go to canceled
+                    TxState::Conflict {
+                        txid,
+                        vin,
+                        vin_target,
+                        height,
+                    } => update_bet! { self, bet_id,
+                        BetState::Confirmed { bet, .. } => BetState::Cancelled {
+                            i_intend_cancel: bet.my_input_indexes.contains(&vin_target),
+                            pre_cancel: BetOrProp::Bet(bet),
+                            bet_spent_vin: vin_target,
+                            cancel_txid: txid,
+                            cancel_vin: vin,
+                            height,
+                        }
+                    },
+                    // Update height if it gto confirmed somewhere else
+                    TxState::Present { height } => update_bet! { self, bet_id,
+                        BetState::Confirmed { bet,..} => BetState::Confirmed { bet, height }
+                    },
+                    TxState::NotFound => {
+                        eprintln!(
+                            "The bet tx for {} has fallen out of mempool -- rebroadcasting it!",
+                            bet_id
+                        );
+                        Broadcast::broadcast(blockchain, bet.tx())?
+                    }
+                }
                 if try_learn_outcome {
                     self.try_get_outcome(bet_id, bet)?;
                 }
             }
             BetState::Won { bet, .. } => {
-                // It should never happen that you go from "Won" to "Claimed" without going through
                 // claiming but just in case someone steals your keys somehow we handle it.
-                if let Some(tx_that_claimed) =
-                    self.get_spending_tx(bet.outpoint(), bet.joint_output.wallet_descriptor())?
+                if let InputState::Spent { txid, height, .. } =
+                    blockchain.input_state(&[bet.outpoint()])?
                 {
-                    update_bet! {
-                        self, bet_id,
-                        BetState::Won { bet, .. } => BetState::Claimed { bet, expecting: None, txid: tx_that_claimed }
+                    update_bet! {self, bet_id,
+                        BetState::Won { bet, secret_key, attestation } => {
+                            BetState::Claimed { bet, txid, height, secret_key, attestation }
+                        }
                     }
                 }
             }
-            BetState::Claiming { bet, .. } => {
-                if let Some(tx_that_claimed) =
-                    self.get_spending_tx(bet.outpoint(), bet.joint_output.wallet_descriptor())?
-                {
-                    update_bet! {
-                        self, bet_id,
-                        BetState::Claiming { bet, claim_txid, .. } => BetState::Claimed { bet, expecting: Some(claim_txid), txid: tx_that_claimed  }
-                    }
-                }
+            // TODO: To be more robust, check if height is below some threshold rather than just None
+            BetState::Claimed {
+                bet, height: None, ..
+            } => match blockchain.input_state(&[bet.outpoint()])? {
+                InputState::Spent { txid, height, .. } => update_bet! {self, bet_id,
+                   BetState::Claimed { bet, attestation, secret_key, .. } => BetState::Claimed { bet, txid, height, secret_key, attestation}
+                },
+                InputState::Unspent => update_bet! { self, bet_id,
+                   BetState::Claimed { bet, secret_key, attestation, .. } => BetState::Won { bet, secret_key, attestation }
+                },
+            },
+            BetState::Claimed {
+                height: Some(_), ..
             }
-            BetState::Claimed { .. } | BetState::Cancelled { .. } | BetState::Lost { .. } => {}
+            | BetState::Lost { .. } => { /* terminal states */ }
         }
         Ok(())
     }

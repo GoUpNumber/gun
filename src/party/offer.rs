@@ -1,6 +1,6 @@
 use super::{randomize::Randomize, BetArgs, Either};
 use crate::{
-    bet::Bet,
+    bet::{Bet, OfferedBet},
     bet_database::{BetId, BetState},
     change::Change,
     ciphertext::{Ciphertext, Plaintext},
@@ -186,7 +186,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .iter()
             .enumerate()
             .filter(|(_, input)| !proposal.inputs.contains(&input.previous_output))
-            .map(|(i, _)| i)
+            .map(|(i, _)| i as u32)
             .collect::<Vec<_>>();
 
         let is_final = self
@@ -215,8 +215,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .iter()
             .cloned()
             .map(|i| {
-                let txin = &psbt.global.unsigned_tx.input[i];
-                let psbt_input = &psbt.inputs[i];
+                let txin = &psbt.global.unsigned_tx.input[i as usize];
+                let psbt_input = &psbt.inputs[i as usize];
                 let witness = psbt_input
                     .final_script_witness
                     .clone()
@@ -277,7 +277,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             },
         );
         let bet_id = self.bet_db.insert_bet(BetState::Offered {
-            bet,
+            bet: OfferedBet(bet),
             encrypted_offer: encrypted_offer.clone(),
         })?;
         Ok((bet_id, encrypted_offer))

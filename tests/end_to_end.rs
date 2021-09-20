@@ -267,20 +267,17 @@ pub fn test_happy_path() {
     );
     wait_for_state!(loser, loser_id, "lost");
 
-    let (bet_ids_claimed, winner_claim_psbt) = winner
+    let (_, winner_claim_psbt) = winner
         .claim(FeeSpec::default(), false)
         .unwrap()
         .expect("winner should return a tx here");
 
     let winner_claim_tx = winner_claim_psbt.extract_tx();
-    winner
-        .set_bets_to_claiming(&bet_ids_claimed, winner_claim_tx.txid())
-        .unwrap();
-
-    wait_for_state!(winner, winner_id, "claiming");
 
     winner.wallet().broadcast(winner_claim_tx).unwrap();
+    wait_for_state!(winner, winner_id, "claiming");
     test_client.generate(1, None);
+    wait_for_state!(winner, winner_id, "claimed");
     winner.wallet().sync(noop_progress(), None).unwrap();
 
     assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
@@ -362,14 +359,11 @@ pub fn cancel_proposal() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    party_1
-        .set_bets_to_cancelling(&[p1_bet_id], tx.txid())
-        .unwrap();
     Broadcast::broadcast(party_1.wallet().client(), tx).unwrap();
     wait_for_state!(party_1, p1_bet_id, "cancelling");
     test_client.generate(1, None);
     wait_for_state!(party_1, bet_id_overlap, "cancelled");
-    wait_for_state!(party_1, p1_bet_id, "cancelled");
+    //     wait_for_state!(party_1, p1_bet_id, "cancelled");
     wait_for_state!(party_2, p2_bet_id, "cancelled");
 }
 
@@ -418,9 +412,6 @@ pub fn test_cancel_offer() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    party_2
-        .set_bets_to_cancelling(&[p2_bet_id], tx.txid())
-        .unwrap();
     Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, p2_bet_id, "cancelling");
@@ -518,9 +509,6 @@ pub fn cancel_offer_after_offer_taken() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    party_2
-        .set_bets_to_cancelling(&[first_p2_bet_id, second_p2_bet_id], tx.txid())
-        .unwrap();
     Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, second_p2_bet_id, "cancelling");

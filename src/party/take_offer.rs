@@ -202,7 +202,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
                     .enumerate()
                     .find(|(_, txin)| txin.previous_output == *input)
                     .unwrap()
-                    .0
+                    .0 as u32
             })
             .collect();
 
@@ -228,7 +228,10 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     ) -> anyhow::Result<Psbt> {
         self.bet_db
             .update_bets(&[bet_id], |bet_state, _, _| match bet_state {
-                BetState::Proposed { .. } => Ok(BetState::Unconfirmed { bet: bet.clone() }),
+                BetState::Proposed { .. } => Ok(BetState::Confirmed {
+                    bet: bet.clone(),
+                    height: None,
+                }),
                 _ => Ok(bet_state),
             })?;
 

@@ -2,11 +2,10 @@ use crate::{
     bet_database::{BetId, BetState},
     FeeSpec,
 };
-use anyhow::anyhow;
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
-        PrivateKey, TxOut, Txid,
+        PrivateKey, TxOut,
     },
     blockchain::Blockchain,
     database::MemoryDatabase,
@@ -74,8 +73,11 @@ where
                 BetState::Won {
                     bet, secret_key, ..
                 } => Some((bet_id, bet, secret_key)),
-                BetState::Claiming {
-                    bet, secret_key, ..
+                BetState::Claimed {
+                    height: None,
+                    bet,
+                    secret_key,
+                    ..
                 } if bump_claiming => Some((bet_id, bet, secret_key)),
                 _ => None,
             })
@@ -137,27 +139,5 @@ where
         }
 
         Ok(Some((psbt, claimable_bet_ids)))
-    }
-
-    pub fn set_bets_to_claiming(
-        &self,
-        claiming_bet_ids: &[BetId],
-        claim_txid: Txid,
-    ) -> anyhow::Result<()> {
-        self.bet_db
-            .update_bets(claiming_bet_ids, |bet_state, _, _| match bet_state {
-                BetState::Won {
-                    bet, secret_key, ..
-                }
-                | BetState::Claiming {
-                    bet, secret_key, ..
-                } => Ok(BetState::Claiming {
-                    bet,
-                    claim_txid,
-                    secret_key,
-                }),
-                _ => Err(anyhow!("bet changed under our nose -- try again")),
-            })?;
-        Ok(())
     }
 }
