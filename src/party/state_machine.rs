@@ -49,7 +49,7 @@ where
                             if let Some(tx) = blockchain.get_tx(&bet.tx().txid())? {
                                 let bet = bet.clone().add_counterparty_sigs(tx);
                                 update_bet! {
-                                    self, bet_id, _ => BetState::Confirmed {
+                                    self, bet_id, _ => BetState::Included {
                                         bet: bet.clone(),
                                         height
                                     }
@@ -59,7 +59,7 @@ where
                     }
                     BetOrProp::Bet(bet) => {
                         if let TxState::Present { height } = blockchain.tx_state(&bet.tx())? {
-                            update_bet! { self, bet_id, BetState::Canceled { .. } => BetState::Confirmed { bet: bet.clone(), height } }
+                            update_bet! { self, bet_id, BetState::Canceled { .. } => BetState::Included { bet: bet.clone(), height } }
                         }
                     }
                     BetOrProp::Proposal(_) => { /* no bet to check */ }
@@ -108,7 +108,7 @@ where
                                     Broadcast::broadcast(blockchain, bet.tx())
                                         .context("broadcasting bet tx because it left mempool")?;
                                 }
-                                update_bet! { self, bet_id, BetState::Canceled { height: None, .. } => BetState::Confirmed { bet: bet.clone(), height: None } }
+                                update_bet! { self, bet_id, BetState::Canceled { height: None, .. } => BetState::Included { bet: bet.clone(), height: None } }
                             }
                         },
                     }
@@ -143,7 +143,7 @@ where
                             update_bet! { self, bet_id,
                                BetState::Offered { bet, .. } => {
                                    let bet = bet.add_counterparty_sigs(tx.clone());
-                                   BetState::Confirmed { bet: bet.clone(), height }
+                                   BetState::Included { bet: bet.clone(), height }
                                }
                             }
                         }
@@ -171,7 +171,7 @@ where
                     TxState::NotFound => { /* we're waiting for proposer to broadcast */ }
                 }
             }
-            BetState::Confirmed { bet, .. } => {
+            BetState::Included { bet, .. } => {
                 match blockchain.tx_state(&bet.tx())? {
                     // If there's a conflict with the bet tx then we go to canceled
                     TxState::Conflict {
@@ -180,7 +180,7 @@ where
                         vin_target,
                         height,
                     } => update_bet! { self, bet_id,
-                        BetState::Confirmed { bet, .. } => BetState::Canceled {
+                        BetState::Included { bet, .. } => BetState::Canceled {
                             i_intend_cancel: bet.my_input_indexes.contains(&vin_target),
                             pre_cancel: BetOrProp::Bet(bet),
                             bet_spent_vin: vin_target,
@@ -191,7 +191,7 @@ where
                     },
                     // Update height if it gto confirmed somewhere else
                     TxState::Present { height } => update_bet! { self, bet_id,
-                        BetState::Confirmed { bet,..} => BetState::Confirmed { bet, height }
+                        BetState::Included { bet,..} => BetState::Included { bet, height }
                     },
                     TxState::NotFound => {
                         eprintln!(

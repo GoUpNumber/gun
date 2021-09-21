@@ -90,7 +90,7 @@ where
     ) -> anyhow::Result<()> {
         self.bet_db
             .update_bets(&[bet_id], move |old_state, _, txdb| match old_state {
-                BetState::Confirmed { bet, .. } => {
+                BetState::Included { bet, .. } => {
                     let event_id = bet.oracle_event.event.id.clone();
                     let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome)
                         .context("parsing oracle outcome")?;
@@ -189,7 +189,7 @@ where
                     bet: OfferedBet(bet),
                     ..
                 }
-                | BetState::Confirmed {
+                | BetState::Included {
                     bet, height: None, ..
                 } => {
                     let tx = bet.tx();

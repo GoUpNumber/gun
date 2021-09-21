@@ -464,7 +464,7 @@ pub fn run_bet_cmd(
                         BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", id)) {
                             to_remove.push(id);
                         },
-                        BetState::Won { .. } | BetState::Claimed { height: None, .. } | BetState::Canceled { height: None, .. } | BetState::Confirmed { .. }  => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
+                        BetState::Won { .. } | BetState::Claimed { height: None, .. } | BetState::Canceled { height: None, .. } | BetState::Included { .. }  => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
                         _ => to_remove.push(id),
                     },
                     Ok(None) => return Err(anyhow!("Bet {} doesn't exist", id)),

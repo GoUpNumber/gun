@@ -67,38 +67,46 @@ impl KeyKind {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "state")]
 pub enum BetState {
-    Proposed {
-        local_proposal: LocalProposal,
-    },
+    /// You've made a proposal
+    Proposed { local_proposal: LocalProposal },
+    /// You've made an offer
     Offered {
         bet: OfferedBet,
         encrypted_offer: Ciphertext,
     },
-    Confirmed {
+    /// The bet tx has been included in mempool or chain
+    Included {
         bet: Bet,
+        // None implies in mempool
         height: Option<u32>,
     },
+    /// You won the bet
     Won {
         bet: Bet,
         secret_key: SecretKey,
         attestation: Attestation<Secp256k1>,
     },
+    /// You lost the bet
     Lost {
         bet: Bet,
         attestation: Attestation<Secp256k1>,
     },
+    /// A Tx spending the bet output has been included in mempool or chain.
     Claimed {
         bet: Bet,
         txid: Txid,
+        // None implies calim tx is in mempool
         height: Option<u32>,
         secret_key: SecretKey,
         attestation: Attestation<Secp256k1>,
     },
+    /// There is a tx spending one of the bet inputs that is *not* the bet tx.
     Canceled {
         pre_cancel: BetOrProp,
         bet_spent_vin: u32,
         cancel_txid: Txid,
         cancel_vin: u32,
+        /// Height of cancel tx  None implies cancel tx is in mempool
         height: Option<u32>,
         /// Whether we intend to cancel the bet.
         i_intend_cancel: bool,
@@ -139,8 +147,8 @@ impl BetState {
         match self {
             Proposed { .. } => "proposed",
             Offered { .. } => "offered",
-            Confirmed { height: None, .. } => "unconfirmed",
-            Confirmed {
+            Included { height: None, .. } => "unconfirmed",
+            Included {
                 height: Some(_), ..
             } => "confirmed",
             Won { .. } => "won",
@@ -169,7 +177,7 @@ impl BetState {
                 bet: OfferedBet(bet),
                 ..
             }
-            | Confirmed { bet, .. } => bet
+            | Included { bet, .. } => bet
                 .my_input_indexes
                 .iter()
                 .map(|i| bet.tx().input[*i as usize].previous_output)
@@ -189,7 +197,7 @@ impl BetState {
                 encrypted_offer,
             },
             BetState::Canceled { pre_cancel, .. } => pre_cancel,
-            BetState::Confirmed { bet, .. }
+            BetState::Included { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
             | BetState::Claimed { bet, .. } => BetOrProp::Bet(bet),
@@ -207,7 +215,7 @@ impl BetState {
                 bet: OfferedBet(bet),
                 ..
             }
-            | BetState::Confirmed { bet, .. }
+            | BetState::Included { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
             | BetState::Claimed { bet, .. }

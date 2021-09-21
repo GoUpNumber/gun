@@ -17,7 +17,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         .bet_db()
         .list_entities_print_error::<BetState>()
         .filter_map(|(_, bet_state)| match bet_state {
-            BetState::Confirmed { bet, .. } => Some((bet.local_value, Amount::ZERO)),
+            BetState::Included { bet, .. } => Some((bet.local_value, Amount::ZERO)),
             BetState::Won { bet, .. } => Some((Amount::ZERO, bet.joint_output_value)),
             _ => None,
         })
