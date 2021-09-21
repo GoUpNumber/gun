@@ -153,7 +153,7 @@ where
         bet_ids: &[BetId],
         feespec: FeeSpec,
     ) -> anyhow::Result<Option<Psbt>> {
-        let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
+        let mut utxos_that_need_canceling: Vec<OutPoint> = vec![];
 
         for bet_id in bet_ids {
             let bet_state = self.bet_db().get_entity(*bet_id)?.ok_or(anyhow!(
@@ -165,18 +165,18 @@ where
                     let inputs = &local_proposal.proposal.inputs;
                     if inputs
                         .iter()
-                        .find(|input| utxos_that_need_cancelling.contains(input))
+                        .find(|input| utxos_that_need_canceling.contains(input))
                         .is_none()
                     {
-                        utxos_that_need_cancelling.push(inputs[0]);
+                        utxos_that_need_canceling.push(inputs[0]);
                     }
                 }
-                BetState::Cancelled {
+                BetState::Canceled {
                     height: None,
                     pre_cancel: BetOrProp::Bet(bet),
                     ..
                 }
-                | BetState::Cancelled {
+                | BetState::Canceled {
                     height: None,
                     pre_cancel:
                         BetOrProp::OfferedBet {
@@ -200,10 +200,10 @@ where
                         .collect::<Vec<_>>();
                     if inputs
                         .iter()
-                        .find(|input| utxos_that_need_cancelling.contains(input))
+                        .find(|input| utxos_that_need_canceling.contains(input))
                         .is_none()
                     {
-                        utxos_that_need_cancelling.push(inputs[0]);
+                        utxos_that_need_canceling.push(inputs[0]);
                     }
                 }
                 _ => {
@@ -223,7 +223,7 @@ where
             .only_witness_utxo();
         feespec.apply_to_builder(self.wallet.client(), &mut builder)?;
 
-        for utxo in utxos_that_need_cancelling {
+        for utxo in utxos_that_need_canceling {
             // we have to add these as foreign UTXOs because BDK doesn't let you spend
             // outputs that have been spent by tx in the mempool.
             let tx = match self.wallet.query_db(|db| db.get_tx(&utxo.txid, true))? {

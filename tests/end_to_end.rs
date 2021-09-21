@@ -360,11 +360,11 @@ pub fn cancel_proposal() {
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
     Broadcast::broadcast(party_1.wallet().client(), tx).unwrap();
-    wait_for_state!(party_1, p1_bet_id, "cancelling");
+    wait_for_state!(party_1, p1_bet_id, "canceling");
     test_client.generate(1, None);
-    wait_for_state!(party_1, bet_id_overlap, "cancelled");
-    //     wait_for_state!(party_1, p1_bet_id, "cancelled");
-    wait_for_state!(party_2, p2_bet_id, "cancelled");
+    wait_for_state!(party_1, bet_id_overlap, "canceled");
+    //     wait_for_state!(party_1, p1_bet_id, "canceled");
+    wait_for_state!(party_2, p2_bet_id, "canceled");
 }
 
 #[test]
@@ -414,9 +414,9 @@ pub fn test_cancel_offer() {
     let tx = psbt.extract_tx();
     Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
-    wait_for_state!(party_2, p2_bet_id, "cancelling");
+    wait_for_state!(party_2, p2_bet_id, "canceling");
     test_client.generate(1, None);
-    wait_for_state!(party_2, p2_bet_id, "cancelled");
+    wait_for_state!(party_2, p2_bet_id, "canceled");
 }
 
 #[test]
@@ -511,11 +511,11 @@ pub fn cancel_offer_after_offer_taken() {
     let tx = psbt.extract_tx();
     Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
 
-    wait_for_state!(party_2, second_p2_bet_id, "cancelling");
-    wait_for_state!(party_2, first_p2_bet_id, "cancelling");
+    wait_for_state!(party_2, second_p2_bet_id, "canceling");
+    wait_for_state!(party_2, first_p2_bet_id, "canceling");
     test_client.generate(1, None);
-    wait_for_state!(party_2, second_p2_bet_id, "cancelled");
-    wait_for_state!(party_2, first_p2_bet_id, "cancelled");
+    wait_for_state!(party_2, second_p2_bet_id, "canceled");
+    wait_for_state!(party_2, first_p2_bet_id, "canceled");
 }
 
 #[test]

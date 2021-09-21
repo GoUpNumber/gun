@@ -94,7 +94,7 @@ pub enum BetState {
         secret_key: SecretKey,
         attestation: Attestation<Secp256k1>,
     },
-    Cancelled {
+    Canceled {
         pre_cancel: BetOrProp,
         bet_spent_vin: u32,
         cancel_txid: Txid,
@@ -149,10 +149,10 @@ impl BetState {
             Claimed {
                 height: Some(_), ..
             } => "claimed",
-            Cancelled { height: None, .. } => "cancelling",
-            Cancelled {
+            Canceled { height: None, .. } => "canceling",
+            Canceled {
                 height: Some(_), ..
-            } => "cancelled",
+            } => "canceled",
         }
     }
 
@@ -188,7 +188,7 @@ impl BetState {
                 bet,
                 encrypted_offer,
             },
-            BetState::Cancelled { pre_cancel, .. } => pre_cancel,
+            BetState::Canceled { pre_cancel, .. } => pre_cancel,
             BetState::Confirmed { bet, .. }
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
@@ -199,7 +199,7 @@ impl BetState {
     pub fn tags_mut(&mut self) -> &mut Vec<String> {
         match self {
             BetState::Proposed { local_proposal }
-            | BetState::Cancelled {
+            | BetState::Canceled {
                 pre_cancel: BetOrProp::Proposal(local_proposal),
                 ..
             } => &mut local_proposal.tags,
@@ -211,7 +211,7 @@ impl BetState {
             | BetState::Won { bet, .. }
             | BetState::Lost { bet, .. }
             | BetState::Claimed { bet, .. }
-            | BetState::Cancelled {
+            | BetState::Canceled {
                 pre_cancel:
                     BetOrProp::OfferedBet {
                         bet: OfferedBet(bet),

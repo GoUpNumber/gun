@@ -37,7 +37,7 @@ where
         let blockchain = self.wallet.client();
 
         match bet_state {
-            BetState::Cancelled {
+            BetState::Canceled {
                 pre_cancel,
                 height,
                 i_intend_cancel,
@@ -59,7 +59,7 @@ where
                     }
                     BetOrProp::Bet(bet) => {
                         if let TxState::Present { height } = blockchain.tx_state(&bet.tx())? {
-                            update_bet! { self, bet_id, BetState::Cancelled { .. } => BetState::Confirmed { bet: bet.clone(), height } }
+                            update_bet! { self, bet_id, BetState::Canceled { .. } => BetState::Confirmed { bet: bet.clone(), height } }
                         }
                     }
                     BetOrProp::Proposal(_) => { /* no bet to check */ }
@@ -75,12 +75,12 @@ where
                         } => {
                             update_bet! {
                                     self, bet_id,
-                                    BetState::Cancelled { pre_cancel, mut i_intend_cancel, .. } => {
+                                    BetState::Canceled { pre_cancel, mut i_intend_cancel, .. } => {
                                         i_intend_cancel = i_intend_cancel || match &pre_cancel {
                                             BetOrProp::Bet(bet) | BetOrProp::OfferedBet { bet: OfferedBet(bet), .. } => bet.my_input_indexes.contains(&(index as u32)),
                                             BetOrProp::Proposal(_) => { debug_assert!(false, "unreachable. i_intend_cancel will be true here if we were in proposal state"); true }
                                         };
-                                        BetState::Cancelled {
+                                        BetState::Canceled {
                                             pre_cancel,
                                             height,
                                             cancel_txid: txid,
@@ -91,24 +91,24 @@ where
                                     }
                             }
                         }
-                        // Whatever tx that caused us to be in cancelling state has disappeared from mempool so roll back.
+                        // Whatever tx that caused us to be in canceling state has disappeared from mempool so roll back.
                         // If code is correct here it should be a tx we've broadcast ourselves (otherwise we wouldn't have transitioned).
                         InputState::Unspent => match &pre_cancel {
                             BetOrProp::Proposal(local_proposal) => {
-                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Proposed { local_proposal: local_proposal.clone() } }
+                                update_bet! { self, bet_id, BetState::Canceled { height: None, .. } => BetState::Proposed { local_proposal: local_proposal.clone() } }
                             }
                             BetOrProp::OfferedBet {
                                 bet,
                                 encrypted_offer,
                             } => {
-                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Offered { bet: bet.clone(), encrypted_offer: encrypted_offer.clone() }}
+                                update_bet! { self, bet_id, BetState::Canceled { height: None, .. } => BetState::Offered { bet: bet.clone(), encrypted_offer: encrypted_offer.clone() }}
                             }
                             BetOrProp::Bet(bet) => {
                                 if !i_intend_cancel {
                                     Broadcast::broadcast(blockchain, bet.tx())
                                         .context("broadcasting bet tx because it left mempool")?;
                                 }
-                                update_bet! { self, bet_id, BetState::Cancelled { height: None, .. } => BetState::Confirmed { bet: bet.clone(), height: None } }
+                                update_bet! { self, bet_id, BetState::Canceled { height: None, .. } => BetState::Confirmed { bet: bet.clone(), height: None } }
                             }
                         },
                     }
@@ -123,7 +123,7 @@ where
                 } = blockchain.input_state(&local_proposal.proposal.inputs)?
                 {
                     update_bet! { self, bet_id,
-                       BetState::Proposed { local_proposal, .. } => BetState::Cancelled {
+                       BetState::Proposed { local_proposal, .. } => BetState::Canceled {
                            pre_cancel: BetOrProp::Proposal(local_proposal),
                            bet_spent_vin: index,
                            cancel_txid: txid,
@@ -157,7 +157,7 @@ where
                         let i_intend_cancel = bet.my_input_indexes.contains(&vin_target);
                         if height.is_some() || i_intend_cancel {
                             update_bet! { self, bet_id,
-                               BetState::Offered { bet, encrypted_offer } => BetState::Cancelled {
+                               BetState::Offered { bet, encrypted_offer } => BetState::Canceled {
                                    pre_cancel: BetOrProp::OfferedBet{ bet, encrypted_offer },
                                    bet_spent_vin: vin_target,
                                    cancel_txid: txid,
@@ -180,7 +180,7 @@ where
                         vin_target,
                         height,
                     } => update_bet! { self, bet_id,
-                        BetState::Confirmed { bet, .. } => BetState::Cancelled {
+                        BetState::Confirmed { bet, .. } => BetState::Canceled {
                             i_intend_cancel: bet.my_input_indexes.contains(&vin_target),
                             pre_cancel: BetOrProp::Bet(bet),
                             bet_spent_vin: vin_target,
