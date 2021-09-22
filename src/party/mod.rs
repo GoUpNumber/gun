@@ -15,6 +15,7 @@ pub use proposal::*;
 pub use take_offer::*;
 
 use crate::{
+    bet::OfferedBet,
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     keychain::Keychain,
     FeeSpec, OracleInfo,
@@ -89,7 +90,7 @@ where
     ) -> anyhow::Result<()> {
         self.bet_db
             .update_bets(&[bet_id], move |old_state, _, txdb| match old_state {
-                BetState::Confirmed { bet, .. } => {
+                BetState::Included { bet, .. } => {
                     let event_id = bet.oracle_event.event.id.clone();
                     let outcome = Outcome::try_from_id_and_outcome(event_id, &attestation.outcome)
                         .context("parsing oracle outcome")?;
@@ -152,7 +153,7 @@ where
         bet_ids: &[BetId],
         feespec: FeeSpec,
     ) -> anyhow::Result<Option<Psbt>> {
-        let mut utxos_that_need_cancelling: Vec<OutPoint> = vec![];
+        let mut utxos_that_need_canceling: Vec<OutPoint> = vec![];
 
         for bet_id in bet_ids {
             let bet_state = self.bet_db().get_entity(*bet_id)?.ok_or(anyhow!(
@@ -164,13 +165,33 @@ where
                     let inputs = &local_proposal.proposal.inputs;
                     if inputs
                         .iter()
-                        .find(|input| utxos_that_need_cancelling.contains(input))
+                        .find(|input| utxos_that_need_canceling.contains(input))
                         .is_none()
                     {
-                        utxos_that_need_cancelling.push(inputs[0]);
+                        utxos_that_need_canceling.push(inputs[0]);
                     }
                 }
-                BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
+                BetState::Canceled {
+                    height: None,
+                    pre_cancel: BetOrProp::Bet(bet),
+                    ..
+                }
+                | BetState::Canceled {
+                    height: None,
+                    pre_cancel:
+                        BetOrProp::OfferedBet {
+                            bet: OfferedBet(bet),
+                            ..
+                        },
+                    ..
+                }
+                | BetState::Offered {
+                    bet: OfferedBet(bet),
+                    ..
+                }
+                | BetState::Included {
+                    bet, height: None, ..
+                } => {
                     let tx = bet.tx();
                     let inputs = bet
                         .my_input_indexes
@@ -179,10 +200,10 @@ where
                         .collect::<Vec<_>>();
                     if inputs
                         .iter()
-                        .find(|input| utxos_that_need_cancelling.contains(input))
+                        .find(|input| utxos_that_need_canceling.contains(input))
                         .is_none()
                     {
-                        utxos_that_need_cancelling.push(inputs[0]);
+                        utxos_that_need_canceling.push(inputs[0]);
                     }
                 }
                 _ => {
@@ -202,7 +223,7 @@ where
             .only_witness_utxo();
         feespec.apply_to_builder(self.wallet.client(), &mut builder)?;
 
-        for utxo in utxos_that_need_cancelling {
+        for utxo in utxos_that_need_canceling {
             // we have to add these as foreign UTXOs because BDK doesn't let you spend
             // outputs that have been spent by tx in the mempool.
             let tx = match self.wallet.query_db(|db| db.get_tx(&utxo.txid, true))? {
@@ -244,32 +265,6 @@ where
         )?;
         assert!(finalized, "we should have signed all inputs");
         Ok(Some(psbt))
-    }
-
-    pub fn set_bets_to_cancelling(
-        &self,
-        bet_ids: &[BetId],
-        cancel_txid: Txid,
-    ) -> anyhow::Result<()> {
-        self.bet_db()
-            .update_bets(bet_ids, |bet_state, bet_id, _| match bet_state {
-                BetState::Offered { bet, .. } | BetState::Unconfirmed { bet, .. } => {
-                    Ok(BetState::Cancelling {
-                        cancel_txid,
-                        bet_or_prop: BetOrProp::Bet(bet),
-                    })
-                }
-                BetState::Proposed { local_proposal } => Ok(BetState::Cancelling {
-                    cancel_txid,
-                    bet_or_prop: BetOrProp::Proposal(local_proposal),
-                }),
-                _ => Err(anyhow!(
-                    "Canelling bets failed because {} changed transitioned to {} -- try again!",
-                    bet_id,
-                    bet_state.name()
-                )),
-            })?;
-        Ok(())
     }
 
     pub fn is_confirmed(

@@ -17,9 +17,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         .bet_db()
         .list_entities_print_error::<BetState>()
         .filter_map(|(_, bet_state)| match bet_state {
-            BetState::Confirmed { bet, .. } | BetState::Unconfirmed { bet, .. } => {
-                Some((bet.local_value, Amount::ZERO))
-            }
+            BetState::Included { bet, .. } => Some((bet.local_value, Amount::ZERO)),
             BetState::Won { bet, .. } => Some((Amount::ZERO, bet.joint_output_value)),
             _ => None,
         })
@@ -283,7 +281,16 @@ impl SpendOpt {
         )?;
 
         if let Some(txid) = txid {
-            party.set_bets_to_claiming(&claiming_bet_ids, txid)?;
+            if !print_tx {
+                for bet_id in claiming_bet_ids {
+                    if let Err(e) = party.take_next_action(bet_id, false) {
+                        eprintln!(
+                            "error updating state of bet {} after broadcasting claim tx {}: {}",
+                            bet_id, txid, e
+                        );
+                    }
+                }
+            }
         }
 
         Ok(output)

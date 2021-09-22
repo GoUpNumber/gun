@@ -1,6 +1,6 @@
 use super::{run_oralce_cmd, Cell};
 use crate::{
-    bet::Bet,
+    bet::{Bet, OfferedBet},
     bet_database::{BetDatabase, BetId, BetOrProp, BetState},
     ciphertext::{Ciphertext, Plaintext},
     cmd::{self, read_answer},
@@ -404,7 +404,11 @@ pub fn run_bet_cmd(
                         print_tx,
                     )?;
                     if let Some(txid) = txid {
-                        party.set_bets_to_claiming(&ids, txid)?;
+                        for id in ids {
+                            if let Err(e) = party.take_next_action(id, false) {
+                                eprintln!("error updating state of bet {} after broadcasting claim tx {}: {}", id, txid, e);
+                            }
+                        }
                     }
                     Ok(output)
                 }
@@ -427,13 +431,18 @@ pub fn run_bet_cmd(
                         yes,
                         print_tx,
                     )?;
+
                     if let Some(txid) = txid {
-                        party.set_bets_to_cancelling(&ids[..], txid)?;
+                        for id in ids {
+                            if let Err(e) = party.take_next_action(id, true) {
+                                eprintln!("error updating state of bet {} after broadcasting cancel tx: {}: {}", id, txid, e);
+                            }
+                        }
                     }
                     output
                 }
                 None => {
-                    eprintln!("no bets needed cancelling");
+                    eprintln!("no bets needed canceling");
                     CmdOutput::None
                 }
             })
@@ -455,7 +464,7 @@ pub fn run_bet_cmd(
                         BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", id)) {
                             to_remove.push(id);
                         },
-                        BetState::Won { .. } | BetState::Claiming { .. } | BetState::Cancelling { .. } | BetState::Confirmed { .. } | BetState::Unconfirmed { .. } => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
+                        BetState::Won { .. } | BetState::Claimed { height: None, .. } | BetState::Canceled { height: None, .. } | BetState::Included { .. }  => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
                         _ => to_remove.push(id),
                     },
                     Ok(None) => return Err(anyhow!("Bet {} doesn't exist", id)),
@@ -500,7 +509,11 @@ pub fn run_bet_cmd(
                     "tags" => Cell::List(local_proposal.tags.iter().map(Cell::string).map(Box::new).collect()),
                     "string" => Cell::string(local_proposal.proposal.clone().into_versioned()),
                 },
-                BetOrProp::Bet(bet) => item! {
+                BetOrProp::Bet(bet)
+                | BetOrProp::OfferedBet {
+                    bet: OfferedBet(bet),
+                    ..
+                } => item! {
                     "state" => Cell::string(name),
                     "risk" => Cell::Amount(bet.local_value),
                     "reward" => Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
@@ -513,7 +526,7 @@ pub fn run_bet_cmd(
                     "bet-value" => Cell::Amount(bet.joint_output_value),
                     "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
                     "claim-txid" => match bet_state {
-                        BetState::Claiming { claim_txid: txid, .. } | BetState::Claimed { txid, .. } => Cell::string(txid),
+                        BetState::Claimed { txid, .. } => Cell::string(txid),
                         _ => Cell::Empty
                     },
                     "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect())
@@ -719,7 +732,11 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 Cell::Empty,
                 Cell::string(local_proposal.proposal.event_id.short_id()),
             ]),
-            BetOrProp::Bet(bet) => rows.push(vec![
+            BetOrProp::Bet(bet)
+            | BetOrProp::OfferedBet {
+                bet: OfferedBet(bet),
+                ..
+            } => rows.push(vec![
                 Cell::Int(id.into()),
                 Cell::String(name),
                 bet.oracle_event
