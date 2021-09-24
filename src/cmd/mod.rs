@@ -21,8 +21,12 @@ use term_table::{row::Row, Table};
 pub use wallet::*;
 
 use crate::{
-    bet_database::BetDatabase, chrono::NaiveDateTime, config::Config, keychain::Keychain,
-    party::Party, psbt_ext::PsbtFeeRate, FeeSpec, ValueChoice,
+    betting::{BetDatabase, Party},
+    chrono::NaiveDateTime,
+    config::Config,
+    keychain::Keychain,
+    psbt_ext::PsbtFeeRate,
+    FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
 use std::{collections::HashMap, fs, path::PathBuf};

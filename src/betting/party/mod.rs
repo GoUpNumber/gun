@@ -1,25 +1,14 @@
 mod bet_args;
-mod joint_output;
 mod offer;
 mod proposal;
-mod randomize;
 mod spend_won;
 mod state_machine;
 mod take_offer;
 
 pub use bet_args::*;
-pub use joint_output::*;
 use miniscript::DescriptorTrait;
-pub use offer::*;
-pub use proposal::*;
-pub use take_offer::*;
 
-use crate::{
-    bet::OfferedBet,
-    bet_database::{BetDatabase, BetId, BetOrProp, BetState},
-    keychain::Keychain,
-    FeeSpec, OracleInfo,
-};
+use crate::{betting::*, keychain::Keychain, FeeSpec};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{

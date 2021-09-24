@@ -1,5 +1,5 @@
 use super::*;
-use crate::{amount_ext::FromCliStr, bet_database::BetState, cmd, item};
+use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
 use bdk::{
     bitcoin::{Address, OutPoint, Script, Txid},
     blockchain::EsploraBlockchain,

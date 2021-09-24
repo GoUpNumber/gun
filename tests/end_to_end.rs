@@ -1,6 +1,6 @@
 use anyhow::Context;
 use bdk::{
-    bitcoin::Network,
+    bitcoin::{Amount, Network},
     blockchain::{
         esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Broadcast,
         EsploraBlockchain,
@@ -10,14 +10,7 @@ use bdk::{
     wallet::AddressIndex,
     FeeRate, Wallet,
 };
-use bet_database::BetState;
-use gun_wallet::{
-    bet_database,
-    bitcoin::Amount,
-    keychain::Keychain,
-    party::{BetArgs, Party, Proposal, VersionedProposal},
-    FeeSpec, ValueChoice,
-};
+use gun_wallet::{betting::*, keychain::Keychain, FeeSpec, ValueChoice};
 use olivia_core::{
     announce, attest, AnnouncementSchemes, Attestation, AttestationSchemes, Event, EventId, Group,
     OracleEvent, OracleInfo, OracleKeys,
@@ -50,7 +43,7 @@ fn create_party(
         .sync(noop_progress(), None)
         .context("syncing wallet failed")?;
 
-    let bet_db = bet_database::BetDatabase::test_new();
+    let bet_db = BetDatabase::test_new();
 
     let funding_address = wallet.get_address(AddressIndex::New).unwrap().address;
 
@@ -102,7 +95,7 @@ macro_rules! setup_test {
         party_1.trust_oracle(oracle_info.clone()).unwrap();
         party_2.trust_oracle(oracle_info.clone()).unwrap();
 
-        let oracle_event = OracleEvent::<Secp256k1> {
+        let oracle_event = OracleEvent {
             event: Event {
                 id: event_id.clone(),
                 expected_outcome_time: None,
