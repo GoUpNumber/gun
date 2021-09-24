@@ -1,15 +1,9 @@
-use super::{randomize::Randomize, Either, JointOutput, LocalProposal, Offer, Party};
-use crate::{
-    bet::Bet,
-    bet_database::{BetId, BetState},
-    ciphertext::{Ciphertext, Plaintext},
-    OracleInfo,
-};
+use crate::betting::*;
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
-        Amount, Transaction,
+        Amount,
     },
     database::BatchDatabase,
     miniscript::DescriptorTrait,
@@ -19,17 +13,6 @@ use bdk::{
 use chacha20::ChaCha20Rng;
 use olivia_secp256k1::fun::{marker::EvenY, Point};
 use std::convert::TryInto;
-
-pub struct ValidatedOffer {
-    pub bet_id: BetId,
-    pub bet: Bet,
-}
-
-impl ValidatedOffer {
-    pub fn tx(&self) -> Transaction {
-        self.bet.psbt.clone().extract_tx()
-    }
-}
 
 impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub fn decrypt_offer(

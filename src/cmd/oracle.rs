@@ -1,4 +1,7 @@
-use crate::{bet_database::BetDatabase, cmd, item, reqwest, OracleInfo, Url};
+use crate::{
+    betting::{BetDatabase, OracleInfo},
+    cmd, item, reqwest, Url,
+};
 use anyhow::anyhow;
 use olivia_core::{http::RootResponse, OracleId};
 use olivia_secp256k1::Secp256k1;

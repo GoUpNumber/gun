@@ -1,10 +1,8 @@
-use crate::{
-    bitcoin::{
-        hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
-        util::bip32::ExtendedPrivKey,
-        Network,
-    },
-    party::Proposal,
+use crate::betting::Proposal;
+use bdk::bitcoin::{
+    hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
+    util::bip32::ExtendedPrivKey,
+    Network,
 };
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
 

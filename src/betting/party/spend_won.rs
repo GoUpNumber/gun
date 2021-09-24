@@ -1,7 +1,4 @@
-use crate::{
-    bet_database::{BetId, BetState},
-    FeeSpec,
-};
+use crate::{betting::*, FeeSpec};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},

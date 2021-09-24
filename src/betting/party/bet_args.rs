@@ -1,7 +1,4 @@
-use crate::{
-    bet_database::{BetDatabase, BetId, BetState},
-    ValueChoice,
-};
+use crate::{betting::*, ValueChoice};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Amount,

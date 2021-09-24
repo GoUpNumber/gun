@@ -1,19 +1,13 @@
-use crate::{
-    bet::{Bet, OfferedBet},
-    ciphertext::Ciphertext,
-    party::LocalProposal,
-    OracleInfo,
-};
+use crate::betting::*;
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{secp256k1::SecretKey, OutPoint, Txid},
+    bitcoin::{OutPoint, Txid},
     sled::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
     },
 };
-use olivia_core::{Attestation, OracleId};
-use olivia_secp256k1::Secp256k1;
+use olivia_core::OracleId;
 
 pub const DB_VERSION: u8 = 0;
 pub type BetId = u32;
@@ -61,174 +55,6 @@ pub enum KeyKind {
 impl KeyKind {
     pub fn prefix(&self) -> Vec<u8> {
         crate::encode::serialize(&(DB_VERSION, self))
-    }
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "state")]
-pub enum BetState {
-    /// You've made a proposal
-    Proposed { local_proposal: LocalProposal },
-    /// You've made an offer
-    Offered {
-        bet: OfferedBet,
-        encrypted_offer: Ciphertext,
-    },
-    /// The bet tx has been included in mempool or chain
-    Included {
-        bet: Bet,
-        // None implies in mempool
-        height: Option<u32>,
-    },
-    /// You won the bet
-    Won {
-        bet: Bet,
-        secret_key: SecretKey,
-        attestation: Attestation<Secp256k1>,
-    },
-    /// You lost the bet
-    Lost {
-        bet: Bet,
-        attestation: Attestation<Secp256k1>,
-    },
-    /// A Tx spending the bet output has been included in mempool or chain.
-    Claimed {
-        bet: Bet,
-        txid: Txid,
-        // None implies calim tx is in mempool
-        height: Option<u32>,
-        secret_key: SecretKey,
-        attestation: Attestation<Secp256k1>,
-    },
-    /// There is a tx spending one of the bet inputs that is *not* the bet tx.
-    Canceled {
-        pre_cancel: BetOrProp,
-        bet_spent_vin: u32,
-        cancel_txid: Txid,
-        cancel_vin: u32,
-        /// Height of cancel tx  None implies cancel tx is in mempool
-        height: Option<u32>,
-        /// Whether we intend to cancel the bet.
-        i_intend_cancel: bool,
-    },
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum BetOrProp {
-    Bet(Bet),
-    Proposal(LocalProposal),
-    OfferedBet {
-        bet: OfferedBet,
-        encrypted_offer: Ciphertext,
-    },
-}
-
-impl BetOrProp {
-    pub fn inputs(&self) -> Vec<OutPoint> {
-        match self {
-            BetOrProp::Bet(bet)
-            | BetOrProp::OfferedBet {
-                bet: OfferedBet(bet),
-                ..
-            } => bet
-                .tx()
-                .input
-                .iter()
-                .map(|input| input.previous_output)
-                .collect(),
-            BetOrProp::Proposal(local_proposal) => local_proposal.proposal.inputs.clone(),
-        }
-    }
-}
-
-impl BetState {
-    pub fn name(&self) -> &'static str {
-        use BetState::*;
-        match self {
-            Proposed { .. } => "proposed",
-            Offered { .. } => "offered",
-            Included { height: None, .. } => "unconfirmed",
-            Included {
-                height: Some(_), ..
-            } => "confirmed",
-            Won { .. } => "won",
-            Lost { .. } => "lost",
-            Claimed { height: None, .. } => "claiming",
-            Claimed {
-                height: Some(_), ..
-            } => "claimed",
-            Canceled { height: None, .. } => "canceling",
-            Canceled {
-                height: Some(_), ..
-            } => "canceled",
-        }
-    }
-
-    pub fn reserved_utxos(&self) -> Vec<OutPoint> {
-        use BetState::*;
-        match self {
-            Proposed { local_proposal } => local_proposal
-                .proposal
-                .inputs
-                .iter()
-                .map(Clone::clone)
-                .collect(),
-            Offered {
-                bet: OfferedBet(bet),
-                ..
-            }
-            | Included { bet, .. } => bet
-                .my_input_indexes
-                .iter()
-                .map(|i| bet.tx().input[*i as usize].previous_output)
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    pub fn into_bet_or_prop(self) -> BetOrProp {
-        match self {
-            BetState::Proposed { local_proposal } => BetOrProp::Proposal(local_proposal),
-            BetState::Offered {
-                bet,
-                encrypted_offer,
-            } => BetOrProp::OfferedBet {
-                bet,
-                encrypted_offer,
-            },
-            BetState::Canceled { pre_cancel, .. } => pre_cancel,
-            BetState::Included { bet, .. }
-            | BetState::Won { bet, .. }
-            | BetState::Lost { bet, .. }
-            | BetState::Claimed { bet, .. } => BetOrProp::Bet(bet),
-        }
-    }
-
-    pub fn tags_mut(&mut self) -> &mut Vec<String> {
-        match self {
-            BetState::Proposed { local_proposal }
-            | BetState::Canceled {
-                pre_cancel: BetOrProp::Proposal(local_proposal),
-                ..
-            } => &mut local_proposal.tags,
-            BetState::Offered {
-                bet: OfferedBet(bet),
-                ..
-            }
-            | BetState::Included { bet, .. }
-            | BetState::Won { bet, .. }
-            | BetState::Lost { bet, .. }
-            | BetState::Claimed { bet, .. }
-            | BetState::Canceled {
-                pre_cancel:
-                    BetOrProp::OfferedBet {
-                        bet: OfferedBet(bet),
-                        ..
-                    }
-                    | BetOrProp::Bet(bet),
-                ..
-            } => &mut bet.tags,
-        }
     }
 }
 

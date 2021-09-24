@@ -1,19 +1,15 @@
 use super::{run_oralce_cmd, Cell};
 use crate::{
-    bet::{Bet, OfferedBet},
-    bet_database::{BetDatabase, BetId, BetOrProp, BetState},
-    ciphertext::{Ciphertext, Plaintext},
-    cmd::{self, read_answer},
+    betting::*,
+    cmd::{self, read_answer, CmdOutput},
     item,
     keychain::Keychain,
-    party::{Offer, Proposal, VersionedProposal},
     psbt_ext::PsbtFeeRate,
     Url, ValueChoice,
 };
 use anyhow::*;
 use bdk::bitcoin::{Address, Script};
 use chacha20::cipher::StreamCipher;
-use cmd::CmdOutput;
 use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
@@ -27,9 +23,9 @@ pub struct BetArgs {
     pub tags: Vec<String>,
 }
 
-impl From<BetArgs> for crate::party::BetArgs<'_, '_> {
+impl From<BetArgs> for crate::betting::BetArgs<'_, '_> {
     fn from(args: BetArgs) -> Self {
-        crate::party::BetArgs {
+        crate::betting::BetArgs {
             value: args.value,
             tags: args.tags,
             ..Default::default()
@@ -43,7 +39,7 @@ pub enum BetOpt {
     /// Propose an event to bet on
     Propose {
         #[structopt(flatten)]
-        args: cmd::BetArgs,
+        args: BetArgs,
         /// the HTTP url for the event
         event_url: Url,
         /// Print the proposal without asking
@@ -53,7 +49,7 @@ pub enum BetOpt {
     /// Make an offer to a proposal
     Offer {
         #[structopt(flatten)]
-        args: cmd::BetArgs,
+        args: BetArgs,
         /// The outcome to choose
         choice: String,
         /// The propsal string
@@ -781,13 +777,13 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
 fn get_oracle_event_from_url(
     bet_db: &BetDatabase,
     url: Url,
-) -> anyhow::Result<(crate::OracleEvent, crate::OracleInfo, bool)> {
+) -> anyhow::Result<(OracleEvent, OracleInfo, bool)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
 
     let event_response = reqwest::blocking::get(url.clone())?
         .error_for_status()
         .with_context(|| format!("while getting {}", url))?
-        .json::<olivia_core::http::EventResponse<olivia_secp256k1::Secp256k1>>()
+        .json::<EventResponse>()
         .with_context(|| {
             format!(
                 "while decoding the response from {}. Are you sure this is a valid event url?",
@@ -796,7 +792,7 @@ fn get_oracle_event_from_url(
         })?;
 
     let oracle_info = bet_db
-        .get_entity::<crate::OracleInfo>(oracle_id.to_string())?
+        .get_entity::<OracleInfo>(oracle_id.to_string())?
         .ok_or(anyhow!(
             "oracle '{}' is not trusted -- run `gun bet oracle add '{}' to trust it",
             oracle_id,

@@ -1,7 +1,4 @@
-use crate::{
-    bet::{Bet, OfferedBet},
-    bet_database::{BetId, BetOrProp, BetState},
-};
+use crate::betting::*;
 use anyhow::{anyhow, Context};
 use bdk::blockchain::{
     Blockchain, Broadcast, GetInputState, InputState, TransactionState, TxState,
@@ -244,7 +241,7 @@ where
             .get(event_url)
             .send()?
             .error_for_status()?
-            .json::<crate::EventResponse>()?;
+            .json::<EventResponse>()?;
 
         if let Some(attestation) = event_response.attestation {
             self.learn_outcome(bet_id, attestation)?;
