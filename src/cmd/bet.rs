@@ -317,10 +317,6 @@ pub fn run_bet_cmd(
                     fee_args.fee,
                 )?;
 
-            if let Some(change) = &offer.change {
-                eprintln!("This offer will put {} “in-use” unnecessarily because the offer value {} does not much a sum of available UTXOs.\nYou can get a UTXO with the exact amount by using `gun split` first", change.value(), offer.value);
-            }
-
             if yes || cmd::read_answer(&bet_prompt(&bet)) {
                 let (id, encrypted_offer) = party.save_and_encrypt_offer(
                     bet,
@@ -335,7 +331,10 @@ pub fn run_bet_cmd(
                     encrypted_offer.to_string_padded(pad, &mut cipher);
                 if let Some(overflow) = overflow {
                     if pad != 0 {
-                        eprintln!("WARNING: this offer is longer than {} bytes -- it needs to be cut down by {}", pad, overflow);
+                        eprintln!(
+                            "WARNING: this offer is longer than the pad value {} by {} bytes",
+                            pad, overflow
+                        );
                     }
                 }
                 Ok(CmdOutput::EmphasisedItem {
