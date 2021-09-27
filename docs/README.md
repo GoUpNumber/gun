@@ -12,7 +12,7 @@ See [gun.fun](https://gun.fun) for full documentation.
 
 The wallet is alpha quality.
 It is buggy and is missing features.
-The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](bitcoindevkit.org) but the betting functionality is freshly engineered.
+The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](https://bitcoindevkit.org) but the betting functionality is freshly engineered.
 Only put into it what you are willing to lose.
 Thanks for testing this for me and thank you in advance for any coins you sacrifice along the way.
 For now, you must build the binary yourself.
