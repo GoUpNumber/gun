@@ -23,8 +23,8 @@ For now, you must build the binary yourself.
 git clone https://github.com/LLFourn/gun
 cd gun
 cargo install --path .
-# or the version if you are on nightly
-cargo -Z avoid-dev-deps install --features=nightly --path .
+# More efficient version if you have nightly toolchain
+cargo -Z avoid-dev-deps install --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
 
