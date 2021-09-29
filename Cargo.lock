@@ -1070,7 +1070,7 @@ dependencies = [
 [[package]]
 name = "olivia_core"
 version = "0.1.0"
-source = "git+https://github.com/llfourn/olivia?rev=04eb811239c89436b03df365998c19a6ca1ab9e6#04eb811239c89436b03df365998c19a6ca1ab9e6"
+source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
 dependencies = [
  "chrono",
  "serde",
@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "olivia_describe"
 version = "0.1.0"
-source = "git+https://github.com/llfourn/olivia?rev=04eb811239c89436b03df365998c19a6ca1ab9e6#04eb811239c89436b03df365998c19a6ca1ab9e6"
+source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
 dependencies = [
  "olivia_core",
 ]
@@ -1089,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "olivia_secp256k1"
 version = "0.0.1"
-source = "git+https://github.com/llfourn/olivia?rev=04eb811239c89436b03df365998c19a6ca1ab9e6#04eb811239c89436b03df365998c19a6ca1ab9e6"
+source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
 dependencies = [
  "bytes",
  "ecdsa_fun",
