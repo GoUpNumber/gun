@@ -12,9 +12,9 @@ dirs = "3.0"
 bdk = { git = "https://github.com/llfourn/bdk", rev = "7d69fe7e14e1daec1b634250123f97da4aa229cb", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
 # bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
 serde_json = "1.0"
-olivia_core = { git = "https://github.com/llfourn/olivia", rev = "04eb811239c89436b03df365998c19a6ca1ab9e6" }
-olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "04eb811239c89436b03df365998c19a6ca1ab9e6" }
-olivia_describe = { git = "https://github.com/llfourn/olivia", rev = "04eb811239c89436b03df365998c19a6ca1ab9e6" }
+olivia_core = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
+olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
+olivia_describe = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
 sha2 = "0.9"
 base2048 = "0.2"
 chacha20 = { version = "0.7", features = ["rng", "cipher"] }
