@@ -15,7 +15,6 @@ It is buggy and is missing features.
 The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](https://bitcoindevkit.org) but the betting functionality is freshly engineered.
 Only put into it what you are willing to lose.
 Thanks for testing this for me and thank you in advance for any coins you sacrifice along the way.
-For now, you must build the binary yourself.
 
 ## Quick Install
 
@@ -27,5 +26,7 @@ cargo install --path .
 cargo -Z avoid-dev-deps install --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
+
+The *minimum supported rust version* for `gun` is `1.51`.
 
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
