@@ -62,9 +62,9 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "base2048"
-version = "0.2.1"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6921f5aa4622dab41300c42e51d986043f32f44b97f46b7d066f7f254e757922"
+checksum = "71f4fe417e8cc3bb9b437dfa9290ce92bd2730ba5374719bdfd9147fbc8f17cd"
 
 [[package]]
 name = "base64"
