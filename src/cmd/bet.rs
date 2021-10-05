@@ -367,7 +367,7 @@ pub fn run_bet_cmd(
                     fee_args.fee,
                 )?;
 
-            if yes || cmd::read_yn(&bet_prompt(&bet)) {
+            if yes || cmd::read_yn(&bet_prompt(&bet, "offer", true)) {
                 let (id, encrypted_offer) = party.save_and_encrypt_offer(
                     bet,
                     offer,
@@ -411,7 +411,7 @@ pub fn run_bet_cmd(
                         eprintln!("This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", message);
                     }
                     let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
-                    if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet)) {
+                    if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet, "take", false)) {
                         let (output, txid) = cmd::decide_to_broadcast(
                             party.wallet().network(),
                             party.wallet().client(),
@@ -863,7 +863,7 @@ fn get_oracle_event_from_url(
     Ok((oracle_event, oracle_info, is_attested))
 }
 
-fn bet_prompt(bet: &Bet) -> String {
+fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
     use std::fmt::Write;
     use term_table::{row::Row, Table};
     let mut res = String::new();
@@ -909,7 +909,12 @@ fn bet_prompt(bet: &Bet) -> String {
     )
     .unwrap();
     write!(&mut res, "\n").unwrap();
-    write!(&mut res, "Do you want to take this bet?").unwrap();
+    if you_paying_fee {
+        write!(&mut res, "You are paying the fee.\n").unwrap();
+    } else {
+        write!(&mut res, "you are NOT paying the fee.\n").unwrap();
+    }
+    write!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
     res
 }
 
