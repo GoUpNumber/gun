@@ -66,23 +66,42 @@ pub fn load_config(wallet_dir: &PathBuf) -> anyhow::Result<Config> {
     }
 }
 
-pub fn read_answer(question: &str) -> bool {
+pub fn read_yn(question: &str) -> bool {
     use std::io::{self, BufRead};
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-    println!("{} [y/n]?", question);
+    eprint!("> {} [y/n]? ", question.replace('\n', "\n> "));
     lines
         .find_map(
             |line| match line.unwrap().trim_end().to_lowercase().as_str() {
                 "y" => Some(true),
                 "n" => Some(false),
                 _ => {
-                    println!("[y/n]?");
+                    eprint!("[y/n]? ");
                     None
                 }
             },
         )
         .unwrap_or(false)
+}
+
+pub fn read_input<V>(
+    prompt: &str,
+    possible: &str,
+    validator: impl Fn(&str) -> anyhow::Result<V>,
+) -> V {
+    use std::io::{self, BufRead};
+    let stdin = io::stdin();
+    let lines = stdin.lock().lines().map(|x| x.unwrap());
+    eprint!("> {} [{}]? ", prompt.replace('\n', "\n> "), possible);
+    for line in lines {
+        match validator(line.trim_end()) {
+            Ok(v) => return v,
+            Err(_) => eprintln!("> ‘{}’ isn't valid. Try again [{}]", line, possible),
+        }
+    }
+    eprintln!("STDIN terminated");
+    std::process::exit(2)
 }
 
 pub fn get_seed_words_file(wallet_dir: &PathBuf) -> PathBuf {
@@ -232,9 +251,16 @@ pub fn format_amount(amount: Amount) -> String {
     }
 }
 
+pub fn sanitize_str(string: &mut String) {
+    string.retain(|c| !c.is_control());
+}
+
 impl Cell {
     pub fn string<T: core::fmt::Display>(t: T) -> Self {
-        Self::String(t.to_string())
+        let mut string = t.to_string();
+        // Remove control characters to prevent tricks
+        sanitize_str(&mut string);
+        Self::String(string)
     }
 
     pub fn datetime(dt: NaiveDateTime) -> Self {
@@ -473,7 +499,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
 
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{} sats/vb", feerate.as_sat_vb()),
+        &format!("{:.3} sats/vb", feerate.as_sat_vb()),
         &format_amount(fee),
     ]));
 
@@ -489,8 +515,8 @@ pub fn decide_to_broadcast(
 ) -> anyhow::Result<(CmdOutput, Option<Txid>)> {
     use crate::item;
     if yes
-        || read_answer(&format!(
-            "This is the transaction that will be broadcast. Ok?\n{}",
+        || read_yn(&format!(
+            "This is the transaction that will be broadcast.\n{}Ok",
             display_psbt(network, &psbt)
         ))
     {

@@ -181,7 +181,8 @@ mod test {
             ),
         });
 
-        let string =  "0.01#h00.ooo#/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win#ǔ༖ǼभݸჷતϧષগழਞഹเϕॐಋచଚڮݻɈపŉɋʍҞɒŴݦസӫၒӵݎஜؽͼɹঊڄՓॠఖஷߣၦაŐƍۂʎӯسՉهƽཀލǂޞඤӖყଋم༎";
+        let string =  "0.01#h00.ooo#/EPL/match/2021-08-22/ARS_CHE.vs=CHE_win#Ō࿃Ŵઝঢჰ௵ʏఒଊಫ୵ช༨ɽબവഉబ٧থǀചµǃȅАǊëঌฉѝႡѧ८ಜԺȯǱ૭զӌભഅಮਫႫႿÅąउȆѡԯӂՃĵ࿐ৠĺ৷เшრఠՁ༎";
+        dbg!(&fixed.to_string());
         assert_eq!(VersionedProposal::from_str(string).unwrap(), fixed);
         assert_eq!(fixed.to_string(), string);
     }

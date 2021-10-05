@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.4.0
+
+- Upgrade to base2048 v2 which removes right-to-left characters which made copy pasting very difficult.
+- Less mandatory arguments more prompting when betting.
+
+## v0.3.0
+
+??
+
 
 ## v0.2.0
 

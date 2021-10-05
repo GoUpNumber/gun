@@ -1,6 +1,6 @@
 [package]
 name = "gun_wallet"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["LLFourn <lloyd.fourn@gmail.com>"]
 edition = "2018"
 license = "0BSD"
@@ -16,7 +16,7 @@ olivia_core = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d
 olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
 olivia_describe = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
 sha2 = "0.9"
-base2048 = "0.2"
+base2048 = "2.0.2"
 chacha20 = { version = "0.7", features = ["rng", "cipher"] }
 serde = { version = "1" }
 bincode = "1.3"
