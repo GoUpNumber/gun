@@ -499,7 +499,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
 
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{} sats/vb", feerate.as_sat_vb()),
+        &format!("{:.3} sats/vb", feerate.as_sat_vb()),
         &format_amount(fee),
     ]));
 

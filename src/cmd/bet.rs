@@ -890,7 +890,7 @@ fn bet_prompt(bet: &Bet) -> String {
     ]));
     table.add_row(Row::new(vec![
         "fee".into(),
-        format!("{} ({} s/vb)", fee, feerate.as_sat_vb()),
+        format!("{} ({:.3} s/vb)", fee, feerate.as_sat_vb()),
     ]));
 
     if let Some(time) = expected_outcome_time {
