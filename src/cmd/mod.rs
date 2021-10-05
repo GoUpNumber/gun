@@ -251,9 +251,16 @@ pub fn format_amount(amount: Amount) -> String {
     }
 }
 
+pub fn sanitize_str(string: &mut String) {
+    string.retain(|c| !c.is_control());
+}
+
 impl Cell {
     pub fn string<T: core::fmt::Display>(t: T) -> Self {
-        Self::String(t.to_string())
+        let mut string = t.to_string();
+        // Remove control characters to prevent tricks
+        sanitize_str(&mut string);
+        Self::String(string)
     }
 
     pub fn datetime(dt: NaiveDateTime) -> Self {

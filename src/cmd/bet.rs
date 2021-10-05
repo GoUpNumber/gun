@@ -1,7 +1,7 @@
 use super::{read_input, run_oralce_cmd, Cell};
 use crate::{
     betting::*,
-    cmd::{self, read_yn, CmdOutput},
+    cmd::{self, read_yn, sanitize_str, CmdOutput},
     item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
@@ -405,8 +405,10 @@ pub fn run_bet_cmd(
             let (plaintext, offer_public_key, rng) = party.decrypt_offer(id, encrypted_offer)?;
             match plaintext {
                 Plaintext::Offerv1 { offer, message } => {
-                    if let Some(message) = message {
-                        eprintln!("This message was attached to the offer:\n{}", message);
+                    if let Some(mut message) = message {
+                        // remove ocntrol characters to prevent tricks.
+                        sanitize_str(&mut message);
+                        eprintln!("This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", message);
                     }
                     let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
                     if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet)) {
