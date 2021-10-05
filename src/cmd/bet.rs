@@ -1,33 +1,51 @@
-use super::{run_oralce_cmd, Cell};
+use super::{read_input, run_oralce_cmd, Cell};
 use crate::{
     betting::*,
-    cmd::{self, read_answer, CmdOutput},
+    cmd::{self, read_yn, CmdOutput},
     item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     Url, ValueChoice,
 };
 use anyhow::*;
-use bdk::bitcoin::{Address, Script};
+use bdk::bitcoin::{Address, Amount, Script};
 use chacha20::cipher::StreamCipher;
-use olivia_core::{chrono::Utc, Descriptor, Outcome, OutcomeError};
+use olivia_core::{chrono::Utc, Outcome, OutcomeError};
 use std::{path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
 #[derive(Clone, Debug, structopt::StructOpt)]
 pub struct BetArgs {
     /// The value you want to risk on the bet e.g all, 0.05BTC
-    pub value: ValueChoice,
+    #[structopt(short, long)]
+    pub value: Option<ValueChoice>,
     /// tag the bet with short string
     #[structopt(short, long)]
     pub tags: Vec<String>,
 }
 
-impl From<BetArgs> for crate::betting::BetArgs<'_, '_> {
-    fn from(args: BetArgs) -> Self {
+impl BetArgs {
+    pub fn prompt_to_core_bet_args(&self, gain: Option<Amount>) -> crate::betting::BetArgs<'_, '_> {
+        let prompt = match gain {
+            None => "How much value do you want to risk?".to_string(),
+            Some(gain) => format!("How much value do you want to risk to gain {}", gain),
+        };
+        let value = self.value.as_ref().cloned().unwrap_or_else(|| {
+            read_input(
+                &prompt,
+                match gain {
+                    None => "e.g. 0.01BTC, 100000sat, all",
+                    Some(_) => "match, all or a value like 0.01BTC",
+                },
+                |input| match (gain, input) {
+                    (Some(gain), "match") => Ok(ValueChoice::Amount(gain)),
+                    (_, input) => ValueChoice::from_str(input),
+                },
+            )
+        });
         crate::betting::BetArgs {
-            value: args.value,
-            tags: args.tags,
+            value,
+            tags: self.tags.clone(),
             ..Default::default()
         }
     }
@@ -50,10 +68,11 @@ pub enum BetOpt {
     Offer {
         #[structopt(flatten)]
         args: BetArgs,
-        /// The outcome to choose
-        choice: String,
         /// The propsal string
         proposal: VersionedProposal,
+        /// The outcome to choose
+        #[structopt(long, short)]
+        choice: Option<String>,
         /// Make the offer without asking
         #[structopt(long, short)]
         yes: bool,
@@ -229,13 +248,14 @@ pub fn run_bet_cmd(
                     crate::format_dt_diff_till_now(expected_outcome_time)
                 );
             }
-            question += " Ok?";
-            let local_proposal = party.make_proposal(oracle_id, oracle_event, args.into())?;
+            question += " Ok";
+            let args = args.prompt_to_core_bet_args(None);
+            let local_proposal = party.make_proposal(oracle_id, oracle_event, args)?;
             if let Some(change) = &local_proposal.change {
                 eprintln!("This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  change.value(), local_proposal.proposal.value);
             }
 
-            if yes || read_answer(&question) {
+            if yes || read_yn(&question) {
                 let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
                 let id = party
                     .bet_db()
@@ -271,20 +291,6 @@ pub fn run_bet_cmd(
                     event_id.n_outcomes()
                 ));
             }
-            let outcome = Outcome::try_from_id_and_outcome(event_id.clone(), &choice).map_err(
-                |e| -> anyhow::Error {
-                    match e {
-                        OutcomeError::Invalid { outcome } => match event_id.descriptor() {
-                            Descriptor::Enum { outcomes } => anyhow!(
-                                "{} is not a valid outcome. possible outcomes are: {}",
-                                choice,
-                                outcomes.join(", ")
-                            ),
-                            _ => anyhow!("{} is not a valid outcome for {}", outcome, event_id,),
-                        },
-                    }
-                },
-            )?;
 
             let event_url =
                 Url::parse(&format!("https://{}{}", proposal.oracle, proposal.event_id))?;
@@ -307,17 +313,61 @@ pub fn run_bet_cmd(
                 }
             }
 
+            let possible_outcomes = (0..2)
+                .map(|i| Outcome {
+                    id: event_id.clone(),
+                    value: i,
+                })
+                .collect::<Vec<_>>();
+
+            let outcome = match choice {
+                Some(choice) => Outcome::try_from_id_and_outcome(event_id.clone(), &choice)
+                    .map_err(|e| match e {
+                        OutcomeError::Invalid { outcome } => anyhow!(
+                            "{} is not a valid outcome. Valid outcomes are {}",
+                            outcome,
+                            possible_outcomes
+                                .iter()
+                                .map(Outcome::outcome_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    })?,
+                None => read_input(
+                    &format!(
+                        "The outcomes for this bet are\n{}\nWhat outcome do you want to bet on",
+                        possible_outcomes
+                            .iter()
+                            .map(|o| format!(
+                                "{}: {}",
+                                o.outcome_string(),
+                                olivia_describe::outcome(o).positive
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                    &possible_outcomes
+                        .iter()
+                        .map(Outcome::outcome_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    |input| Ok(Outcome::try_from_id_and_outcome(event_id.clone(), &input)?),
+                ),
+            };
+
+            let args = args.prompt_to_core_bet_args(Some(proposal.value));
+
             let (bet, offer, local_public_key, mut cipher) = party
                 .generate_offer_with_oracle_event(
                     proposal,
                     outcome.value == 1,
                     oracle_event,
                     oracle_info,
-                    args.into(),
+                    args,
                     fee_args.fee,
                 )?;
 
-            if yes || cmd::read_answer(&bet_prompt(&bet)) {
+            if yes || cmd::read_yn(&bet_prompt(&bet)) {
                 let (id, encrypted_offer) = party.save_and_encrypt_offer(
                     bet,
                     offer,
@@ -359,7 +409,7 @@ pub fn run_bet_cmd(
                         eprintln!("This message was attached to the offer:\n{}", message);
                     }
                     let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
-                    if yes || cmd::read_answer(&bet_prompt(&validated_offer.bet)) {
+                    if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet)) {
                         let (output, txid) = cmd::decide_to_broadcast(
                             party.wallet().network(),
                             party.wallet().client(),
@@ -451,12 +501,12 @@ pub fn run_bet_cmd(
                         BetState::Proposed { local_proposal } => {
                             match local_proposal.oracle_event.event.expected_outcome_time {
                                 Some(expected_outcome_time) if expected_outcome_time < Utc::now().naive_utc() => to_remove.push(id),
-                                _ => if cmd::read_answer(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", id)) {
+                                _ => if cmd::read_yn(&format!("You should only forget a proposal if you are you confident no one will make an offer to it.\nIf you're not sure it's better to cancel it properly using `gun bet cancel`.\nAre you sure you want to forget your proposed bet {}", id)) {
                                     to_remove.push(id);
                                 }
                             }
                         },
-                        BetState::Offered { .. } => if cmd::read_answer(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", id)) {
+                        BetState::Offered { .. } => if cmd::read_yn(&format!("Forgetting an offer can lead to loss of funds if it has been seen by the proposer. Are you sure you want to forget bet {}", id)) {
                             to_remove.push(id);
                         },
                         BetState::Won { .. } | BetState::Claimed { height: None, .. } | BetState::Canceled { height: None, .. } | BetState::Included { .. }  => return Err(anyhow!("You may not forget bet {} because it is in the {} state", id, bet_state.name())),
