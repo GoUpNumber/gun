@@ -69,6 +69,10 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         },
     );
 
+    if confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO {
+        eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date.");
+    }
+
     Ok(item! {
         "confirmed" => Cell::Amount(confirmed),
         "unconfirmed" => Cell::Amount(unconfirmed),
