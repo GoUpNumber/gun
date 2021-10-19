@@ -886,7 +886,10 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
     table.add_row(Row::new(vec!["reward".into(), i_gain.to_string()]));
     table.add_row(Row::new(vec![
         "ratio".into(),
-        format!("{:.3}", i_risk.as_sat() as f64 / i_gain.as_sat() as f64),
+        format!(
+            "{:.3} (higher is better)",
+            i_gain.as_sat() as f64 / i_risk.as_sat() as f64
+        ),
     ]));
     table.add_row(Row::new(vec![
         "fee".into(),
