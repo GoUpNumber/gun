@@ -2,7 +2,8 @@
 
 ## v0.5.0
 
-- Upgrade to new bdk version 
+- Upgrade to new bdk commit
+- Switch over to using ureq as http backend exclusively
 
 ## v0.4.0
 
