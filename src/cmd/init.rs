@@ -19,6 +19,7 @@ pub enum NWords {}
 #[derive(Clone, Debug, StructOpt)]
 pub struct InitOpt {
     /// The network name (bitcoin|regtest|testnet)
+    #[structopt(name = "bitcoin|regtest|testnet")]
     network: Network,
     /// Existing BIP39 seed words file. Use "-" to read words from stdin.
     #[structopt(long, name = "FILE")]
