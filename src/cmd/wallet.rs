@@ -70,7 +70,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
     );
 
     if confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO {
-        eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date.");
+        eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date. i.e. run `gun -s balance` ");
     }
 
     Ok(item! {
