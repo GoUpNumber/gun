@@ -28,25 +28,18 @@ pub struct Config {
 impl Config {
     pub fn default_config(network: Network) -> Config {
         use Network::*;
-        let concurrency = Some(4);
-        let blockchain = match network {
-            Bitcoin => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
-                base_url: "https://mempool.space/api".to_string(),
-                concurrency,
-                stop_gap: 10,
-            }),
-            Testnet => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
-                base_url: "https://blockstream.info/testnet/api".to_string(),
-                concurrency,
-                stop_gap: 10,
-            }),
-            Regtest => AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
-                base_url: "http://localhost:3000".to_string(),
-                concurrency,
-                stop_gap: 10,
-            }),
+        let url = match network {
+            Bitcoin => "https://mempool.space/api",
+            Testnet => "https://blockstream.info/testnet/api",
+            Regtest => "http://localhost:3000",
             Signet => unimplemented!("signet not supported yet!"),
         };
+
+        let blockchain = AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
+            concurrency: Some(10),
+            stop_gap: 10,
+            ..EsploraBlockchainConfig::new(url.into())
+        });
 
         Config {
             network,

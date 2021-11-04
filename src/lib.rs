@@ -14,12 +14,11 @@ mod fee_spec;
 pub mod keychain;
 pub mod psbt_ext;
 pub use fee_spec::*;
-pub use reqwest;
 
 pub use chacha20::cipher;
 pub use olivia_core::chrono;
 pub use olivia_secp256k1::schnorr_fun::fun::{hex, rand_core};
-pub use reqwest::Url;
+pub use url::Url;
 
 #[derive(Clone, Debug)]
 pub enum ValueChoice {

@@ -35,7 +35,7 @@ fn create_party(
         "http://{}",
         test_client.electrsd.esplora_url.as_ref().unwrap()
     );
-    let esplora = EsploraBlockchain::new(&esplora_url, None, 5);
+    let esplora = EsploraBlockchain::new(&esplora_url, 5);
 
     let wallet = Wallet::new(descriptor, None, Network::Regtest, db, esplora)
         .context("Initializing wallet failed")?;
@@ -60,11 +60,7 @@ fn create_party(
         wallet,
         bet_db,
         keychain,
-        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
-            base_url: esplora_url,
-            concurrency: None,
-            stop_gap: 5,
-        }),
+        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig::new(esplora_url)),
     );
     Ok(party)
 }
@@ -517,7 +513,6 @@ fn create_proposal_with_dust_change() {
         setup_test!();
 
     let balance = party_1.wallet().get_balance().unwrap();
-    dbg!(&balance);
     let bet_value = balance - 250;
 
     let local_proposal = party_1

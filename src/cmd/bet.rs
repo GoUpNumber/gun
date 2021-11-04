@@ -831,10 +831,10 @@ fn get_oracle_event_from_url(
 ) -> anyhow::Result<(OracleEvent, OracleInfo, bool)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
 
-    let event_response = reqwest::blocking::get(url.clone())?
-        .error_for_status()
+    let event_response = ureq::get(url.as_str())
+        .call()
         .with_context(|| format!("while getting {}", url))?
-        .json::<EventResponse>()
+        .into_json::<EventResponse>()
         .with_context(|| {
             format!(
                 "while decoding the response from {}. Are you sure this is a valid event url?",

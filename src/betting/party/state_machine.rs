@@ -235,13 +235,13 @@ where
 
     fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
         let event_id = bet.oracle_event.event.id;
-        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
+        let event_url = format!("https://{}{}", bet.oracle_id, event_id);
         let event_response = self
             .client
-            .get(event_url)
-            .send()?
-            .error_for_status()?
-            .json::<EventResponse>()?;
+            .get(&event_url)
+            .call()
+            .with_context(|| format!("trying to outcome for bet {} from {}", bet_id, event_url))?
+            .into_json::<EventResponse>()?;
 
         if let Some(attestation) = event_response.attestation {
             self.learn_outcome(bet_id, attestation)?;

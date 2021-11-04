@@ -1,6 +1,6 @@
 use crate::{
     betting::{BetDatabase, OracleInfo},
-    cmd, item, reqwest, Url,
+    cmd, item, Url,
 };
 use anyhow::anyhow;
 use olivia_core::{http::RootResponse, OracleId};
@@ -46,9 +46,9 @@ pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<Cmd
             match bet_db.get_entity::<OracleInfo>(oracle_id.clone())? {
                 Some(_) => eprintln!("oracle {} is already trusted", oracle_id),
                 None => {
-                    let root_response = reqwest::blocking::get(url)?
-                        .error_for_status()?
-                        .json::<RootResponse<Secp256k1>>()?;
+                    let root_response = ureq::get(url.as_str())
+                        .call()?
+                        .into_json::<RootResponse<Secp256k1>>()?;
                     let oracle_info = OracleInfo {
                         id: oracle_id,
                         oracle_keys: root_response.public_keys,
