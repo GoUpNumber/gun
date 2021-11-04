@@ -10,7 +10,7 @@ use bdk::{
 use std::collections::HashMap;
 use structopt::StructOpt;
 
-pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
+pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput> {
     let party = load_party(&wallet_dir)?;
 
     let (in_bet, unclaimed) = party
@@ -69,7 +69,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
         },
     );
 
-    if confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO {
+    if !sync && (confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO) {
         eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date. i.e. run `gun -s balance` ");
     }
 
