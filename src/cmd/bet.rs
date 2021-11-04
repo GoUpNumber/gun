@@ -11,7 +11,7 @@ use anyhow::*;
 use bdk::bitcoin::{Address, Amount, Script};
 use chacha20::cipher::StreamCipher;
 use olivia_core::{chrono::Utc, Outcome, OutcomeError};
-use std::{path::PathBuf, str::FromStr};
+use std::{path::Path, str::FromStr};
 use structopt::StructOpt;
 
 #[derive(Clone, Debug, structopt::StructOpt)]
@@ -53,6 +53,7 @@ impl BetArgs {
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(about = "Make or take a bet", rename_all = "kebab")]
+#[allow(clippy::large_enum_variant)]
 pub enum BetOpt {
     /// Propose an event to bet on
     Propose {
@@ -202,11 +203,7 @@ pub enum TagOpt {
     },
 }
 
-pub fn run_bet_cmd(
-    wallet_dir: &PathBuf,
-    cmd: BetOpt,
-    sync: bool,
-) -> anyhow::Result<cmd::CmdOutput> {
+pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result<cmd::CmdOutput> {
     // For now just always do this but we may want to do something more fine grained later.
     if sync {
         let party = cmd::load_party(wallet_dir)?;
@@ -321,8 +318,8 @@ pub fn run_bet_cmd(
                 .collect::<Vec<_>>();
 
             let outcome = match choice {
-                Some(choice) => Outcome::try_from_id_and_outcome(event_id.clone(), &choice)
-                    .map_err(|e| match e {
+                Some(choice) => {
+                    Outcome::try_from_id_and_outcome(event_id, &choice).map_err(|e| match e {
                         OutcomeError::Invalid { outcome } => anyhow!(
                             "{} is not a valid outcome. Valid outcomes are {}",
                             outcome,
@@ -332,7 +329,8 @@ pub fn run_bet_cmd(
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
-                    })?,
+                    })?
+                }
                 None => read_input(
                     &format!(
                         "The outcomes for this bet are\n{}\nWhat outcome do you want to bet on",
@@ -351,7 +349,7 @@ pub fn run_bet_cmd(
                         .map(Outcome::outcome_string)
                         .collect::<Vec<_>>()
                         .join(", "),
-                    |input| Ok(Outcome::try_from_id_and_outcome(event_id.clone(), &input)?),
+                    |input| Ok(Outcome::try_from_id_and_outcome(event_id.clone(), input)?),
                 ),
             };
 
@@ -379,13 +377,11 @@ pub fn run_bet_cmd(
                 eprintln!("Post this offer in reponse to the proposal");
                 let (padded_encrypted_offer, overflow) =
                     encrypted_offer.to_string_padded(pad, &mut cipher);
-                if let Some(overflow) = overflow {
-                    if pad != 0 {
-                        eprintln!(
-                            "WARNING: this offer is longer than the pad value {} by {} bytes",
-                            pad, overflow
-                        );
-                    }
+                if overflow > 0 && pad != 0 {
+                    eprintln!(
+                        "WARNING: ciphertext is longer than {} by {} bytes so it will look unusually big",
+                        pad, overflow
+                    );
                 }
                 Ok(CmdOutput::EmphasisedItem {
                     main: ("offer", Cell::string(padded_encrypted_offer)),
@@ -419,7 +415,7 @@ pub fn run_bet_cmd(
                             yes,
                             print_tx,
                         )?;
-                        if let Some(_) = txid {
+                        if txid.is_some() {
                             party.set_offer_taken(validated_offer)?;
                         }
                         Ok(output)
@@ -527,7 +523,7 @@ pub fn run_bet_cmd(
             }
 
             Ok(CmdOutput::List(
-                to_remove.into_iter().map(|x| Cell::string(x)).collect(),
+                to_remove.into_iter().map(Cell::string).collect(),
             ))
         }
         BetOpt::Show { id, raw } => {
@@ -550,11 +546,11 @@ pub fn run_bet_cmd(
                     "event-id" => Cell::string(&local_proposal.proposal.event_id),
                     "oracle" => Cell::string(&local_proposal.proposal.oracle),
                     "outcome-time" => local_proposal.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
-                    "inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                    "inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(Cell::string).collect()),
                     "change-addr" => local_proposal.change.as_ref().and_then(|change| Address::from_script(change.script(), party.wallet().network())).map(Cell::string).unwrap_or(Cell::Empty),
                     "change-value" => local_proposal.change.as_ref().map(|change| Cell::Amount(change.value())).unwrap_or(Cell::Empty),
-                    "tags" => Cell::List(local_proposal.tags.iter().map(Cell::string).map(Box::new).collect()),
-                    "string" => Cell::string(local_proposal.proposal.clone().into_versioned()),
+                    "tags" => Cell::List(local_proposal.tags.iter().map(Cell::string).collect()),
+                    "string" => Cell::string(local_proposal.proposal.into_versioned()),
                 },
                 BetOrProp::Bet(bet)
                 | BetOrProp::OfferedBet {
@@ -568,7 +564,7 @@ pub fn run_bet_cmd(
                     "event-id" => Cell::string(&bet.oracle_event.event.id),
                     "oracle" => Cell::string(&bet.oracle_id),
                     "outcome-time" => bet.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
-                    "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                    "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(Cell::string).collect()),
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
                     "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
@@ -576,7 +572,7 @@ pub fn run_bet_cmd(
                         BetState::Claimed { txid, .. } => Cell::string(txid),
                         _ => Cell::Empty
                     },
-                    "tags" => Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect())
+                    "tags" => Cell::List(bet.tags.iter().map(Cell::string).collect())
                 },
             })
         }
@@ -603,7 +599,7 @@ pub fn run_bet_cmd(
                 "oracle" => Cell::string(oracle),
                 "event-id" => Cell::string(event_id),
                 "value" => Cell::Amount(value),
-                "inputs" => Cell::List(inputs.into_iter().map(|x| Box::new(Cell::string(x))).collect()),
+                "inputs" => Cell::List(inputs.into_iter().map(Cell::string).collect()),
                 "public-key" => Cell::string(public_key),
                 "change-script" => change_script.map(|x| Cell::string(Script::from(x))).unwrap_or(Cell::Empty)
             },
@@ -654,7 +650,7 @@ pub fn run_bet_cmd(
                                     "their-choice" => Cell::string(chosen_outcome.outcome_string()),
                                     "public-key" => Cell::string(&offer_public_key),
                                     "change-script" => change.map(|x| Cell::string(x.script())).unwrap_or(Cell::Empty),
-                                    "inputs" => Cell::List(inputs.into_iter().map(|x| Cell::string(x.outpoint)).map(Box::new).collect()),
+                                    "inputs" => Cell::List(inputs.into_iter().map(|x| Cell::string(x.outpoint)).collect()),
                                     "valid" => Cell::string(valid),
                                     "fee" => fee.map(Cell::Amount).unwrap_or(Cell::Empty),
                                     "feerate" => feerate.map(|x| Cell::string(x.as_sat_vb())).unwrap_or(Cell::Empty),
@@ -711,9 +707,9 @@ pub fn run_bet_cmd(
             let party = cmd::load_party(wallet_dir)?;
             let (ciphertext, mut cipher) = reply(&party.keychain, proposal, message);
             let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
-            if let Some(overflow) = overflow {
+            if overflow > 0 && pad != 0 {
                 eprintln!(
-                    "WARNING: ciphertext is longer than {} -- it needs to be cut down by {} to fit",
+                    "WARNING: ciphertext is longer than {} by {} bytes so it will look unusually big",
                     pad, overflow
                 );
             }
@@ -767,14 +763,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 ),
                 Cell::Amount(local_proposal.proposal.value),
                 Cell::Empty,
-                Cell::List(
-                    local_proposal
-                        .tags
-                        .iter()
-                        .map(Cell::string)
-                        .map(Box::new)
-                        .collect(),
-                ),
+                Cell::List(local_proposal.tags.iter().map(Cell::string).collect()),
                 Cell::string(local_proposal.proposal.oracle),
                 Cell::Empty,
                 Cell::string(local_proposal.proposal.event_id.short_id()),
@@ -800,7 +789,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
                 ),
                 Cell::Amount(bet.local_value),
                 Cell::Amount(bet.joint_output_value.checked_sub(bet.local_value).unwrap()),
-                Cell::List(bet.tags.iter().map(Cell::string).map(Box::new).collect()),
+                Cell::List(bet.tags.iter().map(Cell::string).collect()),
                 Cell::string(&bet.oracle_id),
                 Cell::String(bet.my_outcome().outcome_string()),
                 Cell::string(bet.oracle_event.event.id.short_id()),
@@ -831,10 +820,10 @@ fn get_oracle_event_from_url(
 ) -> anyhow::Result<(OracleEvent, OracleInfo, bool)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
 
-    let event_response = reqwest::blocking::get(url.clone())?
-        .error_for_status()
+    let event_response = ureq::get(url.as_str())
+        .call()
         .with_context(|| format!("while getting {}", url))?
-        .json::<EventResponse>()
+        .into_json::<EventResponse>()
         .with_context(|| {
             format!(
                 "while decoding the response from {}. Are you sure this is a valid event url?",
@@ -903,21 +892,19 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         ]));
     }
 
-    write!(&mut res, "{}", table.render()).unwrap();
-    write!(&mut res, "\n").unwrap();
-    write!(
+    writeln!(&mut res, "{}", table.render()).unwrap();
+    writeln!(
         &mut res,
-        "You are betting that {}",
+        "You are betting that {}.",
         olivia_describe::outcome(&outcome).positive
     )
     .unwrap();
-    write!(&mut res, "\n").unwrap();
     if you_paying_fee {
-        write!(&mut res, "You are paying the fee.\n").unwrap();
+        writeln!(&mut res, "You are paying the fee.").unwrap();
     } else {
-        write!(&mut res, "you are NOT paying the fee.\n").unwrap();
+        writeln!(&mut res, "you are NOT paying the fee.").unwrap();
     }
-    write!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
+    writeln!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
     res
 }
 
@@ -954,7 +941,7 @@ mod test {
 
         let (ciphertext, mut pad_cipher) = reply(&keychain, fixed, "a test message".into());
         let (ciphertext_str, overflow) = &ciphertext.to_string_padded(385, &mut pad_cipher);
-        assert!(!overflow.is_some());
+        assert_eq!(*overflow, 0);
         let ciphertext = Ciphertext::from_str(ciphertext_str).unwrap();
         let (mut cipher, _) = ecdh(&proposal_keypair, &ciphertext.public_key);
         match ciphertext.decrypt(&mut cipher).unwrap() {

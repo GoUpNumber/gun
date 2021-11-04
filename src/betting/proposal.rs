@@ -93,7 +93,7 @@ impl FromStr for VersionedProposal {
     type Err = anyhow::Error;
 
     fn from_str(string: &str) -> Result<Self, Self::Err> {
-        let mut segments = string.split("#");
+        let mut segments = string.split('#');
         let value = Amount::from_str_in(
             segments.next().ok_or(anyhow!("missing amount"))?,
             bitcoin::Denomination::Bitcoin,

@@ -71,7 +71,7 @@ impl<'de> serde::Deserialize<'de> for BinScript {
 impl<'de> serde::Serialize for BinScript {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            serializer.serialize_str(&hex::encode(&self.0.as_bytes()))
+            serializer.serialize_str(&hex::encode(self.0.as_bytes()))
         } else {
             serializer.serialize_bytes(self.0.as_bytes())
         }

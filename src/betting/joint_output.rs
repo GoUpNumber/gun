@@ -152,8 +152,7 @@ impl JointOutput {
             .unwrap()
             .compile()
             .unwrap();
-        let descriptor = Descriptor::Wsh(Wsh::new(compiled_policy).unwrap());
-        descriptor
+        Descriptor::Wsh(Wsh::new(compiled_policy).unwrap())
     }
 
     pub fn descriptor(&self) -> Descriptor<bitcoin::PublicKey> {

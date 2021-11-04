@@ -29,7 +29,11 @@ use crate::{
     FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, structopt::StructOpt)]
 pub struct FeeArgs {
@@ -48,8 +52,8 @@ pub enum FeeChoice {
     Speed(u32),
 }
 
-pub fn load_config(wallet_dir: &PathBuf) -> anyhow::Result<Config> {
-    let mut config_file = wallet_dir.clone();
+pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
+    let mut config_file = wallet_dir.to_path_buf();
     config_file.push("config.json");
 
     match config_file.exists() {
@@ -104,14 +108,14 @@ pub fn read_input<V>(
     std::process::exit(2)
 }
 
-pub fn get_seed_words_file(wallet_dir: &PathBuf) -> PathBuf {
-    let mut seed_words_file = wallet_dir.clone();
+pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
+    let mut seed_words_file = wallet_dir.to_path_buf();
     seed_words_file.push("seed.txt");
     seed_words_file
 }
 
-pub fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
-    let mut db_file = wallet_dir.clone();
+pub fn load_bet_db(wallet_dir: &Path) -> anyhow::Result<BetDatabase> {
+    let mut db_file = wallet_dir.to_path_buf();
     db_file.push("database.sled");
     let database = sled::open(db_file.to_str().unwrap())?;
     let bet_db = BetDatabase::new(database.open_tree("bets")?);
@@ -119,7 +123,7 @@ pub fn load_bet_db(wallet_dir: &PathBuf) -> anyhow::Result<BetDatabase> {
 }
 
 pub fn load_party(
-    wallet_dir: &PathBuf,
+    wallet_dir: &Path,
 ) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
     let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
@@ -127,7 +131,7 @@ pub fn load_party(
 }
 
 pub fn load_wallet(
-    wallet_dir: &PathBuf,
+    wallet_dir: &std::path::Path,
 ) -> anyhow::Result<(
     Wallet<EsploraBlockchain, impl BatchDatabase>,
     BetDatabase,
@@ -139,14 +143,14 @@ pub fn load_wallet(
     if !wallet_dir.exists() {
         return Err(anyhow!(
             "No wallet found at {}. Run `gun init` to set a new one up or set --gun-dir.",
-            wallet_dir.as_path().display()
+            wallet_dir.display()
         ));
     }
 
-    let config = load_config(&wallet_dir).context("loading configuration")?;
+    let config = load_config(wallet_dir).context("loading configuration")?;
     let keychain = match config.keys {
         crate::config::WalletKeys::SeedWordsFile => {
-            let sw_file = get_seed_words_file(&wallet_dir);
+            let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
             let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
                 anyhow!(
@@ -162,7 +166,7 @@ pub fn load_wallet(
         }
     };
     let database = {
-        let mut db_file = wallet_dir.clone();
+        let mut db_file = wallet_dir.to_path_buf();
         db_file.push("database.sled");
         sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
     };
@@ -206,16 +210,14 @@ pub fn load_wallet(
     Ok((wallet, bet_db, keychain, config))
 }
 
-pub fn load_wallet_db(wallet_dir: &PathBuf) -> anyhow::Result<impl BatchDatabase> {
+pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
     let database = {
-        let mut db_file = wallet_dir.clone();
+        let mut db_file = wallet_dir.to_path_buf();
         db_file.push("database.sled");
         sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
     };
 
-    Ok(database
-        .open_tree("wallet")
-        .context("opening wallet tree")?)
+    database.open_tree("wallet").context("opening wallet tree")
 }
 
 pub struct TableData {
@@ -231,7 +233,7 @@ pub enum Cell {
     Int(u64),
     Empty,
     DateTime(u64),
-    List(Vec<Box<Cell>>),
+    List(Vec<Cell>),
 }
 
 impl From<String> for Cell {
@@ -279,7 +281,7 @@ impl Cell {
                 .to_string(),
             List(list) => list
                 .into_iter()
-                .map(|x| Cell::render(*x))
+                .map(Cell::render)
                 .collect::<Vec<_>>()
                 .join("\n"),
         }
@@ -297,7 +299,7 @@ impl Cell {
                 .to_string(),
             List(list) => list
                 .into_iter()
-                .map(|x| Cell::render_tabs(*x))
+                .map(Cell::render_tabs)
                 .collect::<Vec<_>>()
                 .join(" "),
         }
@@ -313,7 +315,7 @@ impl Cell {
             Empty => serde_json::Value::Null,
             List(list) => serde_json::Value::Array(
                 list.into_iter()
-                    .map(|x| serde_json::to_value(&*x).unwrap())
+                    .map(|x| serde_json::to_value(&x).unwrap())
                     .collect(),
             ),
         }
@@ -366,13 +368,11 @@ impl CmdOutput {
                 }
                 table.render()
             }
-            List(list) => format!(
-                "{}",
-                list.into_iter()
-                    .map(Cell::render)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
+            List(list) => list
+                .into_iter()
+                .map(Cell::render)
+                .collect::<Vec<_>>()
+                .join("\n"),
             EmphasisedItem { main, .. } => main.1.render(),
             None => return Option::None,
         })
@@ -403,15 +403,11 @@ impl CmdOutput {
                 .map(|(k, v)| format!("{}\t{}", k, v.render_tabs()))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            List(list) => {
-                format!(
-                    "{}",
-                    list.into_iter()
-                        .map(Cell::render_tabs)
-                        .collect::<Vec<_>>()
-                        .join("\t")
-                )
-            }
+            List(list) => list
+                .into_iter()
+                .map(Cell::render_tabs)
+                .collect::<Vec<_>>()
+                .join("\t"),
             None => String::new(),
         }
     }
