@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, clippy::or_fun_call, clippy::vec_init_then_push)]
 
 use std::str::FromStr;
 
@@ -43,8 +43,7 @@ impl FromStr for ValueChoice {
 pub(crate) fn placeholder_point(
 ) -> olivia_secp256k1::fun::Point<olivia_secp256k1::fun::marker::EvenY> {
     use olivia_secp256k1::fun::marker::*;
-    olivia_secp256k1::fun::G
-        .clone()
+    (*olivia_secp256k1::fun::G)
         .mark::<Normal>()
         .into_point_with_even_y()
         .0

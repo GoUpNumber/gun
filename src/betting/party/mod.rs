@@ -152,10 +152,9 @@ where
             match bet_state {
                 BetState::Proposed { local_proposal } => {
                     let inputs = &local_proposal.proposal.inputs;
-                    if inputs
+                    if !inputs
                         .iter()
-                        .find(|input| utxos_that_need_canceling.contains(input))
-                        .is_none()
+                        .any(|input| utxos_that_need_canceling.contains(input))
                     {
                         utxos_that_need_canceling.push(inputs[0]);
                     }
@@ -187,10 +186,9 @@ where
                         .iter()
                         .map(|i| tx.input[*i as usize].previous_output)
                         .collect::<Vec<_>>();
-                    if inputs
+                    if !inputs
                         .iter()
-                        .find(|input| utxos_that_need_canceling.contains(input))
-                        .is_none()
+                        .any(|input| utxos_that_need_canceling.contains(input))
                     {
                         utxos_that_need_canceling.push(inputs[0]);
                     }
@@ -309,43 +307,6 @@ where
             ..Default::default()
         };
         Ok(psbt_input)
-    }
-
-    pub fn get_spending_tx(
-        &self,
-        outpoint: OutPoint,
-        descriptor: ExtendedDescriptor,
-    ) -> anyhow::Result<Option<Txid>> {
-        let blockchain = self.new_blockchain()?;
-        let wallet = Wallet::new(
-            descriptor,
-            None,
-            self.wallet.network(),
-            MemoryDatabase::default(),
-            blockchain,
-        )?;
-        wallet.sync(bdk::blockchain::noop_progress(), None)?;
-        let res = Ok(wallet
-            .list_transactions(true)?
-            .iter()
-            .find(|tx| {
-                tx.confirmation_time.is_some()
-                    && tx
-                        .transaction
-                        .as_ref()
-                        .unwrap()
-                        .input
-                        .iter()
-                        .find(|x| x.previous_output == outpoint)
-                        .is_some()
-            })
-            .map(|tx| tx.txid));
-        debug_assert!(wallet
-            .list_unspent()?
-            .iter()
-            .find(|utxo| utxo.outpoint == outpoint)
-            .is_none());
-        res
     }
 
     // convenience methods

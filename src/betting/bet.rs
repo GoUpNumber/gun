@@ -32,7 +32,7 @@ impl Bet {
     pub fn my_inputs(&self) -> Vec<OutPoint> {
         self.my_input_indexes
             .iter()
-            .map(|i| self.tx().input[*i as usize].previous_output.clone())
+            .map(|i| self.tx().input[*i as usize].previous_output)
             .collect()
     }
 

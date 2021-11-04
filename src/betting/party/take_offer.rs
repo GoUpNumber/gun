@@ -103,7 +103,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             Either::Left(keypair.secret_key),
             anticipated_attestations,
             offer.choose_right,
-            randomize.clone(),
+            randomize,
         );
         let joint_output_value = offer
             .value
@@ -193,9 +193,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             psbt,
             my_input_indexes,
             vout,
-            oracle_id: oracle_info.id.clone(),
-            oracle_event: oracle_event.clone(),
-            joint_output: joint_output.clone(),
+            oracle_id: oracle_info.id,
+            oracle_event,
+            joint_output,
             local_value: proposal.value,
             joint_output_value,
             i_chose_right: !offer.choose_right,

@@ -140,7 +140,7 @@ where
                             update_bet! { self, bet_id,
                                BetState::Offered { bet, .. } => {
                                    let bet = bet.add_counterparty_sigs(tx.clone());
-                                   BetState::Included { bet: bet.clone(), height }
+                                   BetState::Included { bet, height }
                                }
                             }
                         }
@@ -159,7 +159,7 @@ where
                                    bet_spent_vin: vin_target,
                                    cancel_txid: txid,
                                    cancel_vin: vin,
-                                   height: height,
+                                   height,
                                    i_intend_cancel,
                                }
                             }
