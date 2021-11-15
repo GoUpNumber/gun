@@ -23,6 +23,7 @@ pub struct Config {
     pub blockchain: AnyBlockchainConfig,
     pub kind: WalletKind,
     pub keys: WalletKeys,
+    pub passphrase: bool,
 }
 
 impl Config {
@@ -46,6 +47,7 @@ impl Config {
             blockchain,
             kind: WalletKind::P2wpkh,
             keys: WalletKeys::SeedWordsFile,
+            passphrase: false,
         }
     }
 }
