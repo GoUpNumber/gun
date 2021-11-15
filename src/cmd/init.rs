@@ -37,6 +37,13 @@ pub fn run_init(
         from_existing,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
+    if wallet_dir.exists() {
+        return Err(anyhow!(
+            "wallet directory {} already exists -- delete it to create a new wallet",
+            wallet_dir.display()
+        ));
+    }
+
     let seed_words = match from_existing {
         Some(existing_words_file) => {
             let words = match existing_words_file.as_str() {
@@ -66,13 +73,6 @@ pub fn run_init(
             seed_words.phrase().into()
         }
     };
-
-    if wallet_dir.exists() {
-        return Err(anyhow!(
-            "wallet directory {} already exists -- delete it to create a new wallet",
-            wallet_dir.display()
-        ));
-    }
 
     std::fs::create_dir(&wallet_dir)?;
 
