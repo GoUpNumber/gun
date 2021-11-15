@@ -9,7 +9,12 @@ use bdk::{
     miniscript::Segwitv0,
 };
 use cmd::Cell;
-use std::{fs, io, path::PathBuf, str::FromStr};
+use std::{
+    fs,
+    io::{self, Read},
+    path::PathBuf,
+    str::FromStr,
+};
 use structopt::StructOpt;
 
 use super::CmdOutput;
@@ -44,11 +49,12 @@ pub fn run_init(
         ));
     }
 
+    let mut use_pass = false;
+
     let seed_words = match from_existing {
         Some(existing_words_file) => {
             let words = match existing_words_file.as_str() {
                 "-" => {
-                    use io::Read;
                     let mut words = String::new();
                     io::stdin().read_to_string(&mut words)?;
                     words
@@ -67,6 +73,17 @@ pub fn run_init(
         }
         None => {
             let n_words = MnemonicType::for_word_count(n_words)?;
+            println!("Use bip39 passphrase? (y/n)");
+            println!(
+                "Note: If given, passphrase will be asked for every command. Enter 'n' to skip"
+            );
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            match answer.trim() {
+                "y" => use_pass = true,
+                "n" => use_pass = false,
+                _ => return Err(anyhow!("Wrong answer, try again")),
+            }
             let seed_words: GeneratedKey<_, Segwitv0> =
                 Mnemonic::generate((n_words, Language::English))
                     .map_err(|_| anyhow!("generating seed phrase failed"))?;
@@ -80,7 +97,8 @@ pub fn run_init(
         let mut config_file = wallet_dir.to_path_buf();
         config_file.push("config.json");
 
-        let config = Config::default_config(network);
+        let mut config = Config::default_config(network);
+        config.passphrase = use_pass;
         fs::write(
             config_file,
             serde_json::to_string_pretty(&config).unwrap().as_bytes(),

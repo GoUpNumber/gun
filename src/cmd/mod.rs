@@ -160,8 +160,19 @@ pub fn load_wallet(
                 )
             })?;
             let mut seed_bytes = [0u8; 64];
-            let seed = Seed::new(&mnemonic, "");
-            seed_bytes.copy_from_slice(seed.as_bytes());
+            match config.passphrase {
+                true => {
+                    println!("Enter bip39 passphrase : ");
+                    let mut passphrase = String::new();
+                    std::io::stdin().read_line(&mut passphrase)?;
+                    let seed = Seed::new(&mnemonic, passphrase.trim());
+                    seed_bytes.copy_from_slice(seed.as_bytes());
+                }
+                false => {
+                    let seed = Seed::new(&mnemonic, "");
+                    seed_bytes.copy_from_slice(seed.as_bytes());
+                }
+            }
             Keychain::new(seed_bytes)
         }
     };
