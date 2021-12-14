@@ -19,7 +19,7 @@ impl FromCliStr for Amount {
 
                 Ok(Amount::from_str_in(&value, denom)?)
             }
-            None => Err(anyhow!("{} is not a Bitcoin amount")),
+            None => Err(anyhow!("'{}' is not a Bitcoin amount", string)),
         }
     }
 }

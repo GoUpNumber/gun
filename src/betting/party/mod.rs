@@ -298,7 +298,7 @@ where
             .clone();
 
         if !txout.script_pubkey.is_v0_p2wpkh() {
-            return Err(anyhow!("outpoint {} was not p2wpkh"));
+            return Err(anyhow!("outpoint {} was not p2wpkh", outpoint));
         }
 
         let psbt_input = psbt::Input {

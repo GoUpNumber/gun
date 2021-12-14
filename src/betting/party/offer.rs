@@ -31,7 +31,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let anticipated_attestations = oracle_event
-            .anticipate_attestations_olivia_v1(&oracle_info.oracle_keys.olivia_v1.ok_or(anyhow!("Oracle {} does not support olivia_v1"))?, 0)
+            .anticipate_attestations_olivia_v1(&oracle_info.oracle_keys.olivia_v1.ok_or(anyhow!("Oracle '{}' does not support olivia_v1", oracle_info.id))?, 0)
             .ok_or(anyhow!("Cannot make bet on {} since {} doesn't support olivia_v1 attestation for this event", event_id, oracle_info.id))?
             [..2]
             .try_into()
