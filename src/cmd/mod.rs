@@ -5,13 +5,18 @@ use anyhow::Context;
 use bdk::{
     bitcoin::{
         consensus::encode,
-        util::{address::Payload, psbt::PartiallySignedTransaction as Psbt},
+        util::{
+            address::Payload, bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction as Psbt,
+        },
         Address, Amount, Network, Txid,
     },
     blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
+    descriptor::Segwitv0,
+    keys::ExtendedKey,
     sled, Wallet,
 };
+use core::marker::PhantomData;
 
 pub use init::*;
 pub mod bet;
@@ -148,7 +153,7 @@ pub fn load_wallet(
     }
 
     let config = load_config(wallet_dir).context("loading configuration")?;
-    let keychain = match config.keys {
+    let (keychain, extended_internal_key, extended_external_key) = match config.keys {
         crate::config::WalletKeys::SeedWordsFile => {
             let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
@@ -162,7 +167,12 @@ pub fn load_wallet(
             let mut seed_bytes = [0u8; 64];
             let seed = Seed::new(&mnemonic, "");
             seed_bytes.copy_from_slice(seed.as_bytes());
-            Keychain::new(seed_bytes)
+            let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
+            (
+                Keychain::new(seed_bytes),
+                ExtendedKey::<Segwitv0>::Private((xpriv.clone(), PhantomData)),
+                ExtendedKey::<Segwitv0>::Private((xpriv, PhantomData)),
+            )
         }
     };
     let database = {
@@ -178,14 +188,8 @@ pub fn load_wallet(
 
         let (external_descriptor, internal_descriptor) = match config.kind {
             crate::config::WalletKind::P2wpkh => (
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::External,
-                ),
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::Internal,
-                ),
+                bdk::template::Bip84(extended_external_key, bdk::KeychainKind::External),
+                bdk::template::Bip84(extended_internal_key, bdk::KeychainKind::Internal),
             ),
         };
 

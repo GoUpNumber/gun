@@ -1,13 +1,8 @@
 use crate::betting::Proposal;
-use bdk::bitcoin::{
-    hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
-    util::bip32::ExtendedPrivKey,
-    Network,
-};
+use bdk::bitcoin::hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine};
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
 
 pub struct Keychain {
-    seed: [u8; 64],
     proposal_hmac: HmacEngine<sha512::Hash>,
     offer_hmac: HmacEngine<sha512::Hash>,
 }
@@ -48,14 +43,9 @@ impl Keychain {
         };
 
         Self {
-            seed,
             proposal_hmac,
             offer_hmac,
         }
-    }
-
-    pub fn main_wallet_xprv(&self, network: Network) -> ExtendedPrivKey {
-        ExtendedPrivKey::new_master(network, &self.seed).unwrap()
     }
 
     pub fn get_key_for_proposal(&self, proposal: &Proposal) -> KeyPair {

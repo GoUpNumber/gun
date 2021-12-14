@@ -27,7 +27,7 @@ fn create_party(
     rand::thread_rng().fill(&mut r);
     let keychain = Keychain::new(r);
     let descriptor = bdk::template::Bip84(
-        keychain.main_wallet_xprv(Network::Regtest),
+        bdk::bitcoin::util::bip32::ExtendedPrivKey::new_master(Network::Regtest, &r).unwrap(),
         bdk::KeychainKind::External,
     );
     let db = bdk::database::MemoryDatabase::new();
