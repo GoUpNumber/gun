@@ -1,14 +1,17 @@
-use crate::{cmd, config::Config, item};
+use crate::{
+    cmd,
+    config::{Config, WalletKey},
+};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::Network,
+    bitcoin::{util::bip32::ExtendedPubKey, Network},
     keys::{
         bip39::{Language, Mnemonic, MnemonicType},
         GeneratableKey, GeneratedKey,
     },
     miniscript::Segwitv0,
 };
-use cmd::Cell;
+
 use std::{fs, io, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -27,6 +30,9 @@ pub struct InitOpt {
     #[structopt(long, default_value = "12", name = "[12|24]")]
     /// The number of BIP39 seed words to use
     n_words: usize,
+    /// Initialize the wallet from an BIP32 xpub
+    #[structopt(long)]
+    xpub: Option<ExtendedPubKey>,
 }
 
 pub fn run_init(
@@ -35,11 +41,12 @@ pub fn run_init(
         network,
         n_words,
         from_existing,
+        xpub,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
-    let seed_words = match from_existing {
-        Some(existing_words_file) => {
-            let words = match existing_words_file.as_str() {
+    let wallet_key = match (from_existing, xpub) {
+        (Some(existing_words_file), None) => {
+            let seed_words = match existing_words_file.as_str() {
                 "-" => {
                     use io::Read;
                     let mut words = String::new();
@@ -55,16 +62,29 @@ pub fn run_init(
                     ))?
                 }
             };
-            Mnemonic::validate(&words, Language::English).context("parsing existing seedwords")?;
-            words
+            Mnemonic::validate(&seed_words, Language::English)
+                .context("parsing existing seedwords")?;
+            let sw_file = cmd::get_seed_words_file(wallet_dir);
+            fs::write(sw_file.clone(), seed_words.clone())?;
+            WalletKey::SeedWordsFile
         }
-        None => {
+        (None, Some(xpub)) => WalletKey::XPub {
+            xpub,
+            fingerprint: todo!(),
+        },
+        (None, None) => {
             let n_words = MnemonicType::for_word_count(n_words)?;
             let seed_words: GeneratedKey<_, Segwitv0> =
                 Mnemonic::generate((n_words, Language::English))
                     .map_err(|_| anyhow!("generating seed phrase failed"))?;
-            seed_words.phrase().into()
+            let seed_words: String = seed_words.phrase().into();
+            let sw_file = cmd::get_seed_words_file(wallet_dir);
+            fs::write(sw_file.clone(), seed_words.clone())?;
+            eprintln!("Wrote seeds words to {}", sw_file.display());
+            println!("==== BIP39 seed words ====");
+            WalletKey::SeedWordsFile
         }
+        _ => return Err(anyhow!("invalid combination of key source options")),
     };
 
     if wallet_dir.exists() {
@@ -80,19 +100,15 @@ pub fn run_init(
         let mut config_file = wallet_dir.to_path_buf();
         config_file.push("config.json");
 
-        let config = Config::default_config(network);
+        let config = Config {
+            wallet_key: Some(wallet_key),
+            ..Config::default_config(network)
+        };
         fs::write(
             config_file,
             serde_json::to_string_pretty(&config).unwrap().as_bytes(),
         )?;
     }
 
-    let sw_file = cmd::get_seed_words_file(wallet_dir);
-
-    fs::write(sw_file.clone(), seed_words.clone())?;
-
-    eprintln!("Wrote seeds words to {}", sw_file.display());
-    println!("==== BIP39 seed words ====");
-
-    Ok(item! { "seed_words" => Cell::String(seed_words)})
+    Ok(CmdOutput::None)
 }

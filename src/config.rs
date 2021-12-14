@@ -1,12 +1,28 @@
 use bdk::{
-    bitcoin::Network,
+    bitcoin::{
+        util::bip32::{self, ExtendedPubKey},
+        Network,
+    },
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
 };
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WalletKeys {
+pub enum WalletKeysOld {
     SeedWordsFile,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum WalletKey {
+    SeedWordsFile,
+    XPub {
+        /// The BIP84 xpub m/84'/0'/0'
+        xpub: ExtendedPubKey,
+        /// fingerprint of the master xpub
+        #[serde(rename = "xfp")]
+        fingerprint: bip32::Fingerprint,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -22,7 +38,9 @@ pub struct Config {
     pub network: Network,
     pub blockchain: AnyBlockchainConfig,
     pub kind: WalletKind,
-    pub keys: WalletKeys,
+    #[serde(alias = "keys", skip_serializing_if = "Option::is_none")]
+    pub wallet_key_old: Option<WalletKeysOld>,
+    pub wallet_key: Option<WalletKey>,
 }
 
 impl Config {
@@ -45,7 +63,8 @@ impl Config {
             network,
             blockchain,
             kind: WalletKind::P2wpkh,
-            keys: WalletKeys::SeedWordsFile,
+            wallet_key_old: None,
+            wallet_key: Some(WalletKey::SeedWordsFile),
         }
     }
 }

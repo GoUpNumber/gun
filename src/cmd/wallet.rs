@@ -276,6 +276,7 @@ impl SpendOpt {
             .wallet()
             .finalize_psbt(&mut psbt, SignOptions::default())?;
 
+        // TODO: check if we're using xpub
         assert!(finalized, "transaction must be finalized at this point");
 
         let (output, txid) = cmd::decide_to_broadcast(
