@@ -7,7 +7,7 @@ use crate::{
     psbt_ext::PsbtFeeRate,
     Url, ValueChoice,
 };
-use anyhow::*;
+use anyhow::{anyhow, Context};
 use bdk::bitcoin::{Address, Amount, Script};
 use chacha20::cipher::StreamCipher;
 use olivia_core::{chrono::Utc, Outcome, OutcomeError};
