@@ -27,6 +27,9 @@ pub struct InitOpt {
     #[structopt(long, default_value = "12", name = "[12|24]")]
     /// The number of BIP39 seed words to use
     n_words: usize,
+    /// SD Card path for offline signing
+    #[structopt(long, parse(from_os_str))]
+    sd: Option<PathBuf>,
 }
 
 pub fn run_init(
@@ -35,6 +38,7 @@ pub fn run_init(
         network,
         n_words,
         from_existing,
+        sd,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
     let seed_words = match from_existing {
@@ -80,7 +84,10 @@ pub fn run_init(
         let mut config_file = wallet_dir.to_path_buf();
         config_file.push("config.json");
 
-        let config = Config::default_config(network);
+        let config = Config {
+            sd_dir: sd,
+            ..Config::default_config(network)
+        };
         fs::write(
             config_file,
             serde_json::to_string_pretty(&config).unwrap().as_bytes(),
