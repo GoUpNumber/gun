@@ -44,6 +44,15 @@ pub fn run_init(
         xpub,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
+    if wallet_dir.exists() {
+        return Err(anyhow!(
+            "wallet directory {} already exists -- delete it to create a new wallet",
+            wallet_dir.display()
+        ));
+    }
+
+    std::fs::create_dir(&wallet_dir)?;
+
     let wallet_key = match (from_existing, xpub) {
         (Some(existing_words_file), None) => {
             let seed_words = match existing_words_file.as_str() {
@@ -86,15 +95,6 @@ pub fn run_init(
         }
         _ => return Err(anyhow!("invalid combination of key source options")),
     };
-
-    if wallet_dir.exists() {
-        return Err(anyhow!(
-            "wallet directory {} already exists -- delete it to create a new wallet",
-            wallet_dir.display()
-        ));
-    }
-
-    std::fs::create_dir(&wallet_dir)?;
 
     {
         let mut config_file = wallet_dir.to_path_buf();
