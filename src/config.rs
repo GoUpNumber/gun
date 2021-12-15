@@ -5,6 +5,7 @@ use bdk::{
     },
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
 };
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -41,6 +42,8 @@ pub struct Config {
     #[serde(alias = "keys", skip_serializing_if = "Option::is_none")]
     pub wallet_key_old: Option<WalletKeysOld>,
     pub wallet_key: Option<WalletKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sd_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -65,6 +68,7 @@ impl Config {
             kind: WalletKind::P2wpkh,
             wallet_key_old: None,
             wallet_key: Some(WalletKey::SeedWordsFile),
+            sd_dir: None,
         }
     }
 }
