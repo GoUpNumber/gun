@@ -584,3 +584,48 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
 
     spend_opt.spend_coins(wallet_dir, &party, builder)
 }
+
+#[derive(StructOpt, Debug, Clone)]
+pub struct BroadcastOpt {
+    /// SD Card path for offline signing
+    #[structopt(long, parse(from_os_str))]
+    transaction_filepath: Option<PathBuf>,
+}
+
+pub fn run_broadcast_cmd(
+    // transaction_filepath: &std::path::Path,
+    // party: &Party<EsploraBlockchain, D>,
+    wallet_dir: &std::path::Path,
+    opt: BroadcastOpt,
+) -> anyhow::Result<CmdOutput> {
+    let BroadcastOpt {
+        transaction_filepath,
+    } = opt;
+    let party = load_party(wallet_dir)?;
+    let contents =
+        fs::read(transaction_filepath.unwrap()).expect("Something went wrong reading the file");
+
+    let psbt = PartiallySignedTransaction::consensus_decode(&contents[..])?;
+
+    let (output, _txid) = cmd::decide_to_broadcast(
+        party.wallet().network(),
+        party.wallet().client(),
+        psbt,
+        true,
+        true,
+    )?;
+    Ok(output)
+    //
+    // if let Some(txid) = txid {
+    //     if !print_tx {
+    //         for bet_id in claiming_bet_ids {
+    //             if let Err(e) = party.take_next_action(bet_id, false) {
+    //                 eprintln!(
+    //                     "error updating state of bet {} after broadcasting claim tx {}: {}",
+    //                     bet_id, txid, e
+    //                 );
+    //             }
+    //         }
+    //     }
+    // }
+}
