@@ -85,7 +85,7 @@ pub fn run_init(
         config_file.push("config.json");
 
         let config = Config {
-            coldcard_sd_path: coldcard_sd_path,
+            coldcard_sd_path,
             ..Config::default_config(network)
         };
         fs::write(
