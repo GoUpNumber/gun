@@ -306,20 +306,17 @@ impl SpendOpt {
             let mut psbt_file = PathBuf::from(config.coldcard_sd_path.clone().unwrap());
             psbt_file.push("gun_txn.psbt");
 
-            fs::write(psbt_file.clone(), psbt.to_string())?;
-            println!("Wrote PSBT to {:?}", psbt_file);
+            fs::write(psbt_file.clone(), psbt.to_string())
+                .context("writing PSBT file to SD path")?;
+            eprintln!("Wrote PSBT to {:?}", psbt_file);
 
-            println!(
+            eprintln!(
                 "Please eject the sd and sign the PSBT on your coldcard. Use `gun broadcast` on the signed transaction."
             );
 
-            // let output = CmdOutput::EmphasisedItem {
-            //     main: ("PSBT", Cell::String(psbt.to_string())),
-            //     other: vec![],
-            // };
-
-            let output = item! {
-                "PSBT" => Cell::String(psbt.to_string())
+            let output = CmdOutput::EmphasisedItem {
+                main: ("PSBT", Cell::String(psbt.to_string())),
+                other: vec![],
             };
             output
         };
@@ -595,8 +592,7 @@ pub fn run_broadcast_cmd(
 ) -> anyhow::Result<CmdOutput> {
     let BroadcastOpt { transaction_file } = opt;
     let party = load_party(wallet_dir)?;
-    let contents =
-        fs::read_to_string(transaction_file).expect("Something went wrong reading the file");
+    let contents = fs::read_to_string(transaction_file).context("Reading PSBT file")?;
     let psbt = PartiallySignedTransaction::from_str(&contents.trim())?;
 
     let (output, _txid) = cmd::decide_to_broadcast(
