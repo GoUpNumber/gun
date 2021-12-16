@@ -520,7 +520,13 @@ pub fn decide_to_broadcast(
 
         if print_tx {
             Ok((
-                item! { "tx" => Cell::String(crate::hex::encode(&encode::serialize(&tx))) },
+                CmdOutput::EmphasisedItem {
+                    main: (
+                        "tx",
+                        Cell::String(crate::hex::encode(&encode::serialize(&tx))),
+                    ),
+                    other: vec![],
+                },
                 Some(tx.txid()),
             ))
         } else {
