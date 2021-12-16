@@ -10,6 +10,7 @@ use bdk::{
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
     KeychainKind, LocalUtxo, SignOptions, TxBuilder,
 };
+use core::str::FromStr;
 use std::collections::HashMap;
 use structopt::StructOpt;
 
@@ -276,56 +277,55 @@ impl SpendOpt {
 
         let config = load_config(wallet_dir).context("loading config")?;
 
-        // Sign now or save to sd card and wait until signed
-        let (psbt, finalized) = if config.sd_dir.is_none() {
+        let output = if config.coldcard_sd_path.is_none() {
             party.wallet().sign(&mut psbt, SignOptions::default())?;
-
             let finalized = party
                 .wallet()
                 .finalize_psbt(&mut psbt, SignOptions::default())?;
-            (psbt, finalized)
-        } else {
-            println!("PSBT:\n{}", psbt);
-            let mut psbt_file = PathBuf::from(config.sd_dir.clone().unwrap());
-            psbt_file.push("gun_txn.psbt");
-            println!("Saving PSBT to {:?}", psbt_file);
-            fs::write(psbt_file, psbt.to_string())?;
 
-            println!("Please sign the PSBT and enter the filename of the signed transaction:");
-            let mut signed_filename = String::new();
-            let _ = std::io::stdin().read_line(&mut signed_filename);
+            let (output, txid) = cmd::decide_to_broadcast(
+                party.wallet().network(),
+                party.wallet().client(),
+                psbt,
+                yes,
+                print_tx,
+            )?;
 
-            let mut signed_file = PathBuf::from(config.sd_dir.unwrap());
-            signed_file.push(signed_filename.trim());
-
-            let contents = fs::read(signed_file).expect("Something went wrong reading the file");
-
-            let psbt = PartiallySignedTransaction::consensus_decode(&contents[..])?;
-            (psbt, true)
-        };
-
-        assert!(finalized, "transaction must be finalized at this point");
-
-        let (output, txid) = cmd::decide_to_broadcast(
-            party.wallet().network(),
-            party.wallet().client(),
-            psbt,
-            yes,
-            print_tx,
-        )?;
-
-        if let Some(txid) = txid {
-            if !print_tx {
-                for bet_id in claiming_bet_ids {
-                    if let Err(e) = party.take_next_action(bet_id, false) {
-                        eprintln!(
-                            "error updating state of bet {} after broadcasting claim tx {}: {}",
-                            bet_id, txid, e
-                        );
+            if let Some(txid) = txid {
+                if !print_tx {
+                    for bet_id in claiming_bet_ids {
+                        if let Err(e) = party.take_next_action(bet_id, false) {
+                            eprintln!(
+                                "error updating state of bet {} after broadcasting claim tx {}: {}",
+                                bet_id, txid, e
+                            );
+                        }
                     }
                 }
             }
-        }
+            assert!(finalized, "transaction must be finalized at this point");
+            output
+        } else {
+            let mut psbt_file = PathBuf::from(config.coldcard_sd_path.clone().unwrap());
+            psbt_file.push("gun_txn.psbt");
+
+            fs::write(psbt_file.clone(), psbt.to_string())?;
+            println!("Wrote PSBT to {:?}", psbt_file);
+
+            println!(
+                "Please eject the sd and sign the PSBT on your coldcard. Use `gun broadcast` on the signed transaction."
+            );
+
+            // let output = CmdOutput::EmphasisedItem {
+            //     main: ("PSBT", Cell::String(psbt.to_string())),
+            //     other: vec![],
+            // };
+
+            let output = item! {
+                "PSBT" => Cell::String(psbt.to_string())
+            };
+            output
+        };
 
         Ok(output)
     }
@@ -593,8 +593,6 @@ pub struct BroadcastOpt {
 }
 
 pub fn run_broadcast_cmd(
-    // transaction_filepath: &std::path::Path,
-    // party: &Party<EsploraBlockchain, D>,
     wallet_dir: &std::path::Path,
     opt: BroadcastOpt,
 ) -> anyhow::Result<CmdOutput> {
@@ -602,10 +600,10 @@ pub fn run_broadcast_cmd(
         transaction_filepath,
     } = opt;
     let party = load_party(wallet_dir)?;
-    let contents =
-        fs::read(transaction_filepath.unwrap()).expect("Something went wrong reading the file");
+    let contents = fs::read_to_string(transaction_filepath.unwrap())
+        .expect("Something went wrong reading the file");
 
-    let psbt = PartiallySignedTransaction::consensus_decode(&contents[..])?;
+    let psbt = PartiallySignedTransaction::from_str(&contents.trim())?;
 
     let (output, _txid) = cmd::decide_to_broadcast(
         party.wallet().network(),
@@ -615,17 +613,4 @@ pub fn run_broadcast_cmd(
         true,
     )?;
     Ok(output)
-    //
-    // if let Some(txid) = txid {
-    //     if !print_tx {
-    //         for bet_id in claiming_bet_ids {
-    //             if let Err(e) = party.take_next_action(bet_id, false) {
-    //                 eprintln!(
-    //                     "error updating state of bet {} after broadcasting claim tx {}: {}",
-    //                     bet_id, txid, e
-    //                 );
-    //             }
-    //         }
-    //     }
-    // }
 }

@@ -25,7 +25,7 @@ pub struct Config {
     pub kind: WalletKind,
     pub keys: WalletKeys,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sd_dir: Option<PathBuf>,
+    pub coldcard_sd_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -49,7 +49,7 @@ impl Config {
             blockchain,
             kind: WalletKind::P2wpkh,
             keys: WalletKeys::SeedWordsFile,
-            sd_dir: None,
+            coldcard_sd_path: None,
         }
     }
 }

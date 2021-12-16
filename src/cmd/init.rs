@@ -29,7 +29,7 @@ pub struct InitOpt {
     n_words: usize,
     /// SD Card path for offline signing
     #[structopt(long, parse(from_os_str))]
-    sd: Option<PathBuf>,
+    coldcard_sd_path: Option<PathBuf>,
 }
 
 pub fn run_init(
@@ -38,7 +38,7 @@ pub fn run_init(
         network,
         n_words,
         from_existing,
-        sd,
+        coldcard_sd_path,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
     let seed_words = match from_existing {
@@ -85,7 +85,7 @@ pub fn run_init(
         config_file.push("config.json");
 
         let config = Config {
-            sd_dir: sd,
+            coldcard_sd_path: coldcard_sd_path,
             ..Config::default_config(network)
         };
         fs::write(
