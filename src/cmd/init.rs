@@ -106,7 +106,7 @@ pub fn run_init(
 
         let config = Config {
             wallet_key: Some(wallet_key),
-            coldcard_sd_path: coldcard_sd_path,
+            coldcard_sd_path,
             ..Config::default_config(network)
         };
         fs::write(

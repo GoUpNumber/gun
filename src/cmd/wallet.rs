@@ -1,10 +1,7 @@
 use super::*;
 use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
 use bdk::{
-    bitcoin::{
-        consensus::encode::Decodable, util::psbt::PartiallySignedTransaction, Address, OutPoint,
-        Script, Txid,
-    },
+    bitcoin::{util::psbt::PartiallySignedTransaction, Address, OutPoint, Script, Txid},
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
@@ -587,22 +584,19 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
 
 #[derive(StructOpt, Debug, Clone)]
 pub struct BroadcastOpt {
-    /// SD Card path for offline signing
-    #[structopt(long, parse(from_os_str))]
-    transaction_filepath: Option<PathBuf>,
+    /// Signed transaction file (base64)
+    #[structopt(parse(from_os_str), name = "TRANSACTION_FILE")]
+    transaction_file: PathBuf,
 }
 
 pub fn run_broadcast_cmd(
     wallet_dir: &std::path::Path,
     opt: BroadcastOpt,
 ) -> anyhow::Result<CmdOutput> {
-    let BroadcastOpt {
-        transaction_filepath,
-    } = opt;
+    let BroadcastOpt { transaction_file } = opt;
     let party = load_party(wallet_dir)?;
-    let contents = fs::read_to_string(transaction_filepath.unwrap())
-        .expect("Something went wrong reading the file");
-
+    let contents =
+        fs::read_to_string(transaction_file).expect("Something went wrong reading the file");
     let psbt = PartiallySignedTransaction::from_str(&contents.trim())?;
 
     let (output, _txid) = cmd::decide_to_broadcast(
