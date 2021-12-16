@@ -35,7 +35,7 @@ pub struct InitOpt {
     xpub: Option<ExtendedPubKey>,
     /// SD Card path for offline signing
     #[structopt(long, parse(from_os_str))]
-    sd: Option<PathBuf>,
+    coldcard_sd_path: Option<PathBuf>,
 }
 
 pub fn run_init(
@@ -45,7 +45,7 @@ pub fn run_init(
         n_words,
         from_existing,
         xpub,
-        sd,
+        coldcard_sd_path,
     }: InitOpt,
 ) -> anyhow::Result<CmdOutput> {
     if wallet_dir.exists() {
@@ -106,7 +106,7 @@ pub fn run_init(
 
         let config = Config {
             wallet_key: Some(wallet_key),
-            sd_dir: sd,
+            coldcard_sd_path: coldcard_sd_path,
             ..Config::default_config(network)
         };
         fs::write(
