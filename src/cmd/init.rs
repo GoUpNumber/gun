@@ -11,7 +11,7 @@ use bdk::{
     },
     miniscript::Segwitv0,
 };
-
+use olivia_secp256k1::fun::hex;
 use std::{fs, io, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -20,12 +20,18 @@ use super::CmdOutput;
 pub enum NWords {}
 
 #[derive(Clone, Debug, StructOpt)]
+pub struct CommonArgs {
+    /// The network name (bitcoin|regtest|testnet)
+    #[structopt(long, default_value = "bitcoin", name = "bitcoin|regtest|testnet")]
+    network: Network,
+}
+
+#[derive(Clone, Debug, StructOpt)]
 pub enum InitOpt {
     /// Initialize a wallet using a seedphrase
     Seed {
-        /// The network name (bitcoin|regtest|testnet)
-        #[structopt(long, default_value = "bitcoin", name = "bitcoin|regtest|testnet")]
-        network: Network,
+        #[structopt(flatten)]
+        common_args: CommonArgs,
         /// Existing BIP39 seed words file. Use "-" to read words from stdin.
         #[structopt(long, name = "FILE")]
         from_existing: Option<String>,
@@ -35,16 +41,52 @@ pub enum InitOpt {
     },
     /// Initialize using a wallet descriptor
     Descriptor {
-        /// The network name (bitcoin|regtest|testnet)
-        #[structopt(long, default_value = "bitcoin", name = "bitcoin|regtest|testnet")]
-        network: Network,
+        #[structopt(flatten)]
+        common_args: CommonArgs,
+        /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
+        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
+        #[structopt(long, parse(from_os_str))]
+        psbt_output_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
-        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66...mSXJj")]
+        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66..mSXJj/0/*")]
         external: String,
         /// Optional change descriptor
         #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66...mSXJj/1/*)")]
         internal: Option<String>,
     },
+    /// Initialize using an xpub
+    #[structopt(name = "xpub")]
+    XPub {
+        #[structopt(flatten)]
+        common_args: CommonArgs,
+        /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
+        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
+        #[structopt(long, parse(from_os_str))]
+        psbt_output_dir: Option<PathBuf>,
+        /// Initialize the wallet from a descriptor
+        #[structopt(name = "[AAB893A5/84'/0'/0']xpub66...mSXJj")]
+        xpub: String,
+    },
+}
+
+pub fn create_psbt_dir(
+    wallet_dir: &std::path::Path,
+    psbt_output_dir: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let psbt_output_dir = match psbt_output_dir {
+        Some(psbt_output_dir) => psbt_output_dir,
+        None => {
+            let mut psbt_output_dir = PathBuf::new();
+            psbt_output_dir.push(wallet_dir);
+            psbt_output_dir.push("psbts");
+            psbt_output_dir
+        }
+    };
+    if !psbt_output_dir.exists() {
+        fs::create_dir_all(&psbt_output_dir)
+            .with_context(|| format!("Creating PSBT dir {}", psbt_output_dir.display()))?;
+    }
+    Ok(psbt_output_dir.to_owned())
 }
 
 pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<CmdOutput> {
@@ -57,9 +99,12 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
     std::fs::create_dir(&wallet_dir)?;
 
-    match cmd {
+    let mut config_file = wallet_dir.to_path_buf();
+    config_file.push("config.json");
+
+    let config = match cmd {
         InitOpt::Seed {
-            network,
+            common_args,
             from_existing,
             n_words,
         } => {
@@ -85,7 +130,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                         .context("parsing existing seedwords")?;
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
-                    WalletKey::SeedWordsFile
+                    WalletKey::SeedWordsFile {}
                 }
                 None => {
                     let n_words = MnemonicType::for_word_count(n_words)?;
@@ -96,30 +141,65 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
                     eprintln!("Wrote seeds words to {}", sw_file.display());
-                    println!("==== BIP39 seed words ====");
-                    WalletKey::SeedWordsFile
+                    WalletKey::SeedWordsFile {}
                 }
             };
-            let mut config_file = wallet_dir.to_path_buf();
-            config_file.push("config.json");
-
-            let config = Config {
-                wallet_key: Some(wallet_key),
-                ..Config::default_config(network)
-            };
-            fs::write(
-                config_file,
-                serde_json::to_string_pretty(&config).unwrap().as_bytes(),
-            )?;
+            Config {
+                wallet_key,
+                ..Config::default_config(common_args.network)
+            }
         }
         InitOpt::Descriptor {
-            network,
-            internal,
+            common_args,
+            psbt_output_dir,
             external,
+            internal,
         } => {
-            todo!();
+            let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
+            Config {
+                wallet_key: WalletKey::Descriptor { external, internal },
+                psbt_output_dir: psbt_dir,
+                ..Config::default_config(common_args.network)
+            }
+        }
+        InitOpt::XPub {
+            common_args,
+            psbt_output_dir,
+            xpub,
+        } => {
+            let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
+
+            let mut external = String::from("wpkh(");
+            external.push_str(&xpub);
+            let mut internal = external.clone();
+            external.push_str("/0/*)");
+            internal.push_str("/1/*)");
+
+            Config {
+                wallet_key: WalletKey::Descriptor {
+                    external,
+                    internal: Some(internal),
+                },
+                psbt_output_dir: psbt_dir,
+                ..Config::default_config(common_args.network)
+            }
         }
     };
+    fs::write(
+        config_file,
+        serde_json::to_string_pretty(&config.into_versioned())
+            .unwrap()
+            .as_bytes(),
+    )?;
+
+    let mut random_bytes = [0u8; 64];
+    use rand::RngCore;
+    rand::rngs::OsRng.fill_bytes(&mut random_bytes);
+
+    let hex_randomness = hex::encode(&random_bytes);
+    let mut secret_file = wallet_dir.to_path_buf();
+    secret_file.push("secret_protocol_randomness");
+    fs::write(secret_file, hex_randomness)?;
 
     Ok(CmdOutput::None)
 }

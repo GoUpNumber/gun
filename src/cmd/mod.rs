@@ -27,12 +27,13 @@ pub use wallet::*;
 use crate::{
     betting::{BetDatabase, Party},
     chrono::NaiveDateTime,
-    config::{Config, WalletKey},
+    config::{Config, ConfigV0, VersionedConfig},
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
+use olivia_secp256k1::fun::hex;
 use std::{
     collections::HashMap,
     fs,
@@ -63,7 +64,10 @@ pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
     match config_file.exists() {
         true => {
             let json_config = fs::read_to_string(config_file.clone())?;
-            Ok(serde_json::from_str::<Config>(&json_config)?)
+            Ok(match serde_json::from_str::<ConfigV0>(&json_config) {
+                Ok(configv0) => configv0.into(),
+                Err(_) => serde_json::from_str::<VersionedConfig>(&json_config)?.into(),
+            })
         }
         false => {
             return Err(anyhow!(
@@ -118,6 +122,19 @@ pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
     seed_words_file
 }
 
+pub fn get_secret_randomness(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
+    let mut secret_randomness_file = wallet_dir.to_path_buf();
+    secret_randomness_file.push("secret_protocol_randomness");
+    let hex_randomness =
+        fs::read_to_string(secret_randomness_file.clone()).context("loading secret randomness")?;
+    let mut byte_randomness = [0u8; 64];
+    byte_randomness.copy_from_slice(&hex::decode(&hex_randomness).expect(&format!(
+        "Decoding hex in secret protocol randomness {}",
+        secret_randomness_file.display()
+    )));
+    Ok(byte_randomness)
+}
+
 pub fn load_bet_db(wallet_dir: &Path) -> anyhow::Result<BetDatabase> {
     let mut db_file = wallet_dir.to_path_buf();
     db_file.push("database.sled");
@@ -157,13 +174,24 @@ pub fn load_wallet(
     }
 
     let config = load_config(wallet_dir).context("loading configuration")?;
-    let wallet_key = config
-        .wallet_key
-        .as_ref()
-        .or(config.wallet_key_old.map(|_| &WalletKey::SeedWordsFile))
-        .ok_or(anyhow!("wallet-key must be set in config"))?;
-    let (keychain, extended_key) = match wallet_key {
-        crate::config::WalletKey::SeedWordsFile => {
+    let database = {
+        let mut db_file = wallet_dir.to_path_buf();
+        db_file.push("database.sled");
+        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
+    };
+
+    let wallet_db = database
+        .open_tree("wallet")
+        .context("opening wallet tree")?;
+
+    let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
+        AnyBlockchain::Esplora(esplora) => esplora,
+        #[allow(unreachable_patterns)]
+        _ => return Err(anyhow!("A the moment only esplora is supported")),
+    };
+
+    let (wallet, keychain) = match config.wallet_key {
+        crate::config::WalletKey::SeedWordsFile { .. } => {
             let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
             let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
@@ -177,52 +205,38 @@ pub fn load_wallet(
             let seed = Seed::new(&mnemonic, "");
             seed_bytes.copy_from_slice(seed.as_bytes());
             let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
-            (Keychain::new(seed_bytes), ExtendedKey::Private(xpriv))
-        }
-        crate::config::WalletKey::Descriptor { internal, external } => {
-            todo!();
-        }
-    };
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
+            // ExtendedPrivKey using BIP 84 into descriptors
+            let keychain = Keychain::new(seed_bytes);
 
-    let wallet = {
-        let wallet_db = database
-            .open_tree("wallet")
-            .context("opening wallet tree")?;
-
-        let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
-            AnyBlockchain::Esplora(esplora) => esplora,
-            #[allow(unreachable_patterns)]
-            _ => return Err(anyhow!("A the moment only esplora is supported")),
-        };
-
-        match config.kind {
-            crate::config::WalletKind::P2wpkh => match extended_key {
-                ExtendedKey::Public(xpub, fingerprint) => Wallet::new(
-                    bdk::template::Bip84Public(xpub, fingerprint, bdk::KeychainKind::External),
-                    Some(bdk::template::Bip84Public(
-                        xpub,
-                        fingerprint,
-                        bdk::KeychainKind::Internal,
-                    )),
+            (
+                Wallet::new(
+                    bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
+                    Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
                     config.network,
                     wallet_db,
                     esplora,
-                ),
-                ExtendedKey::Private(xprv) => Wallet::new(
-                    bdk::template::Bip84(xprv, bdk::KeychainKind::External),
-                    Some(bdk::template::Bip84(xprv, bdk::KeychainKind::Internal)),
+                )
+                .context("Initializing wallet with xpriv derived from seed phrase")?,
+                keychain,
+            )
+        }
+        crate::config::WalletKey::Descriptor {
+            ref external,
+            ref internal,
+        } => {
+            let secret_randomness = get_secret_randomness(&wallet_dir)?;
+            (
+                Wallet::new(
+                    external,
+                    internal.as_ref(),
                     config.network,
                     wallet_db,
                     esplora,
-                ),
-            },
+                )
+                .context("Initializing wallet from descriptors")?,
+                Keychain::new(secret_randomness),
+            )
         }
-        .context("Initializing wallet failed")?
     };
 
     let bet_db = BetDatabase::new(database.open_tree("bets").context("opening bets tree")?);
