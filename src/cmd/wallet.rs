@@ -1,12 +1,13 @@
 use super::*;
-use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
+use crate::{amount_ext::FromCliStr, betting::BetState, cmd, config::WalletKey, item};
 use bdk::{
-    bitcoin::{Address, OutPoint, Script, Txid},
+    bitcoin::{util::psbt::PartiallySignedTransaction, Address, OutPoint, Script, Txid},
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
     KeychainKind, LocalUtxo, SignOptions, TxBuilder,
 };
+use core::str::FromStr;
 use std::collections::HashMap;
 use structopt::StructOpt;
 
@@ -231,6 +232,7 @@ pub struct SpendOpt {
 impl SpendOpt {
     pub fn spend_coins<D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
         self,
+        wallet_dir: &std::path::Path,
         party: &Party<EsploraBlockchain, D>,
         mut builder: TxBuilder<'_, EsploraBlockchain, D, Cs, Ctx>,
     ) -> anyhow::Result<CmdOutput> {
@@ -270,35 +272,73 @@ impl SpendOpt {
             (psbt, vec![])
         };
 
-        party.wallet().sign(&mut psbt, SignOptions::default())?;
+        let config = load_config(wallet_dir).context("loading config")?;
 
-        let finalized = party
-            .wallet()
-            .finalize_psbt(&mut psbt, SignOptions::default())?;
+        let output = match config.wallet_key {
+            WalletKey::SeedWordsFile {} => {
+                party.wallet().sign(&mut psbt, SignOptions::default())?;
+                let finalized = party
+                    .wallet()
+                    .finalize_psbt(&mut psbt, SignOptions::default())?;
 
-        assert!(finalized, "transaction must be finalized at this point");
+                let (output, txid) = cmd::decide_to_broadcast(
+                    party.wallet().network(),
+                    party.wallet().client(),
+                    psbt,
+                    yes,
+                    print_tx,
+                )?;
 
-        let (output, txid) = cmd::decide_to_broadcast(
-            party.wallet().network(),
-            party.wallet().client(),
-            psbt,
-            yes,
-            print_tx,
-        )?;
-
-        if let Some(txid) = txid {
-            if !print_tx {
-                for bet_id in claiming_bet_ids {
-                    if let Err(e) = party.take_next_action(bet_id, false) {
-                        eprintln!(
-                            "error updating state of bet {} after broadcasting claim tx {}: {}",
-                            bet_id, txid, e
-                        );
+                if let Some(txid) = txid {
+                    if !print_tx {
+                        for bet_id in claiming_bet_ids {
+                            if let Err(e) = party.take_next_action(bet_id, false) {
+                                eprintln!(
+                                    "error updating state of bet {} after broadcasting claim tx {}: {}",
+                                    bet_id, txid, e
+                                );
+                            }
+                        }
                     }
                 }
+                assert!(finalized, "transaction must be finalized at this point");
+                output
             }
-        }
+            WalletKey::Descriptor {
+                external: _,
+                internal: _,
+            } => {
+                let txid = psbt.clone().extract_tx().txid();
 
+                let mut psbt_file = PathBuf::from(config.psbt_output_dir.clone());
+                psbt_file.push(format!("{}.psbt", txid.to_string()));
+
+                fs::write(psbt_file.clone(), psbt.to_string())
+                    .context("writing PSBT file to SD path")?;
+                eprintln!("Wrote PSBT to {}", psbt_file.display());
+
+                let mut signed_psbt_file = PathBuf::from(config.psbt_output_dir.clone());
+                signed_psbt_file.push(format!("{}-signed.psbt", txid.to_string()));
+                eprintln!(
+                    "Please sign the PSBT and save it to {}. Press enter once signed.",
+                    signed_psbt_file.display()
+                );
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let contents = fs::read_to_string(signed_psbt_file.clone())
+                    .with_context(|| format!("Reading PSBT file {}", signed_psbt_file.display()))?;
+                let psbt = PartiallySignedTransaction::from_str(&contents.trim())?;
+
+                let (output, _txid) = cmd::decide_to_broadcast(
+                    party.wallet().network(),
+                    party.wallet().client(),
+                    psbt,
+                    yes,
+                    print_tx,
+                )?;
+                output
+            }
+        };
         Ok(output)
     }
 }
@@ -316,7 +356,7 @@ pub fn run_send(wallet_dir: &std::path::Path, send_opt: SendOpt) -> anyhow::Resu
         ValueChoice::Amount(amount) => builder.add_recipient(to.script_pubkey(), amount.as_sat()),
     };
 
-    spend_opt.spend_coins(&party, builder)
+    spend_opt.spend_coins(&wallet_dir, &party, builder)
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -554,5 +594,5 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
         }
     };
 
-    spend_opt.spend_coins(&party, builder)
+    spend_opt.spend_coins(&wallet_dir, &party, builder)
 }
