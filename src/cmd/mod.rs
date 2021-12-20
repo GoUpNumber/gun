@@ -5,7 +5,11 @@ use anyhow::Context;
 use bdk::{
     bitcoin::{
         consensus::encode,
-        util::{address::Payload, psbt::PartiallySignedTransaction as Psbt},
+        util::{
+            address::Payload,
+            bip32::{self, ExtendedPrivKey, ExtendedPubKey},
+            psbt::PartiallySignedTransaction as Psbt,
+        },
         Address, Amount, Network, Txid,
     },
     blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
@@ -23,7 +27,7 @@ pub use wallet::*;
 use crate::{
     betting::{BetDatabase, Party},
     chrono::NaiveDateTime,
-    config::Config,
+    config::{Config, WalletKey},
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     FeeSpec, ValueChoice,
@@ -130,6 +134,11 @@ pub fn load_party(
     Ok(party)
 }
 
+pub enum ExtendedKey {
+    Public(ExtendedPubKey, bip32::Fingerprint),
+    Private(ExtendedPrivKey),
+}
+
 pub fn load_wallet(
     wallet_dir: &std::path::Path,
 ) -> anyhow::Result<(
@@ -148,8 +157,13 @@ pub fn load_wallet(
     }
 
     let config = load_config(wallet_dir).context("loading configuration")?;
-    let keychain = match config.keys {
-        crate::config::WalletKeys::SeedWordsFile => {
+    let wallet_key = config
+        .wallet_key
+        .as_ref()
+        .or(config.wallet_key_old.map(|_| &WalletKey::SeedWordsFile))
+        .ok_or(anyhow!("wallet-key must be set in config"))?;
+    let (keychain, extended_key) = match wallet_key {
+        crate::config::WalletKey::SeedWordsFile => {
             let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
             let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
@@ -162,7 +176,11 @@ pub fn load_wallet(
             let mut seed_bytes = [0u8; 64];
             let seed = Seed::new(&mnemonic, "");
             seed_bytes.copy_from_slice(seed.as_bytes());
-            Keychain::new(seed_bytes)
+            let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
+            (Keychain::new(seed_bytes), ExtendedKey::Private(xpriv))
+        }
+        crate::config::WalletKey::Descriptor { internal, external } => {
+            todo!();
         }
     };
     let database = {
@@ -176,32 +194,34 @@ pub fn load_wallet(
             .open_tree("wallet")
             .context("opening wallet tree")?;
 
-        let (external_descriptor, internal_descriptor) = match config.kind {
-            crate::config::WalletKind::P2wpkh => (
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::External,
-                ),
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::Internal,
-                ),
-            ),
-        };
-
         let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
             AnyBlockchain::Esplora(esplora) => esplora,
             #[allow(unreachable_patterns)]
             _ => return Err(anyhow!("A the moment only esplora is supported")),
         };
 
-        Wallet::new(
-            external_descriptor,
-            Some(internal_descriptor),
-            config.network,
-            wallet_db,
-            esplora,
-        )
+        match config.kind {
+            crate::config::WalletKind::P2wpkh => match extended_key {
+                ExtendedKey::Public(xpub, fingerprint) => Wallet::new(
+                    bdk::template::Bip84Public(xpub, fingerprint, bdk::KeychainKind::External),
+                    Some(bdk::template::Bip84Public(
+                        xpub,
+                        fingerprint,
+                        bdk::KeychainKind::Internal,
+                    )),
+                    config.network,
+                    wallet_db,
+                    esplora,
+                ),
+                ExtendedKey::Private(xprv) => Wallet::new(
+                    bdk::template::Bip84(xprv, bdk::KeychainKind::External),
+                    Some(bdk::template::Bip84(xprv, bdk::KeychainKind::Internal)),
+                    config.network,
+                    wallet_db,
+                    esplora,
+                ),
+            },
+        }
         .context("Initializing wallet failed")?
     };
 
@@ -520,7 +540,13 @@ pub fn decide_to_broadcast(
 
         if print_tx {
             Ok((
-                item! { "tx" => Cell::String(crate::hex::encode(&encode::serialize(&tx))) },
+                CmdOutput::EmphasisedItem {
+                    main: (
+                        "tx",
+                        Cell::String(crate::hex::encode(&encode::serialize(&tx))),
+                    ),
+                    other: vec![],
+                },
                 Some(tx.txid()),
             ))
         } else {
