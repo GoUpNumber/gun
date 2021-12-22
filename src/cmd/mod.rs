@@ -1,5 +1,6 @@
 mod init;
 mod oracle;
+use crate::sd_card_signer::SDCardSigner;
 mod wallet;
 use anyhow::Context;
 use bdk::{
@@ -14,8 +15,11 @@ use bdk::{
     },
     blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
-    sled, Wallet,
+    sled,
+    wallet::signer::SignerOrdering,
+    KeychainKind, Wallet,
 };
+use std::sync::Arc;
 
 pub use init::*;
 pub mod bet;
@@ -225,17 +229,21 @@ pub fn load_wallet(
             ref internal,
         } => {
             let secret_randomness = get_secret_randomness(&wallet_dir)?;
-            (
-                Wallet::new(
-                    external,
-                    internal.as_ref(),
-                    config.network,
-                    wallet_db,
-                    esplora,
-                )
-                .context("Initializing wallet from descriptors")?,
-                Keychain::new(secret_randomness),
+            let mut wallet = Wallet::new(
+                external,
+                internal.as_ref(),
+                config.network,
+                wallet_db,
+                esplora,
             )
+            .context("Initializing wallet from descriptors")?;
+            let signer = SDCardSigner::create(config.psbt_output_dir.clone());
+            wallet.add_signer(
+                KeychainKind::External,
+                SignerOrdering(100),
+                Arc::new(signer),
+            );
+            (wallet, Keychain::new(secret_randomness))
         }
     };
 
