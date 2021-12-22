@@ -18,7 +18,7 @@ pub enum WalletKeyOld {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum WalletKey {
     Descriptor {
         external: String,
