@@ -14,7 +14,7 @@ use bdk::{
     Wallet,
 };
 use olivia_secp256k1::fun::hex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{fs, io, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -85,23 +85,24 @@ pub enum InitOpt {
         common_args: CommonArgs,
         /// Coldcard SD card directory. PSBTs will be saved, signed, and loaded here.
         #[structopt(parse(from_os_str))]
-        psbt_output_dir: PathBuf,
+        coldcard_sd_dir: PathBuf,
         /// Instruct gun to use secret randomness from an exported deterministic entropy file.
         /// On Coldcard: Advanced -> Derive Entropy -> 64-bytes hex.
         /// Enter index 330 and press 1 to export to SD.
-        /// Gun will use entropy from drv-hex-idx330.txt for secret randomness.
+        /// Gun will use entropy from drv-hex-idx330.txt for secret randomness
+        /// which means you may be able to recover funds engaged in protocols if you lose your gun database.
         #[structopt(long, short)]
-        entropy_export: bool,
+        import_entropy: bool,
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct WalletExport {
     xfp: String,
     bip84: BIP84Export,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct BIP84Export {
     xpub: String,
 }
@@ -249,13 +250,13 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         }
         InitOpt::Coldcard {
             common_args,
-            psbt_output_dir,
-            entropy_export,
+            coldcard_sd_dir,
+            import_entropy,
         } => {
-            if !entropy_export {
+            if !import_entropy {
                 create_secret_randomness(wallet_dir)?;
             } else {
-                let mut entropy_file = psbt_output_dir.to_path_buf();
+                let mut entropy_file = coldcard_sd_dir.to_path_buf();
                 entropy_file.push("drv-hex-idx330.txt");
                 let contents = match fs::read_to_string(entropy_file.clone()) {
                     Ok(contents) => contents,
@@ -286,7 +287,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 fs::write(secret_file, hex_entropy)?;
             };
 
-            let mut wallet_export_file = psbt_output_dir.clone();
+            let mut wallet_export_file = coldcard_sd_dir.clone();
             wallet_export_file.push("coldcard-export.json");
             let wallet_export_str = match fs::read_to_string(wallet_export_file.clone()) {
                 Ok(contents) => contents,
@@ -314,7 +315,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     external,
                     internal: Some(internal),
                 },
-                psbt_output_dir,
+                psbt_output_dir: coldcard_sd_dir,
                 ..Config::default_config(common_args.network)
             }
         }
