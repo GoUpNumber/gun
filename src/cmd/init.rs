@@ -14,6 +14,7 @@ use bdk::{
     Wallet,
 };
 use olivia_secp256k1::fun::hex;
+use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf, str::FromStr};
 use structopt::StructOpt;
 
@@ -74,6 +75,35 @@ pub enum InitOpt {
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
     },
+    /// Initialize using a Coldcard SD card path.
+    ///
+    /// Requires a `coldcard-export.json` in this directory.
+    /// On Coldcard: Advanced -> MicroSD Card -> Export Wallet -> Generic JSON
+    /// Unsigned PSBTs will be saved to this SD card path, and read once signed.
+    Coldcard {
+        #[structopt(flatten)]
+        common_args: CommonArgs,
+        /// Coldcard SD card directory. PSBTs will be saved, signed, and loaded here.
+        #[structopt(parse(from_os_str))]
+        psbt_output_dir: PathBuf,
+        /// Instruct gun to use secret randomness from an exported deterministic entropy file.
+        /// On Coldcard: Advanced -> Derive Entropy -> 64-bytes hex.
+        /// Enter index 330 and press 1 to export to SD.
+        /// Gun will use entropy from drv-hex-idx330.txt for secret randomness.
+        #[structopt(long, short)]
+        entropy_export: bool,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+struct WalletExport {
+    xfp: String,
+    bip84: BIP84Export,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BIP84Export {
+    xpub: String,
 }
 
 fn create_psbt_dir(
@@ -218,6 +248,77 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     internal: Some(internal),
                 },
                 psbt_output_dir: psbt_dir,
+                ..Config::default_config(common_args.network)
+            }
+        }
+        InitOpt::Coldcard {
+            common_args,
+            psbt_output_dir,
+            entropy_export,
+        } => {
+            if !entropy_export {
+                create_secret_randomness(wallet_dir)?;
+            } else {
+                let mut entropy_file = psbt_output_dir.to_path_buf();
+                entropy_file.push("drv-hex-idx330.txt");
+                let contents = match fs::read_to_string(entropy_file.clone()) {
+                    Ok(contents) => contents,
+                    Err(e) => {
+                        return Err(anyhow!(
+                            "Could not find entropy export {}.\n{}",
+                            entropy_file.display(),
+                            e
+                        ))
+                    }
+                };
+                let hex_entropy = contents
+                    .lines()
+                    .nth(1)
+                    .ok_or(anyhow!("Unable to read second line from entropy file"))?;
+
+                // Validate hex by decoding
+                if let Err(e) = hex::decode(hex_entropy) {
+                    return Err(anyhow!(
+                        "Unable to decode hex from entropy file.\n{} {}",
+                        e,
+                        hex_entropy
+                    ));
+                }
+
+                let mut secret_file = wallet_dir.to_path_buf();
+                secret_file.push("secret_protocol_randomness");
+                fs::write(secret_file, hex_entropy)?;
+            };
+
+            let mut wallet_export_file = psbt_output_dir.clone();
+            wallet_export_file.push("coldcard-export.json");
+            let wallet_export_str = match fs::read_to_string(wallet_export_file.clone()) {
+                Ok(contents) => contents,
+                Err(e) => {
+                    return Err(anyhow!(
+                        "Could not read {}.\n{}",
+                        wallet_export_file.display(),
+                        e
+                    ))
+                }
+            };
+            let wallet_export = serde_json::from_str::<WalletExport>(&wallet_export_str)?;
+
+            let external = format!(
+                "wpkh([{}/84'/0'/0']{}/0/*)",
+                &wallet_export.xfp, &wallet_export.bip84.xpub
+            );
+            let internal = format!(
+                "wpkh([{}/84'/0'/0']{}/1/*)",
+                &wallet_export.xfp, &wallet_export.bip84.xpub
+            );
+
+            Config {
+                wallet_key: WalletKey::Descriptor {
+                    external,
+                    internal: Some(internal),
+                },
+                psbt_output_dir,
                 ..Config::default_config(common_args.network)
             }
         }
