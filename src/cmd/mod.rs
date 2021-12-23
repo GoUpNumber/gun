@@ -191,7 +191,7 @@ pub fn load_wallet(
     let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
         AnyBlockchain::Esplora(esplora) => esplora,
         #[allow(unreachable_patterns)]
-        _ => return Err(anyhow!("A the moment only esplora is supported")),
+        _ => return Err(anyhow!("At the moment only esplora is supported")),
     };
 
     let (wallet, keychain) = match config.wallet_key {
@@ -209,7 +209,6 @@ pub fn load_wallet(
             let seed = Seed::new(&mnemonic, "");
             seed_bytes.copy_from_slice(seed.as_bytes());
             let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
-            // ExtendedPrivKey using BIP 84 into descriptors
             let keychain = Keychain::new(seed_bytes);
 
             (
@@ -239,7 +238,7 @@ pub fn load_wallet(
             .context("Initializing wallet from descriptors")?;
             let signer = SDCardSigner::create(config.psbt_output_dir.clone());
             wallet.add_signer(
-                KeychainKind::External,
+                KeychainKind::External, //NOTE: will sign internal inputs as well!
                 SignerOrdering(100),
                 Arc::new(signer),
             );

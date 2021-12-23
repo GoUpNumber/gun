@@ -271,9 +271,12 @@ impl SpendOpt {
         };
 
         party.wallet().sign(&mut psbt, SignOptions::default())?;
+
         let finalized = party
             .wallet()
             .finalize_psbt(&mut psbt, SignOptions::default())?;
+
+        assert!(finalized, "transaction must be finalized at this point");
 
         let (output, txid) = cmd::decide_to_broadcast(
             party.wallet().network(),
@@ -295,7 +298,6 @@ impl SpendOpt {
                 }
             }
         }
-        assert!(finalized, "transaction must be finalized at this point");
 
         Ok(output)
     }
