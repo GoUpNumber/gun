@@ -1,4 +1,3 @@
-use anyhow::Context;
 use bdk::{
     bitcoin::{
         secp256k1::{All, Secp256k1},
@@ -27,13 +26,21 @@ impl Signer for SDCardSigner {
         _input_index: Option<usize>,
         _secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
-        // Probably should figure out how to incorporate SignerErrors here
         let txid = psbt.clone().extract_tx().txid();
         let mut psbt_file = PathBuf::from(self.psbt_output_dir.clone());
+        if !self.psbt_output_dir.exists() {
+            eprintln!(
+                "psbt-output-dir '{}' does not exist.",
+                self.psbt_output_dir.display()
+            );
+            return Err(SignerError::UserCanceled);
+        }
         psbt_file.push(format!("{}.psbt", txid.to_string()));
 
-        let _ = std::fs::write(psbt_file.clone(), psbt.to_string())
-            .context("writing PSBT file to SD path");
+        if let Err(e) = std::fs::write(psbt_file.clone(), psbt.to_string()) {
+            eprintln!("Was unable to write PSBT {}: {}", psbt_file.display(), e);
+            return Err(SignerError::UserCanceled);
+        }
 
         if !psbt_file.clone().exists() {
             eprintln!("Failed to write PSBT to {}", psbt_file.display());
@@ -52,15 +59,22 @@ impl Signer for SDCardSigner {
         let mut input = String::new();
         let _ = std::io::stdin().read_line(&mut input);
 
-        let contents = std::fs::read_to_string(signed_psbt_file.clone())
-            .with_context(|| format!("Reading PSBT file {}", signed_psbt_file.display()));
-        let psbt_result = PartiallySignedTransaction::from_str(&contents.unwrap().trim());
+        let contents = match std::fs::read_to_string(signed_psbt_file.clone()) {
+            Ok(contents) => contents,
+            Err(e) => {
+                eprintln!(
+                    "Failed to read PSBT file {}: {}",
+                    signed_psbt_file.display(),
+                    e
+                );
+                return Err(SignerError::UserCanceled);
+            }
+        };
+
+        let psbt_result = PartiallySignedTransaction::from_str(&contents.trim());
 
         if let Err(e) = psbt_result {
-            eprintln!(
-                "Failed to read signed PSBT file {}",
-                signed_psbt_file.display()
-            );
+            eprintln!("Failed to parse PSBT file {}", signed_psbt_file.display());
             eprintln!("{}", e);
             return Err(SignerError::UserCanceled);
         };

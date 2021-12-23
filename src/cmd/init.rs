@@ -69,7 +69,7 @@ pub enum InitOpt {
     },
 }
 
-pub fn create_psbt_dir(
+fn create_psbt_dir(
     wallet_dir: &std::path::Path,
     psbt_output_dir: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
@@ -87,6 +87,18 @@ pub fn create_psbt_dir(
             .with_context(|| format!("Creating PSBT dir {}", psbt_output_dir.display()))?;
     }
     Ok(psbt_output_dir.to_owned())
+}
+
+fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> {
+    let mut random_bytes = [0u8; 64];
+    use rand::RngCore;
+    rand::rngs::OsRng.fill_bytes(&mut random_bytes);
+
+    let hex_randomness = hex::encode(&random_bytes);
+    let mut secret_file = wallet_dir.to_path_buf();
+    secret_file.push("secret_protocol_randomness");
+    fs::write(secret_file, hex_randomness)?;
+    Ok(())
 }
 
 pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<CmdOutput> {
@@ -156,6 +168,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             internal,
         } => {
             let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
+            create_secret_randomness(&wallet_dir)?;
             Config {
                 wallet_key: WalletKey::Descriptor { external, internal },
                 psbt_output_dir: psbt_dir,
@@ -165,9 +178,10 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         InitOpt::XPub {
             common_args,
             psbt_output_dir,
-            xpub,
+            ref xpub,
         } => {
             let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
+            create_secret_randomness(&wallet_dir)?;
 
             let mut external = String::from("wpkh(");
             external.push_str(&xpub);
@@ -191,15 +205,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             .unwrap()
             .as_bytes(),
     )?;
-
-    let mut random_bytes = [0u8; 64];
-    use rand::RngCore;
-    rand::rngs::OsRng.fill_bytes(&mut random_bytes);
-
-    let hex_randomness = hex::encode(&random_bytes);
-    let mut secret_file = wallet_dir.to_path_buf();
-    secret_file.push("secret_protocol_randomness");
-    fs::write(secret_file, hex_randomness)?;
 
     Ok(CmdOutput::None)
 }
