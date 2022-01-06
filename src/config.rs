@@ -86,8 +86,7 @@ impl Config {
 
         let blockchain = AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
             concurrency: Some(10),
-            stop_gap: 10,
-            ..EsploraBlockchainConfig::new(url.into())
+            ..EsploraBlockchainConfig::new(url.into(), 10)
         });
 
         let mut psbt_output_dir = PathBuf::new();
