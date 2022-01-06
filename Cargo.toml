@@ -9,8 +9,8 @@ license = "0BSD"
 
 [dependencies]
 dirs = "3.0"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
-#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "466038cbccabe38443b44e4efd6b4d08759b9787", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false  }
+# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false }
 serde_json = "1.0"
 olivia_core = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
 olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
@@ -35,5 +35,5 @@ nightly = ["olivia_secp256k1/nightly"]
 
 [dev-dependencies]
 rand = "0.8"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
-#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "466038cbccabe38443b44e4efd6b4d08759b9787", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
+# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq","compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
