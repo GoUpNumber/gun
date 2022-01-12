@@ -5,11 +5,13 @@ use crate::{
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Network,
+    database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, MnemonicType},
         GeneratableKey, GeneratedKey,
     },
     miniscript::Segwitv0,
+    Wallet,
 };
 use olivia_secp256k1::fun::hex;
 use std::{fs, io, path::PathBuf, str::FromStr};
@@ -54,7 +56,12 @@ pub enum InitOpt {
         #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66...mSXJj/1/*)")]
         internal: Option<String>,
     },
-    /// Initialize using an xpub
+    /// Initialize using an extended public key descriptor.
+    ///
+    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub6...a6" --psbt-output-dir ~/.gun/psbts
+    ///
+    /// With descriptor in format [masterfingerprint/derivation'/path']xpub.
+    /// Unsigned PSBTs will be saved to a --psbt-output-dir for signing (default: $GUNDIR/psbts).
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
@@ -64,7 +71,7 @@ pub enum InitOpt {
         #[structopt(long, parse(from_os_str))]
         psbt_output_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
-        #[structopt(name = "[AAB893A5/84'/0'/0']xpub66...mSXJj")]
+        #[structopt(name = "xpub-descriptor")]
         xpub: String,
     },
 }
@@ -169,6 +176,14 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         } => {
             let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
             create_secret_randomness(&wallet_dir)?;
+            // Check descriptors are valid
+            let _ = Wallet::new_offline(
+                &external,
+                internal.as_ref(),
+                common_args.network,
+                MemoryDatabase::default(),
+            )?;
+
             Config {
                 wallet_key: WalletKey::Descriptor { external, internal },
                 psbt_output_dir: psbt_dir,
@@ -182,12 +197,16 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         } => {
             let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
             create_secret_randomness(&wallet_dir)?;
+            let external = format!("wpkh({}/0/*)", xpub);
+            let internal = format!("wpkh({}/1/*)", xpub);
 
-            let mut external = String::from("wpkh(");
-            external.push_str(&xpub);
-            let mut internal = external.clone();
-            external.push_str("/0/*)");
-            internal.push_str("/1/*)");
+            // Check xpub is valid
+            let _ = Wallet::new_offline(
+                &external,
+                Some(&internal),
+                common_args.network,
+                MemoryDatabase::default(),
+            )?;
 
             Config {
                 wallet_key: WalletKey::Descriptor {

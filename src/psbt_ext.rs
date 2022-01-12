@@ -16,12 +16,12 @@ impl PsbtFeeRate for Psbt {
             .map(|x| x.witness_utxo.as_ref().map(|x| x.value).unwrap_or(0))
             .sum();
 
-        let mut fee_estimated = false;
+        let mut feerate_estimated = false;
         for input in &mut psbt.inputs {
             if input.final_script_witness.is_none() {
                 // FIXME: (Does not work for other script types, taproot)
                 input.final_script_witness = Some(vec![vec![0u8; 73], vec![0u8; 33]]);
-                fee_estimated = true;
+                feerate_estimated = true;
             };
         }
 
@@ -30,6 +30,6 @@ impl PsbtFeeRate for Psbt {
         let feerate = FeeRate::from_sat_per_vb(
             fee as f32 / (self.clone().extract_tx().get_weight() as f32 / 4.0),
         );
-        (Amount::from_sat(fee), feerate, fee_estimated)
+        (Amount::from_sat(fee), feerate, feerate_estimated)
     }
 }

@@ -7,9 +7,7 @@ use bdk::{
     bitcoin::{
         consensus::encode,
         util::{
-            address::Payload,
-            bip32::{self, ExtendedPrivKey, ExtendedPubKey},
-            psbt::PartiallySignedTransaction as Psbt,
+            address::Payload, bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction as Psbt,
         },
         Address, Amount, Network, Txid,
     },
@@ -153,11 +151,6 @@ pub fn load_party(
     let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
     let party = Party::new(wallet, bet_db, keychain, config.blockchain);
     Ok(party)
-}
-
-pub enum ExtendedKey {
-    Public(ExtendedPubKey, bip32::Fingerprint),
-    Private(ExtendedPrivKey),
 }
 
 pub fn load_wallet(
@@ -532,11 +525,12 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
         "total".into(),
         format_amount(output_total),
     ]));
-    let (fee, feerate, fee_estimated) = psbt.fee();
+    let (fee, feerate, feerate_estimated) = psbt.fee();
 
+    let est = if feerate_estimated { "(est.)" } else { "" };
     table.add_row(Row::new(vec![
-        if fee_estimated { "est. fee" } else { "fee" },
-        &format!("{:.3} sats/vb", feerate.as_sat_vb()),
+        "fee",
+        &format!("{:.3} sats/vb {}", feerate.as_sat_vb(), est),
         &format_amount(fee),
     ]));
 

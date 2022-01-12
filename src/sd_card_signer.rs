@@ -69,22 +69,18 @@ impl Signer for SDCardSigner {
             "Please sign the PSBT and save it to {}",
             signed_psbt_file.display()
         );
+
         eprintln!("Press enter once signed.");
-        let mut input = String::new();
-        let _ = std::io::stdin().read_line(&mut input);
-
-        let contents = match std::fs::read_to_string(signed_psbt_file.clone()) {
-            Ok(contents) => contents,
-            Err(e) => {
-                eprintln!(
-                    "Failed to read PSBT file {}: {}",
-                    signed_psbt_file.display(),
-                    e
-                );
-                return Err(SignerError::UserCanceled);
-            }
+        let contents = loop {
+            let mut input = String::new();
+            let _ = std::io::stdin().read_line(&mut input);
+            match std::fs::read_to_string(signed_psbt_file.clone()) {
+                Ok(contents) => break contents,
+                Err(e) => {
+                    eprintln!("Error reading file: {}\nPress enter to try again.", e);
+                }
+            };
         };
-
         let psbt_result = PartiallySignedTransaction::from_str(&contents.trim());
 
         if let Err(e) = psbt_result {

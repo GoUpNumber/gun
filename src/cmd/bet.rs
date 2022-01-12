@@ -879,7 +879,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         value: bet.i_chose_right as u64,
     };
 
-    let (fee, feerate, _) = bet.psbt.fee();
+    let (fee, feerate, feerate_estimated) = bet.psbt.fee();
 
     let mut table = Table::new();
     table.add_row(Row::new(vec!["event-id".into(), id.to_string()]));
@@ -894,7 +894,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         ),
     ]));
     table.add_row(Row::new(vec![
-        "fee".into(),
+        if feerate_estimated { "est. fee" } else { "fee" }.into(),
         format!("{} ({:.3} s/vb)", fee, feerate.as_sat_vb()),
     ]));
 
