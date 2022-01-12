@@ -236,7 +236,7 @@ pub fn load_wallet(
                 esplora,
             )
             .context("Initializing wallet from descriptors")?;
-            let signer = SDCardSigner::create(config.psbt_output_dir.clone());
+            let signer = SDCardSigner::create(config.psbt_output_dir.clone(), config.network);
             wallet.add_signer(
                 KeychainKind::External, //NOTE: will sign internal inputs as well!
                 SignerOrdering(100),
@@ -532,10 +532,10 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
         "total".into(),
         format_amount(output_total),
     ]));
-    let (fee, feerate) = psbt.fee();
+    let (fee, feerate, fee_estimated) = psbt.fee();
 
     table.add_row(Row::new(vec![
-        "fee",
+        if fee_estimated { "est. fee" } else { "fee" },
         &format!("{:.3} sats/vb", feerate.as_sat_vb()),
         &format_amount(fee),
     ]));

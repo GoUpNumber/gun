@@ -2,20 +2,27 @@ use bdk::{
     bitcoin::{
         secp256k1::{All, Secp256k1},
         util::psbt::PartiallySignedTransaction,
+        Network,
     },
     wallet::signer::{Signer, SignerError, SignerId},
 };
 use core::str::FromStr;
 use std::path::PathBuf;
 
+use crate::cmd::{display_psbt, read_yn};
+
 #[derive(Debug)]
 pub struct SDCardSigner {
     psbt_output_dir: PathBuf,
+    network: Network,
 }
 
 impl SDCardSigner {
-    pub fn create(psbt_output_dir: PathBuf) -> Self {
-        SDCardSigner { psbt_output_dir }
+    pub fn create(psbt_output_dir: PathBuf, network: Network) -> Self {
+        SDCardSigner {
+            psbt_output_dir,
+            network,
+        }
     }
 }
 
@@ -26,6 +33,13 @@ impl Signer for SDCardSigner {
         _input_index: Option<usize>,
         _secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
+        if !read_yn(&format!(
+            "This is the transaction that will be saved for signing.\n{}Ok",
+            display_psbt(self.network, &psbt)
+        )) {
+            return Err(SignerError::UserCanceled);
+        }
+
         let txid = psbt.clone().extract_tx().txid();
         let mut psbt_file = PathBuf::from(self.psbt_output_dir.clone());
         if !self.psbt_output_dir.exists() {
