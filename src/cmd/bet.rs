@@ -640,7 +640,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                                     rng,
                                 ) {
                                     Ok(validated_offer) => {
-                                        let (fee, feerate) = validated_offer.bet.psbt.fee();
+                                        let (fee, feerate, _) = validated_offer.bet.psbt.fee();
                                         (Some(fee), Some(feerate), true)
                                     }
                                     Err(_) => (None, None, false),
@@ -879,7 +879,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         value: bet.i_chose_right as u64,
     };
 
-    let (fee, feerate) = bet.psbt.fee();
+    let (fee, feerate, _) = bet.psbt.fee();
 
     let mut table = Table::new();
     table.add_row(Row::new(vec!["event-id".into(), id.to_string()]));
