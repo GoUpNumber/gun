@@ -66,7 +66,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let bet_state = self
             .bet_db
             .get_entity::<BetState>(bet_id)?
-            .ok_or(anyhow!("Bet {} doesn't exist"))?;
+            .ok_or(anyhow!("Bet {} doesn't exist", bet_id))?;
         let local_proposal = match bet_state {
             BetState::Proposed { local_proposal } => local_proposal,
             _ => return Err(anyhow!("was not in proposed state")),

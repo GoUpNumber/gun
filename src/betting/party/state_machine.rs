@@ -30,7 +30,7 @@ where
         let bet_state = self
             .bet_db
             .get_entity(bet_id)?
-            .ok_or(anyhow!("Bet {} does not exist"))?;
+            .ok_or(anyhow!("Bet {} does not exist", bet_id))?;
         let blockchain = self.wallet.client();
 
         match bet_state {
