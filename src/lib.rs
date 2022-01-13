@@ -13,6 +13,7 @@ pub mod encode;
 mod fee_spec;
 pub mod keychain;
 pub mod psbt_ext;
+pub mod sd_card_signer;
 pub use fee_spec::*;
 
 pub use chacha20::cipher;

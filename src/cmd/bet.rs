@@ -1,13 +1,14 @@
 use super::{read_input, run_oralce_cmd, Cell};
 use crate::{
     betting::*,
-    cmd::{self, read_yn, sanitize_str, CmdOutput},
+    cmd::{self, load_config, read_yn, sanitize_str, CmdOutput},
+    config::WalletKey,
     item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     Url, ValueChoice,
 };
-use anyhow::*;
+use anyhow::{anyhow, Context};
 use bdk::bitcoin::{Address, Amount, Script};
 use chacha20::cipher::StreamCipher;
 use olivia_core::{chrono::Utc, Outcome, OutcomeError};
@@ -209,6 +210,18 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
         let party = cmd::load_party(wallet_dir)?;
         party.sync()?;
         party.poke_bets();
+    }
+
+    // Betting is not yet supported for descriptor wallets
+    let config = load_config(wallet_dir).context("loading config")?;
+    if let WalletKey::Descriptor {
+        external: _,
+        internal: _,
+    } = config.wallet_key
+    {
+        return Err(anyhow!(
+            "Betting is not yet supported for descriptor based wallets."
+        ));
     }
 
     match cmd {
@@ -627,7 +640,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                                     rng,
                                 ) {
                                     Ok(validated_offer) => {
-                                        let (fee, feerate) = validated_offer.bet.psbt.fee();
+                                        let (fee, feerate, _) = validated_offer.bet.psbt.fee();
                                         (Some(fee), Some(feerate), true)
                                     }
                                     Err(_) => (None, None, false),
@@ -866,7 +879,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         value: bet.i_chose_right as u64,
     };
 
-    let (fee, feerate) = bet.psbt.fee();
+    let (fee, feerate, feerate_estimated) = bet.psbt.fee();
 
     let mut table = Table::new();
     table.add_row(Row::new(vec!["event-id".into(), id.to_string()]));
@@ -881,7 +894,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         ),
     ]));
     table.add_row(Row::new(vec![
-        "fee".into(),
+        if feerate_estimated { "est. fee" } else { "fee" }.into(),
         format!("{} ({:.3} s/vb)", fee, feerate.as_sat_vb()),
     ]));
 
