@@ -161,7 +161,7 @@ pub fn load_wallet(
     Keychain,
     Config,
 )> {
-    use bdk::keys::bip39::{Language, Mnemonic, Seed};
+    use bdk::keys::bip39::Mnemonic;
 
     if !wallet_dir.exists() {
         return Err(anyhow!(
@@ -191,16 +191,14 @@ pub fn load_wallet(
         crate::config::WalletKey::SeedWordsFile { .. } => {
             let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
-            let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
+            let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
                 anyhow!(
                     "parsing seed phrase in '{}' failed: {}",
                     sw_file.as_path().display(),
                     e
                 )
             })?;
-            let mut seed_bytes = [0u8; 64];
-            let seed = Seed::new(&mnemonic, "");
-            seed_bytes.copy_from_slice(seed.as_bytes());
+            let seed_bytes = mnemonic.to_seed("");
             let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
             let keychain = Keychain::new(seed_bytes);
 

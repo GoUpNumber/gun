@@ -7,7 +7,7 @@ use bdk::{
     bitcoin::Network,
     database::MemoryDatabase,
     keys::{
-        bip39::{Language, Mnemonic, MnemonicType},
+        bip39::{Language, Mnemonic, WordCount},
         GeneratableKey, GeneratedKey,
     },
     miniscript::Segwitv0,
@@ -145,18 +145,22 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                             ))?
                         }
                     };
-                    Mnemonic::validate(&seed_words, Language::English)
-                        .context("parsing existing seedwords")?;
+                    Mnemonic::parse(&seed_words).context("parsing existing seedwords")?;
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
                     WalletKey::SeedWordsFile {}
                 }
                 None => {
-                    let n_words = MnemonicType::for_word_count(n_words)?;
-                    let seed_words: GeneratedKey<_, Segwitv0> =
-                        Mnemonic::generate((n_words, Language::English))
-                            .map_err(|_| anyhow!("generating seed phrase failed"))?;
-                    let seed_words: String = seed_words.phrase().into();
+                    let seed_words: GeneratedKey<_, Segwitv0> = Mnemonic::generate((
+                        match n_words {
+                            12 => WordCount::Words12,
+                            24 => WordCount::Words24,
+                            _ => return Err(anyhow!("Only 12 or 24 words are supported")),
+                        },
+                        Language::English,
+                    ))
+                    .context("generating seed phrase failed")?;
+                    let seed_words: String = seed_words.word_iter().collect::<Vec<_>>().join(" ");
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
                     eprintln!("Wrote seeds words to {}", sw_file.display());

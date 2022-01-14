@@ -60,7 +60,7 @@ fn create_party(
         wallet,
         bet_db,
         keychain,
-        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig::new(esplora_url)),
+        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig::new(esplora_url, 2)),
     );
     Ok(party)
 }
@@ -263,7 +263,7 @@ pub fn test_happy_path() {
 
     let winner_claim_tx = winner_claim_psbt.extract_tx();
 
-    winner.wallet().broadcast(winner_claim_tx).unwrap();
+    winner.wallet().broadcast(&winner_claim_tx).unwrap();
     wait_for_state!(winner, winner_id, "claiming");
     test_client.generate(1, None);
     wait_for_state!(winner, winner_id, "claimed");
