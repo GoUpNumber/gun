@@ -1,8 +1,7 @@
 use super::{read_input, run_oralce_cmd, Cell};
 use crate::{
     betting::*,
-    cmd::{self, load_config, read_yn, sanitize_str, CmdOutput},
-    config::WalletKey,
+    cmd::{self, read_yn, sanitize_str, CmdOutput},
     item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
@@ -210,18 +209,6 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
         let party = cmd::load_party(wallet_dir)?;
         party.sync()?;
         party.poke_bets();
-    }
-
-    // Betting is not yet supported for descriptor wallets
-    let config = load_config(wallet_dir).context("loading config")?;
-    if let WalletKey::Descriptor {
-        external: _,
-        internal: _,
-    } = config.wallet_key
-    {
-        return Err(anyhow!(
-            "Betting is not yet supported for descriptor based wallets."
-        ));
     }
 
     match cmd {
