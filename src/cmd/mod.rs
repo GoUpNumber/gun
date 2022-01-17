@@ -484,7 +484,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut input_total = Amount::ZERO;
     for (i, psbt_input) in psbt.inputs.iter().enumerate() {
         let txout = psbt_input.witness_utxo.as_ref().unwrap();
-        let input = &psbt.global.unsigned_tx.input[i];
+        let input = &psbt.unsigned_tx.input[i];
         let _address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
@@ -505,7 +505,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut output_total = Amount::ZERO;
     let mut header = Some("out".to_string());
     for (i, _) in psbt.outputs.iter().enumerate() {
-        let txout = &psbt.global.unsigned_tx.output[i];
+        let txout = &psbt.unsigned_tx.output[i];
         let address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());

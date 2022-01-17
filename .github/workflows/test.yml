@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         toolchain: [
-           { rust: "1.54.0", args: "" },
+           { rust: "1.56.0", args: "" },
            { rust: "nightly", args: "--features=nightly" }
         ]
     steps:
