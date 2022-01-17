@@ -125,7 +125,6 @@ impl BetDatabase {
     }
 
     pub fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
-        use std::convert::TryFrom;
         let i = self
             .0
             .update_and_fetch(

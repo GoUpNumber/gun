@@ -49,9 +49,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             "the fee should only be there if it's dust"
         );
 
-        let outputs = &psbt.global.unsigned_tx.output;
+        let outputs = &psbt.unsigned_tx.output;
         let tx_inputs = psbt
-            .global
             .unsigned_tx
             .input
             .iter()

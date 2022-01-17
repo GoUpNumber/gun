@@ -99,7 +99,7 @@ dependencies = [
 [[package]]
 name = "bdk"
 version = "0.14.1-dev"
-source = "git+https://github.com/llfourn/bdk?rev=466038cbccabe38443b44e4efd6b4d08759b9787#466038cbccabe38443b44e4efd6b4d08759b9787"
+source = "git+https://github.com/llfourn/bdk?rev=616ea6f1ff5fc0bca5af4c54efbcae8254cc37a3#616ea6f1ff5fc0bca5af4c54efbcae8254cc37a3"
 dependencies = [
  "async-trait",
  "bdk-macros",
@@ -160,9 +160,8 @@ dependencies = [
 
 [[package]]
 name = "bitcoin"
-version = "0.27.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a41df6ad9642c5c15ae312dd3d074de38fd3eb7cc87ad4ce10f90292a83fe4d"
+version = "0.27.0"
+source = "git+https://github.com/rust-bitcoin/rust-bitcoin.git?rev=0e2e55971275da64ceb62e8991a0a5fa962cb8b1#0e2e55971275da64ceb62e8991a0a5fa962cb8b1"
 dependencies = [
  "base64-compat",
  "bech32",
@@ -243,9 +242,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.9.0"
+version = "3.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe438c9d2f2b0fb88a112154ed81e30b0a491c29322afe1db3b6eec5811f5ba0"
+checksum = "a4a45a46ab1f2412e53d3a0ade76ffad2025804294569aae387231a0cd6e0899"
 
 [[package]]
 name = "byteorder"
@@ -400,9 +399,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ec02e091aa634e2c3ada4a392989e7c3116673ef0ac5b72232439094d73b7fd"
+checksum = "97242a70df9b89a65d0b6df3c4bf5b9ce03c5b7309019777fbde37e7537f8762"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -413,19 +412,13 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d82cfc11ce7f2c3faef78d8a684447b40d503d9681acebed6cb728d45940c4db"
+checksum = "cfcae03edb34f947e64acdb1c33ec169824e20657e9ecb61cef6c8c74dcb8120"
 dependencies = [
  "cfg-if",
  "lazy_static",
 ]
-
-[[package]]
-name = "crunchy"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
 
 [[package]]
 name = "digest"
@@ -464,8 +457,9 @@ checksum = "212d0f5754cb6769937f4501cc0e67f4f4483c8d2c3e1e922ee9edbe4ab4c7c0"
 
 [[package]]
 name = "ecdsa_fun"
-version = "0.6.3-alpha.0"
-source = "git+https://github.com/LLFourn/secp256kfun.git?rev=2a361f26c82552099bfecffe5955cda83c226a9b#2a361f26c82552099bfecffe5955cda83c226a9b"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "185bf4f825fc1f21899caee065e1e83b5258201b84923ed503254598e608bf6a"
 dependencies = [
  "secp256kfun",
  "serde",
@@ -509,6 +503,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d2f06b9cac1506ece98fe3231e3cc9c4410ec3d5b1f24ae1c8946f0742cdefc"
 dependencies = [
  "version_check",
+]
+
+[[package]]
+name = "fastrand"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "779d043b6a0b90cc4c0ed7ee380a6504394cee7efd7db050e3774eee387324b2"
+dependencies = [
+ "instant",
 ]
 
 [[package]]
@@ -589,9 +592,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fcd999463524c52659517fe2cea98493cfe485d10565e7b0fb07dbba7ad2753"
+checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
 dependencies = [
  "cfg-if",
  "libc",
@@ -757,8 +760,7 @@ dependencies = [
 [[package]]
 name = "miniscript"
 version = "6.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d69450033bf162edf854d4aacaff82ca5ef34fa81f6cf69e1c81a103f0834997"
+source = "git+https://github.com/sanket1729/rust-miniscript.git?rev=f3c38b8cc04fed0a68f4d6074d8c30f6912d958f#f3c38b8cc04fed0a68f4d6074d8c30f6912d958f"
 dependencies = [
  "bitcoin",
  "serde",
@@ -809,7 +811,7 @@ dependencies = [
 [[package]]
 name = "olivia_core"
 version = "0.1.0"
-source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
+source = "git+https://github.com/llfourn/olivia?rev=a818764a3bf18e4f8535d4659c42cb943c41f18c#a818764a3bf18e4f8535d4659c42cb943c41f18c"
 dependencies = [
  "chrono",
  "serde",
@@ -820,7 +822,7 @@ dependencies = [
 [[package]]
 name = "olivia_describe"
 version = "0.1.0"
-source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
+source = "git+https://github.com/llfourn/olivia?rev=a818764a3bf18e4f8535d4659c42cb943c41f18c#a818764a3bf18e4f8535d4659c42cb943c41f18c"
 dependencies = [
  "olivia_core",
 ]
@@ -828,7 +830,7 @@ dependencies = [
 [[package]]
 name = "olivia_secp256k1"
 version = "0.0.1"
-source = "git+https://github.com/llfourn/olivia?rev=025cb6ad31b85d3150571b902e3502a16cab88ad#025cb6ad31b85d3150571b902e3502a16cab88ad"
+source = "git+https://github.com/llfourn/olivia?rev=a818764a3bf18e4f8535d4659c42cb943c41f18c#a818764a3bf18e4f8535d4659c42cb943c41f18c"
 dependencies = [
  "bytes",
  "ecdsa_fun",
@@ -872,7 +874,7 @@ dependencies = [
  "instant",
  "libc",
  "redox_syscall",
- "smallvec 1.7.0",
+ "smallvec 1.8.0",
  "winapi 0.3.9",
 ]
 
@@ -1036,7 +1038,7 @@ version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d34f1408f55294453790c48b2f1ebbb1c5b4b7563eb1f418bcfcfdbb06ebb4e7"
 dependencies = [
- "getrandom 0.2.3",
+ "getrandom 0.2.4",
 ]
 
 [[package]]
@@ -1072,7 +1074,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
- "getrandom 0.2.3",
+ "getrandom 0.2.4",
  "redox_syscall",
 ]
 
@@ -1160,8 +1162,9 @@ checksum = "73b4b750c782965c211b42f022f59af1fbceabdd026623714f104152f1ec149f"
 
 [[package]]
 name = "schnorr_fun"
-version = "0.6.3-alpha.0"
-source = "git+https://github.com/LLFourn/secp256kfun.git?rev=2a361f26c82552099bfecffe5955cda83c226a9b#2a361f26c82552099bfecffe5955cda83c226a9b"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d5233dbbce524495ee58f72da40d078efbded2d2ef5b68dce186774fdf4c3b"
 dependencies = [
  "secp256kfun",
  "serde",
@@ -1185,9 +1188,9 @@ dependencies = [
 
 [[package]]
 name = "secp256k1"
-version = "0.20.3"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97d03ceae636d0fed5bae6a7f4f664354c5f4fcedf6eef053fef17e49f837d0a"
+checksum = "ab7883017d5b21f011ef8040ea9c6c7ac90834c0df26a69e4c0b06276151f125"
 dependencies = [
  "secp256k1-sys",
  "serde",
@@ -1204,23 +1207,26 @@ dependencies = [
 
 [[package]]
 name = "secp256kfun"
-version = "0.6.3-alpha.0"
-source = "git+https://github.com/LLFourn/secp256kfun.git?rev=2a361f26c82552099bfecffe5955cda83c226a9b#2a361f26c82552099bfecffe5955cda83c226a9b"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b456d5d74840f07fe43396a29ac144cfdf32acf980f399d30b38d5b170c8239b"
 dependencies = [
  "digest",
  "rand_core 0.6.3",
  "secp256k1",
- "secp256kfun_parity_backend",
+ "secp256kfun_k256_backend",
  "serde",
  "subtle-ng",
 ]
 
 [[package]]
-name = "secp256kfun_parity_backend"
-version = "0.1.6-alpha.0"
-source = "git+https://github.com/LLFourn/secp256kfun.git?rev=2a361f26c82552099bfecffe5955cda83c226a9b#2a361f26c82552099bfecffe5955cda83c226a9b"
+name = "secp256kfun_k256_backend"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99c96aa7609ff3b24fcad38cf4c39712f063e06c23a1af043a3e1111aac75cbc"
 dependencies = [
- "crunchy",
+ "cfg-if",
+ "generic-array",
  "subtle-ng",
 ]
 
@@ -1261,9 +1267,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.74"
+version = "1.0.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee2bb9cd061c5865d345bb02ca49fcef1391741b672b54a0bf7b679badec3142"
+checksum = "c059c05b48c5c0067d4b4b2b4f0732dd65feb52daf7e0ea09cd87e7dadc1af79"
 dependencies = [
  "itoa",
  "ryu",
@@ -1272,15 +1278,24 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2579985fda508104f7587689507983eadd6a6e84dd35d6d115361f530916fa0d"
+checksum = "c1da05c97445caa12d05e848c4a4fcbbea29e748ac28f7e80e9b010392063770"
+dependencies = [
+ "sha1_smol",
+]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
 
 [[package]]
 name = "sha2"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b69f9a4c9740d74c5baa3fd2e547f9525fa8088a8a958e0ca2409a514e33f5fa"
+checksum = "4d58a1e1bf39749807d89cf2d98ac2dfa0ff1cb3faa38fbb64dd88ac8013d800"
 dependencies = [
  "block-buffer",
  "cfg-if",
@@ -1316,9 +1331,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
+checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 
 [[package]]
 name = "socks"
@@ -1434,9 +1449,9 @@ checksum = "734676eb262c623cec13c3155096e08d1f8f29adce39ba17948b18dad1e54142"
 
 [[package]]
 name = "syn"
-version = "1.0.84"
+version = "1.0.85"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecb2e6da8ee5eb9a61068762a32fa9619cc591ceb055b3687f4cd4051ec2e06b"
+checksum = "a684ac3dcd8913827e18cd09a68384ee66c1de24157e3c556c9ab16d85695fb7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1456,13 +1471,13 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dac1c663cfc93810f88aed9b8941d48cabf856a1b111c29a40439018d870eb22"
+checksum = "5cdb1ef4eaeeaddc8fbd371e5017057064af0911902ef36b39801f67cc6d79e4"
 dependencies = [
  "cfg-if",
+ "fastrand",
  "libc",
- "rand 0.8.4",
  "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.9",
