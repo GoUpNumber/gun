@@ -49,7 +49,6 @@ impl Bet {
 
     pub fn input_outpoints(&self) -> Vec<OutPoint> {
         self.psbt
-            .global
             .unsigned_tx
             .input
             .iter()
@@ -71,7 +70,9 @@ impl OfferedBet {
             "the transactions must be the same to add_counterparty_sigs"
         );
         for (txin, psbt_input) in tx.input.into_iter().zip(bet.psbt.inputs.iter_mut()) {
-            psbt_input.final_script_witness.get_or_insert(txin.witness);
+            psbt_input
+                .final_script_witness
+                .get_or_insert(txin.witness.to_vec());
         }
 
         bet

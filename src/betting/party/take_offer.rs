@@ -160,7 +160,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let vout = psbt
-            .global
             .unsigned_tx
             .output
             .iter()
@@ -178,8 +177,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .inputs
             .iter()
             .map(|input| {
-                psbt.global
-                    .unsigned_tx
+                psbt.unsigned_tx
                     .input
                     .iter()
                     .enumerate()

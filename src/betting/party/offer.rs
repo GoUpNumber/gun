@@ -107,7 +107,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         // the inputs we own have witnesses
         let my_input_indexes = psbt
-            .global
             .unsigned_tx
             .input
             .iter()
@@ -127,7 +126,6 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let (vout, txout) = psbt
-            .global
             .unsigned_tx
             .output
             .iter()
@@ -142,7 +140,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .iter()
             .cloned()
             .map(|i| {
-                let txin = &psbt.global.unsigned_tx.input[i as usize];
+                let txin = &psbt.unsigned_tx.input[i as usize];
                 let psbt_input = &psbt.inputs[i as usize];
                 let witness = psbt_input
                     .final_script_witness
@@ -159,7 +157,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         let mut change = None;
 
-        for output in &psbt.global.unsigned_tx.output {
+        for output in &psbt.unsigned_tx.output {
             if self.wallet.is_mine(&output.script_pubkey)? {
                 change = Some(Change::new(output.value, output.script_pubkey.clone()));
             }
