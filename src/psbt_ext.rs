@@ -25,11 +25,10 @@ impl PsbtFeeRate for Psbt {
             };
         }
 
-        let output_value: u64 = self.unsigned_tx.output.iter().map(|x| x.value).sum();
+        let output_value: u64 = psbt.unsigned_tx.output.iter().map(|x| x.value).sum();
         let fee = input_value - output_value;
-        let feerate = FeeRate::from_sat_per_vb(
-            fee as f32 / (self.clone().extract_tx().get_weight() as f32 / 4.0),
-        );
+        let feerate =
+            FeeRate::from_sat_per_vb(fee as f32 / (psbt.extract_tx().get_weight() as f32 / 4.0));
         (Amount::from_sat(fee), feerate, feerate_estimated)
     }
 }
