@@ -175,9 +175,9 @@ pub fn test_happy_path() {
         .insert_bet(BetState::Proposed { local_proposal })
         .unwrap();
 
-    let (p2_bet_id, encrypted_offer) = {
+    let (p2_bet_id, encrypted_offer, _) = {
         let proposal = VersionedProposal::from_str(&proposal_string).unwrap();
-        let (bet, offer, local_public_key, mut cipher) = party_2
+        let (bet, local_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.into(),
                 true,
@@ -193,7 +193,7 @@ pub fn test_happy_path() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, local_public_key, &mut cipher)
             .unwrap()
     };
     wait_for_state!(party_2, p2_bet_id, "offered");
@@ -321,9 +321,9 @@ pub fn cancel_proposal() {
         })
         .unwrap();
 
-    let (p2_bet_id, _) = {
+    let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_1).unwrap();
-        let (bet, offer, offer_public_key, mut cipher) = party_2
+        let (bet, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.into(),
                 true,
@@ -339,7 +339,7 @@ pub fn cancel_proposal() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -374,9 +374,9 @@ pub fn test_cancel_offer() {
 
     let proposal_str = local_proposal.proposal.clone().into_versioned().to_string();
 
-    let (p2_bet_id, _) = {
+    let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_str).unwrap();
-        let (bet, offer, offer_public_key, mut cipher) = party_2
+        let (bet, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.into(),
                 true,
@@ -392,7 +392,7 @@ pub fn test_cancel_offer() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -431,8 +431,8 @@ pub fn cancel_offer_after_offer_taken() {
         .unwrap();
     let proposal = Proposal::from(VersionedProposal::from_str(&proposal_str).unwrap());
 
-    let (first_p2_bet_id, _) = {
-        let (bet, offer, offer_public_key, mut cipher) = party_2
+    let (first_p2_bet_id, _, _) = {
+        let (bet, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal.clone(),
                 true,
@@ -448,12 +448,12 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
-    let (second_p2_bet_id, second_encrypted_offer) = {
-        let (bet, offer, offer_public_key, mut cipher) = party_2
+    let (second_p2_bet_id, second_encrypted_offer, _) = {
+        let (bet, offer_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 proposal,
                 true,
@@ -470,7 +470,7 @@ pub fn cancel_offer_after_offer_taken() {
             )
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -563,7 +563,7 @@ fn create_proposal_with_dust_change() {
             "we can't afford 501 fee even with extra proposal fee"
         );
 
-        let (bet, offer, local_public_key, mut cipher) = party_2
+        let (bet, local_public_key, mut cipher) = party_2
             .generate_offer_with_oracle_event(
                 local_proposal.proposal,
                 true,
@@ -578,12 +578,14 @@ fn create_proposal_with_dust_change() {
             )
             .unwrap();
 
+        let (bet_id, encrypted_offer, offer) = party_2
+            .sign_save_and_encrypt_offer(bet, None, local_public_key, &mut cipher)
+            .unwrap();
+
         assert_eq!(offer.change, None);
         assert_eq!(offer.value.as_sat(), bet_value);
 
-        party_2
-            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
-            .unwrap()
+        (bet_id, encrypted_offer)
     };
 
     wait_for_state!(party_2, p2_bet_id, "offered");

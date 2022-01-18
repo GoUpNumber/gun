@@ -41,50 +41,69 @@ impl Signer for SDCardSigner {
         }
 
         let txid = psbt.clone().extract_tx().txid();
-        let mut psbt_file = PathBuf::from(self.psbt_output_dir.clone());
-        if !self.psbt_output_dir.exists() {
-            eprintln!(
-                "psbt-output-dir '{}' does not exist.",
-                self.psbt_output_dir.display()
-            );
-            return Err(SignerError::UserCanceled);
-        }
-        psbt_file.push(format!("{}.psbt", txid.to_string()));
-
-        if let Err(e) = std::fs::write(psbt_file.clone(), psbt.to_string()) {
-            eprintln!("Was unable to write PSBT {}: {}", psbt_file.display(), e);
-            return Err(SignerError::UserCanceled);
-        }
-
-        if !psbt_file.clone().exists() {
-            eprintln!("Failed to write PSBT to {}", psbt_file.display());
-            return Err(SignerError::UserCanceled);
+        let psbt_file = self
+            .psbt_output_dir
+            .as_path()
+            .join(format!("{}.psbt", txid.to_string()));
+        loop {
+            if !self.psbt_output_dir.exists() {
+                eprintln!(
+                    "psbt-output-dir '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
+                    self.psbt_output_dir.display()
+                );
+                let _ = std::io::stdin().read_line(&mut String::new());
+            } else if let Err(e) = std::fs::write(&psbt_file, psbt.to_string()) {
+                eprintln!(
+                    "Was unable to write PSBT {}: {}\nPress enter to try again.",
+                    psbt_file.display(),
+                    e
+                );
+                let _ = std::io::stdin().read_line(&mut String::new());
+            } else {
+                break;
+            }
         }
 
         eprintln!("Wrote PSBT to {}", psbt_file.display());
 
-        let mut signed_psbt_file = PathBuf::from(self.psbt_output_dir.clone());
-        signed_psbt_file.push(format!("{}-signed.psbt", txid.to_string()));
-        eprintln!(
-            "Please sign the PSBT and save it to {}",
-            signed_psbt_file.display()
-        );
-
+        let file_locations = [
+            self.psbt_output_dir
+                .as_path()
+                .join(format!("{}-signed.psbt", txid))
+                .to_path_buf(),
+            self.psbt_output_dir
+                .as_path()
+                .join(format!("{}-part.psbt", txid))
+                .to_path_buf(),
+        ];
+        eprintln!("gun will look for the signed psbt files at:",);
+        for location in &file_locations {
+            eprintln!("- {}", location.display());
+        }
         eprintln!("Press enter once signed.");
-        let contents = loop {
-            let mut input = String::new();
-            let _ = std::io::stdin().read_line(&mut input);
-            match std::fs::read_to_string(signed_psbt_file.clone()) {
-                Ok(contents) => break contents,
-                Err(e) => {
-                    eprintln!("Error reading file: {}\nPress enter to try again.", e);
+        let (file_name, contents) = loop {
+            let _ = std::io::stdin().read_line(&mut String::new());
+            let mut file_contents = file_locations
+                .iter()
+                .map(|location| (location.clone(), std::fs::read_to_string(&location)))
+                .collect::<Vec<_>>();
+            match file_contents
+                .iter()
+                .find(|(_, file_content)| file_content.is_ok())
+            {
+                Some((file_name, contents)) => {
+                    break (file_name.clone(), contents.as_ref().unwrap().clone())
                 }
-            };
+                None => eprintln!(
+                    "Couldn't read any of the files: {}\nPress enter to try again.",
+                    file_contents.remove(0).1.unwrap_err()
+                ),
+            }
         };
         let psbt_result = PartiallySignedTransaction::from_str(&contents.trim());
 
         if let Err(e) = psbt_result {
-            eprintln!("Failed to parse PSBT file {}", signed_psbt_file.display());
+            eprintln!("Failed to parse PSBT file {}", file_name.display());
             eprintln!("{}", e);
             return Err(SignerError::UserCanceled);
         };
