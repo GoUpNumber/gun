@@ -148,16 +148,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             )
             .fee_absolute(absolute_fee.as_sat());
 
-        let (mut psbt, _tx_details) = builder.finish()?;
-
-        let is_final = self
-            .wallet
-            .sign(&mut psbt, SignOptions::default())
-            .context("Failed to sign transaction")?;
-
-        if !is_final {
-            return Err(anyhow!("Transaction is incomplete after signing it"));
-        }
+        let (psbt, _tx_details) = builder.finish()?;
 
         let vout = psbt
             .unsigned_tx
@@ -201,6 +192,19 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         };
 
         Ok(ValidatedOffer { bet_id, bet })
+    }
+
+    pub fn sign_validated_offer(&self, offer: &mut ValidatedOffer) -> anyhow::Result<()> {
+        let psbt = &mut offer.bet.psbt;
+        let is_final = self
+            .wallet
+            .sign(psbt, SignOptions::default())
+            .context("Failed to sign transaction")?;
+
+        if !is_final {
+            return Err(anyhow!("Transaction is incomplete after signing it"));
+        }
+        Ok(())
     }
 
     pub fn set_offer_taken(

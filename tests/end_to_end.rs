@@ -200,7 +200,7 @@ pub fn test_happy_path() {
 
     let (decrypted_offer, offer_public_key, rng) =
         party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
-    let validated_offer = party_1
+    let mut validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             decrypted_offer.into_offer(),
@@ -208,6 +208,7 @@ pub fn test_happy_path() {
             rng,
         )
         .unwrap();
+    party_1.sign_validated_offer(&mut validated_offer).unwrap();
 
     Broadcast::broadcast(
         party_1.wallet().client(),
@@ -477,13 +478,16 @@ pub fn cancel_offer_after_offer_taken() {
     let (second_decrypted_offer, second_offer_public_key, rng) = party_1
         .decrypt_offer(p1_bet_id, second_encrypted_offer)
         .unwrap();
-    let second_validated_offer = party_1
+    let mut second_validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             second_decrypted_offer.into_offer(),
             second_offer_public_key,
             rng,
         )
+        .unwrap();
+    party_1
+        .sign_validated_offer(&mut second_validated_offer)
         .unwrap();
 
     Broadcast::broadcast(party_1.wallet().client(), second_validated_offer.tx()).unwrap();
@@ -592,7 +596,7 @@ fn create_proposal_with_dust_change() {
 
     let (decrypted_offer, offer_public_key, rng) =
         party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
-    let validated_offer = party_1
+    let mut validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             decrypted_offer.into_offer(),
@@ -600,6 +604,7 @@ fn create_proposal_with_dust_change() {
             rng,
         )
         .unwrap();
+    party_1.sign_validated_offer(&mut validated_offer).unwrap();
 
     Broadcast::broadcast(
         party_1.wallet().client(),
