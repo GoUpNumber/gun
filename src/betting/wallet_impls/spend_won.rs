@@ -89,10 +89,10 @@ impl GunWallet {
             let psbt_input = psbt::Input {
                 witness_utxo: Some(TxOut {
                     value: bet.joint_output_value.as_sat(),
-                    script_pubkey: bet.joint_output.descriptor().script_pubkey().unwrap(),
+                    script_pubkey: bet.joint_output.descriptor().script_pubkey(),
                 }),
                 non_witness_utxo: Some(bet.tx()),
-                witness_script: Some(bet.joint_output.descriptor().script_code().unwrap()),
+                witness_script: Some(bet.joint_output.descriptor().script_code()),
                 ..Default::default()
             };
             builder
