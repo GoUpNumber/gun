@@ -355,20 +355,18 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
 
             let args = args.prompt_to_core_bet_args(Some(proposal.value));
 
-            let (bet, offer, local_public_key, mut cipher) = party
-                .generate_offer_with_oracle_event(
-                    proposal,
-                    outcome.value == 1,
-                    oracle_event,
-                    oracle_info,
-                    args,
-                    fee_args.fee,
-                )?;
+            let (bet, local_public_key, mut cipher) = party.generate_offer_with_oracle_event(
+                proposal,
+                outcome.value == 1,
+                oracle_event,
+                oracle_info,
+                args,
+                fee_args.fee,
+            )?;
 
             if yes || cmd::read_yn(&bet_prompt(&bet, "offer", true)) {
-                let (id, encrypted_offer) = party.save_and_encrypt_offer(
+                let (id, encrypted_offer, _) = party.sign_save_and_encrypt_offer(
                     bet,
-                    offer,
                     message,
                     local_public_key,
                     &mut cipher,
@@ -904,7 +902,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
     } else {
         writeln!(&mut res, "you are NOT paying the fee.").unwrap();
     }
-    writeln!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
+    write!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
     res
 }
 
