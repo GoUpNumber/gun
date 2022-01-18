@@ -220,15 +220,15 @@ where
                     continue;
                 }
             };
+            let txout = tx.transaction.as_ref().unwrap().output[utxo.vout as usize].clone();
             let psbt_input = psbt::Input {
-                witness_utxo: Some(
-                    tx.transaction.as_ref().unwrap().output[utxo.vout as usize].clone(),
-                ),
+                witness_utxo: Some(txout.clone()),
                 ..Default::default()
             };
             let satisfaction_weight = self
                 .wallet
-                .get_descriptor_for_keychain(KeychainKind::External)
+                .get_descriptor_for_script_pubkey(&txout.script_pubkey)?
+                .expect("should exist in database")
                 .max_satisfaction_weight()?;
             builder.add_foreign_utxo(utxo, psbt_input, satisfaction_weight)?;
         }

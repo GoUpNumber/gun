@@ -89,10 +89,10 @@ where
             let psbt_input = psbt::Input {
                 witness_utxo: Some(TxOut {
                     value: bet.joint_output_value.as_sat(),
-                    script_pubkey: bet.joint_output.descriptor().script_pubkey(),
+                    script_pubkey: bet.joint_output.descriptor().script_pubkey().unwrap(),
                 }),
                 non_witness_utxo: Some(bet.tx()),
-                witness_script: Some(bet.joint_output.descriptor().script_code()),
+                witness_script: Some(bet.joint_output.descriptor().script_code().unwrap()),
                 ..Default::default()
             };
             builder

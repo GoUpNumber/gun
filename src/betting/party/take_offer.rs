@@ -109,7 +109,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .value
             .checked_add(proposal.value)
             .expect("we've checked the offer value on the chain");
-        let joint_output_script_pubkey = joint_output.descriptor().script_pubkey();
+        let joint_output_script_pubkey = joint_output.descriptor().script_pubkey().unwrap();
 
         let mut builder = self.wallet.build_tx();
 
