@@ -60,7 +60,7 @@ impl GunWallet {
             .ordering(TxOrdering::Bip69Lexicographic)
             .enable_rbf();
 
-        let output_script = joint_output.descriptor().script_pubkey();
+        let output_script = joint_output.descriptor().script_pubkey().unwrap();
 
         match args.value {
             ValueChoice::All => {
