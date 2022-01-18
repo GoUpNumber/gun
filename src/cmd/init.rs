@@ -29,6 +29,33 @@ pub struct CommonArgs {
     network: Network,
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+pub enum AddressKind {
+    Wpkh,
+    Tr,
+}
+
+impl FromStr for AddressKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "wpkh" => AddressKind::Wpkh,
+            "tr" => AddressKind::Tr,
+            _ => return Err(anyhow!("invalid address kind. Must be p2wpkh or p2tr")),
+        })
+    }
+}
+
+impl std::fmt::Display for AddressKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressKind::Wpkh => write!(f, "{}", "wpkh"),
+            AddressKind::Tr => write!(f, "{}", "tr"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, StructOpt)]
 pub enum InitOpt {
     /// Initialize a wallet using a seedphrase
@@ -41,6 +68,9 @@ pub enum InitOpt {
         #[structopt(long, default_value = "12", name = "[12|24]")]
         /// The number of BIP39 seed words to use
         n_words: usize,
+
+        #[structopt(long, default_value = "tr", name = "wpkh|tr")]
+        address_kind: AddressKind,
     },
     /// Initialize using a wallet descriptor
     Descriptor {
@@ -74,6 +104,8 @@ pub enum InitOpt {
         /// Initialize the wallet from a descriptor
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
+        #[structopt(long, default_value = "tr", name = "wpkh|tr")]
+        address_kind: AddressKind,
     },
     /// Initialize using a Coldcard SD card path.
     ///
@@ -157,6 +189,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             common_args,
             from_existing,
             n_words,
+            address_kind,
         } => {
             let wallet_key = match from_existing {
                 Some(existing_words_file) => {
@@ -179,7 +212,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     Mnemonic::parse(&seed_words).context("parsing existing seedwords")?;
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
-                    WalletKey::SeedWordsFile {}
+                    WalletKey::SeedWordsFile { address_kind }
                 }
                 None => {
                     let seed_words: GeneratedKey<_, Segwitv0> = Mnemonic::generate((
@@ -195,7 +228,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
                     eprintln!("Wrote seeds words to {}", sw_file.display());
-                    WalletKey::SeedWordsFile {}
+                    WalletKey::SeedWordsFile { address_kind }
                 }
             };
             Config {
@@ -229,11 +262,12 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             common_args,
             psbt_output_dir,
             ref xpub,
+            address_kind,
         } => {
             let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
             create_secret_randomness(&wallet_dir)?;
-            let external = format!("wpkh({}/0/*)", xpub);
-            let internal = format!("wpkh({}/1/*)", xpub);
+            let external = format!("{}({}/0/*)", address_kind, xpub);
+            let internal = format!("{}({}/1/*)", address_kind, xpub);
 
             // Check xpub is valid
             let _ = Wallet::new_offline(

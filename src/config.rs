@@ -4,6 +4,8 @@ use bdk::{
 };
 use std::path::PathBuf;
 
+use crate::cmd::AddressKind;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WalletKeys {
@@ -24,7 +26,9 @@ pub enum WalletKey {
         external: String,
         internal: Option<String>,
     },
-    SeedWordsFile {},
+    SeedWordsFile {
+        address_kind: AddressKind,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -52,7 +56,9 @@ impl From<ConfigV0> for Config {
             network: from.network,
             psbt_output_dir,
             blockchain: from.blockchain,
-            wallet_key: WalletKey::SeedWordsFile {},
+            wallet_key: WalletKey::SeedWordsFile {
+                address_kind: AddressKind::Wpkh,
+            },
         }
     }
 }
@@ -97,7 +103,9 @@ impl Config {
             network,
             psbt_output_dir,
             blockchain,
-            wallet_key: WalletKey::SeedWordsFile {},
+            wallet_key: WalletKey::SeedWordsFile {
+                address_kind: AddressKind::Tr,
+            },
         }
     }
     pub fn into_versioned(self) -> VersionedConfig {

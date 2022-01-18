@@ -188,7 +188,7 @@ pub fn load_wallet(
     };
 
     let (wallet, keychain) = match config.wallet_key {
-        crate::config::WalletKey::SeedWordsFile { .. } => {
+        crate::config::WalletKey::SeedWordsFile { address_kind } => {
             let sw_file = get_seed_words_file(wallet_dir);
             let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
             let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
@@ -202,17 +202,30 @@ pub fn load_wallet(
             let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
             let keychain = Keychain::new(seed_bytes);
 
-            (
-                Wallet::new(
-                    bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
-                    Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
-                    config.network,
-                    wallet_db,
-                    esplora,
-                )
-                .context("Initializing wallet with xpriv derived from seed phrase")?,
-                keychain,
-            )
+            match address_kind {
+                AddressKind::Wpkh => {
+                    let (external, internal) = (
+                        bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
+                        bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal),
+                    );
+                    (
+                        Wallet::new(external, Some(internal), config.network, wallet_db, esplora)
+                            .context("Initializing wallet with xpriv derived from seed phrase")?,
+                        keychain,
+                    )
+                }
+                AddressKind::Tr => {
+                    let (external, internal) = (
+                        bdk::template::Bip86(xpriv, bdk::KeychainKind::External),
+                        bdk::template::Bip86(xpriv, bdk::KeychainKind::Internal),
+                    );
+                    (
+                        Wallet::new(external, Some(internal), config.network, wallet_db, esplora)
+                            .context("Initializing wallet with xpriv derived from seed phrase")?,
+                        keychain,
+                    )
+                }
+            }
         }
         crate::config::WalletKey::Descriptor {
             ref external,

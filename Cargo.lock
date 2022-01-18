@@ -99,7 +99,7 @@ dependencies = [
 [[package]]
 name = "bdk"
 version = "0.14.1-dev"
-source = "git+https://github.com/llfourn/bdk?rev=616ea6f1ff5fc0bca5af4c54efbcae8254cc37a3#616ea6f1ff5fc0bca5af4c54efbcae8254cc37a3"
+source = "git+https://github.com/llfourn/bdk?rev=ed281f3f5702e4a68f37637962713dfa6665e1ce#ed281f3f5702e4a68f37637962713dfa6665e1ce"
 dependencies = [
  "async-trait",
  "bdk-macros",
@@ -760,7 +760,7 @@ dependencies = [
 [[package]]
 name = "miniscript"
 version = "6.0.1"
-source = "git+https://github.com/sanket1729/rust-miniscript.git?rev=f3c38b8cc04fed0a68f4d6074d8c30f6912d958f#f3c38b8cc04fed0a68f4d6074d8c30f6912d958f"
+source = "git+https://github.com/sanket1729/rust-miniscript.git?rev=8946f5c82fa15e0d59f1e28ef9ee627eb7942010#8946f5c82fa15e0d59f1e28ef9ee627eb7942010"
 dependencies = [
  "bitcoin",
  "serde",

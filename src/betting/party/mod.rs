@@ -20,8 +20,7 @@ use bdk::{
     },
     database::MemoryDatabase,
     descriptor::ExtendedDescriptor,
-    wallet::{AddressIndex, Wallet},
-    KeychainKind, SignOptions,
+    wallet::{AddressIndex, Wallet}, SignOptions,
 };
 use olivia_core::{Attestation, Outcome};
 use olivia_secp256k1::{
