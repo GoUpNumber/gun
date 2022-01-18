@@ -81,7 +81,7 @@ impl Signer for SDCardSigner {
             eprintln!("- {}", location.display());
         }
         eprintln!("Press enter once signed.");
-        let (file_name, contents) = loop {
+        let (signed_psbt_path, contents) = loop {
             let _ = std::io::stdin().read_line(&mut String::new());
             let mut file_contents = file_locations
                 .iter()
@@ -91,8 +91,8 @@ impl Signer for SDCardSigner {
                 .iter()
                 .find(|(_, file_content)| file_content.is_ok())
             {
-                Some((file_name, contents)) => {
-                    break (file_name.clone(), contents.as_ref().unwrap().clone())
+                Some((signed_psbt_path, contents)) => {
+                    break (signed_psbt_path.clone(), contents.as_ref().unwrap().clone())
                 }
                 None => eprintln!(
                     "Couldn't read any of the files: {}\nPress enter to try again.",
@@ -102,13 +102,19 @@ impl Signer for SDCardSigner {
         };
         let psbt_result = PartiallySignedTransaction::from_str(&contents.trim());
 
-        if let Err(e) = psbt_result {
-            eprintln!("Failed to parse PSBT file {}", file_name.display());
-            eprintln!("{}", e);
-            return Err(SignerError::UserCanceled);
-        };
-        *psbt = psbt_result.unwrap();
-        Ok(())
+        match psbt_result {
+            Err(e) => {
+                eprintln!("Failed to parse PSBT file {}", signed_psbt_path.display());
+                eprintln!("{}", e);
+                Err(SignerError::UserCanceled)
+            }
+            Ok(read_psbt) => {
+                let _ = std::fs::remove_file(psbt_file);
+                let _ = std::fs::remove_file(signed_psbt_path);
+                *psbt = read_psbt;
+                Ok(())
+            }
+        }
     }
 
     fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
