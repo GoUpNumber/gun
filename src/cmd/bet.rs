@@ -404,8 +404,10 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                         sanitize_str(&mut message);
                         eprintln!("This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", message);
                     }
-                    let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
+                    let mut validated_offer =
+                        party.validate_offer(id, offer, offer_public_key, rng)?;
                     if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet, "take", false)) {
+                        party.sign_validated_offer(&mut validated_offer)?;
                         let (output, txid) = cmd::decide_to_broadcast(
                             party.wallet().network(),
                             party.wallet().client(),
