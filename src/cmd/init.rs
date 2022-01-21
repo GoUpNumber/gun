@@ -47,36 +47,39 @@ pub enum InitOpt {
         /// The number of BIP39 seed words to use
         n_words: usize,
     },
-    /// Initialize using a wallet descriptor
+    /// Initialize using a output descriptor
+    ///
+    /// This option is intended for people who know what they are doing!
     Descriptor {
         #[structopt(flatten)]
         common_args: CommonArgs,
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
-        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
         #[structopt(long, parse(from_os_str))]
         psbt_output_dir: Option<PathBuf>,
-        /// Initialize the wallet from a descriptor
-        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66..mSXJj/0/*")]
+        /// The external descriptor for the wallet
+        #[structopt(name = "external-descriptor")]
         external: String,
-        /// Optional change descriptor
-        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66...mSXJj/1/*)")]
+        /// Optional internal (change) descriptor
+        #[structopt(name = "internal-descriptor")]
         internal: Option<String>,
     },
     /// Initialize using an extended public key descriptor.
     ///
-    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub6...a6" --psbt-output-dir ~/.gun/psbts
+    /// The descriptor must be in [masterfingerprint/hardened'/derivation'/path']xpub format e.g.
     ///
-    /// With descriptor in format [masterfingerprint/derivation'/path']xpub.
-    /// Unsigned PSBTs will be saved to a --psbt-output-dir for signing (default: $GUNDIR/psbts).
+    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
+    ///
+    /// gun will then derive p2wpkh external addresses from <xpub>/0/* and internal addresses from
+    /// <xpub>/1/* i.e. so the above example would be compliant with BIP84.
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
         common_args: CommonArgs,
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
-        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
+        /// [default: $GUNDIR/psbts].
         #[structopt(long, parse(from_os_str))]
         psbt_output_dir: Option<PathBuf>,
-        /// Initialize the wallet from a descriptor
+        /// the xpub descriptor
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
     },
@@ -96,7 +99,7 @@ pub enum InitOpt {
         /// Enter index 330 and press 1 to export to SD.
         /// Gun will use entropy from drv-hex-idx330.txt for secret randomness
         /// which means you may be able to recover funds engaged in protocols if you lose your gun database.
-        #[structopt(long, short)]
+        #[structopt(long)]
         import_entropy: bool,
     },
 }
