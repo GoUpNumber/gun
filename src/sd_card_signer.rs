@@ -95,7 +95,7 @@ impl Signer for SDCardSigner {
                     break (signed_psbt_path.clone(), contents.as_ref().unwrap().clone())
                 }
                 None => eprintln!(
-                    "Couldn't read any of the files: {}\nPress enter to try again.",
+                    "Couldn't read any of the files: {}\nDo you forget to insert and mount your sd card?\nPress enter to try again.",
                     file_contents.remove(0).1.unwrap_err()
                 ),
             }
