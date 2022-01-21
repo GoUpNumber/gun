@@ -53,7 +53,9 @@ pub enum InitOpt {
         #[structopt(long)]
         has_passphrase: bool,
     },
-    /// Initialize using a wallet descriptor
+    /// Initialize using a output descriptor
+    ///
+    /// This option is intended for people who know what they are doing!
     Descriptor {
         #[structopt(flatten)]
         common_args: CommonArgs,
@@ -62,18 +64,18 @@ pub enum InitOpt {
         /// If this is left unset the wallet will be watch-only.
         #[structopt(long, parse(from_os_str))]
         psbt_signer_dir: Option<PathBuf>,
-        /// Initialize the wallet from a descriptor
-        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66..mSXJj/0/*")]
+        /// The external descriptor for the wallet
+        #[structopt(name = "external-descriptor")]
         external: String,
-        /// Optional change descriptor
-        #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66...mSXJj/1/*)")]
+        /// Optional internal (change) descriptor
+        #[structopt(name = "internal-descriptor")]
         internal: Option<String>,
     },
     /// Initialize using an extended public key descriptor.
     ///
-    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub6...a6" --psbt-output-dir ~/.gun/psbts
+    /// The descriptor must be in [masterfingerprint/hardened'/derivation'/path']xpub format e.g.
     ///
-    /// With descriptor in format [masterfingerprint/derivation'/path']xpub.
+    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
@@ -83,7 +85,7 @@ pub enum InitOpt {
         /// If this is left unset the wallet will be watch-only.
         #[structopt(long, parse(from_os_str))]
         psbt_signer_dir: Option<PathBuf>,
-        /// Initialize the wallet from a descriptor
+        /// the xpub descriptor
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
     },
