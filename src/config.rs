@@ -79,9 +79,9 @@ impl Config {
         use Network::*;
         let url = match network {
             Bitcoin => "https://mempool.space/api",
-            Testnet => "https://blockstream.info/testnet/api",
+            Testnet => "https://mempool.space/testnet/api",
             Regtest => "http://localhost:3000",
-            Signet => unimplemented!("signet not supported yet!"),
+            Signet => "https://mempool.space/signet/api",
         };
 
         let blockchain = AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
