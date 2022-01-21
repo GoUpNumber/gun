@@ -13,6 +13,7 @@ use bdk::{
     miniscript::Segwitv0,
     Wallet,
 };
+use miniscript::{Descriptor, DescriptorPublicKey, TranslatePk1};
 use olivia_secp256k1::fun::hex;
 use serde::Deserialize;
 use std::{fs, io, path::PathBuf, str::FromStr};
@@ -309,14 +310,22 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             };
             let wallet_export = serde_json::from_str::<WalletExport>(&wallet_export_str)?;
 
-            let external = format!(
-                "wpkh([{}/84'/0'/0']{}/0/*)",
-                &wallet_export.xfp, &wallet_export.bip84.xpub
-            );
-            let internal = format!(
-                "wpkh([{}/84'/0'/0']{}/1/*)",
-                &wallet_export.xfp, &wallet_export.bip84.xpub
-            );
+            let external = set_network(
+                &format!(
+                    "wpkh([{}/84'/0'/0']{}/0/*)",
+                    &wallet_export.xfp, &wallet_export.bip84.xpub
+                ),
+                common_args.network,
+            )
+            .context("parsing BIP84 xpub")?;
+            let internal = set_network(
+                &format!(
+                    "wpkh([{}/84'/0'/0']{}/1/*)",
+                    &wallet_export.xfp, &wallet_export.bip84.xpub
+                ),
+                common_args.network,
+            )
+            .context("parsing BIP84 xpub")?;
 
             Config {
                 wallet_key: WalletKey::Descriptor {
@@ -336,4 +345,17 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
     )?;
 
     Ok(CmdOutput::None)
+}
+
+fn set_network(descriptor: &str, network: Network) -> anyhow::Result<String> {
+    let descriptor = Descriptor::<DescriptorPublicKey>::from_str(descriptor)?;
+    Ok(descriptor
+        .translate_pk1_infallible(|pk| {
+            let mut pk = pk.clone();
+            if let DescriptorPublicKey::XPub(xpub) = &mut pk {
+                xpub.xkey.network = network;
+            }
+            pk
+        })
+        .to_string())
 }
