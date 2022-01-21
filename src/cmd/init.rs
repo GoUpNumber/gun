@@ -24,8 +24,12 @@ pub enum NWords {}
 
 #[derive(Clone, Debug, StructOpt)]
 pub struct CommonArgs {
-    /// The network name (bitcoin|regtest|testnet)
-    #[structopt(long, default_value = "bitcoin", name = "bitcoin|regtest|testnet")]
+    /// The network name
+    #[structopt(
+        long,
+        default_value = "bitcoin",
+        name = "bitcoin|regtest|testnet|signet"
+    )]
     network: Network,
 }
 
