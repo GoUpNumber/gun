@@ -3,6 +3,7 @@ use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{Amount, Script},
     database::BatchDatabase,
+    wallet::coin_selection::LargestFirstCoinSelection,
     FeeRate,
 };
 use olivia_core::{OracleEvent, OracleId};
@@ -25,7 +26,10 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             ));
         }
 
-        let mut builder = self.wallet.build_tx();
+        let mut builder = self
+            .wallet
+            .build_tx()
+            .coin_selection(LargestFirstCoinSelection);
         // we use a 0 feerate because the offerer will pay the fee
         builder.fee_rate(FeeRate::from_sat_per_vb(0.0));
 

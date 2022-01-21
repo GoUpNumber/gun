@@ -5,7 +5,7 @@ use bdk::{
     bitcoin::Amount,
     database::BatchDatabase,
     miniscript::DescriptorTrait,
-    wallet::{tx_builder::TxOrdering, IsDust},
+    wallet::{coin_selection::LargestFirstCoinSelection, tx_builder::TxOrdering, IsDust},
     SignOptions,
 };
 use chacha20::cipher::StreamCipher;
@@ -51,7 +51,10 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             randomize,
         );
 
-        let mut builder = self.wallet.build_tx();
+        let mut builder = self
+            .wallet
+            .build_tx()
+            .coin_selection(LargestFirstCoinSelection);
         builder
             .ordering(TxOrdering::Bip69Lexicographic)
             .enable_rbf();
