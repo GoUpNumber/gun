@@ -60,8 +60,7 @@ pub enum FeeChoice {
 }
 
 pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
+    let config_file = wallet_dir.join("config.json");
 
     match config_file.exists() {
         true => {
@@ -119,14 +118,11 @@ pub fn read_input<V>(
 }
 
 pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
-    let mut seed_words_file = wallet_dir.to_path_buf();
-    seed_words_file.push("seed.txt");
-    seed_words_file
+    wallet_dir.join("seed.txt")
 }
 
 pub fn get_secret_randomness(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
-    let mut secret_randomness_file = wallet_dir.to_path_buf();
-    secret_randomness_file.push("secret_protocol_randomness");
+    let secret_randomness_file = wallet_dir.join("secret_protocol_randomness");
     let hex_randomness =
         fs::read_to_string(secret_randomness_file.clone()).context("loading secret randomness")?;
     let mut byte_randomness = [0u8; 64];
@@ -138,8 +134,7 @@ pub fn get_secret_randomness(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
 }
 
 pub fn load_bet_db(wallet_dir: &Path) -> anyhow::Result<BetDatabase> {
-    let mut db_file = wallet_dir.to_path_buf();
-    db_file.push("database.sled");
+    let db_file = wallet_dir.join("database.sled");
     let database = sled::open(db_file.to_str().unwrap())?;
     let bet_db = BetDatabase::new(database.open_tree("bets")?);
     Ok(bet_db)
@@ -172,8 +167,7 @@ pub fn load_wallet(
 
     let config = load_config(wallet_dir).context("loading configuration")?;
     let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
+        let db_file = wallet_dir.join("database.sled");
         sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
     };
 

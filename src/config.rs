@@ -44,9 +44,7 @@ pub enum VersionedConfig {
 
 impl From<ConfigV0> for Config {
     fn from(from: ConfigV0) -> Self {
-        let mut psbt_output_dir = PathBuf::new();
-        psbt_output_dir.push(&dirs::home_dir().unwrap());
-        psbt_output_dir.push("psbts");
+        let psbt_output_dir = dirs::home_dir().unwrap().join("psbts");
 
         Config {
             network: from.network,
@@ -89,9 +87,7 @@ impl Config {
             ..EsploraBlockchainConfig::new(url.into(), 10)
         });
 
-        let mut psbt_output_dir = PathBuf::new();
-        psbt_output_dir.push(&dirs::home_dir().unwrap());
-        psbt_output_dir.push("psbts");
+        let psbt_output_dir = dirs::home_dir().unwrap().join("psbts");
 
         Config {
             network,

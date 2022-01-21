@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use gun_wallet::cmd::{
     self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
 };
@@ -47,12 +48,12 @@ fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
     let sync = opt.sync;
 
-    let wallet_dir = opt.gun_dir.unwrap_or_else(|| {
-        let mut default_dir = PathBuf::new();
-        default_dir.push(&dirs::home_dir().unwrap());
-        default_dir.push(".gun");
-        default_dir
-    });
+    let wallet_dir = opt
+        .gun_dir
+        .or_else(|| Some(dirs::home_dir()?.join(".gun")))
+        .ok_or(anyhow!(
+            "unable to find home dir and no explicit gun directory was set"
+        ))?;
 
     if sync {
         use Commands::*;

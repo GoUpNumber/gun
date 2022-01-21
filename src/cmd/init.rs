@@ -119,15 +119,7 @@ fn create_psbt_dir(
     wallet_dir: &std::path::Path,
     psbt_output_dir: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
-    let psbt_output_dir = match psbt_output_dir {
-        Some(psbt_output_dir) => psbt_output_dir,
-        None => {
-            let mut psbt_output_dir = PathBuf::new();
-            psbt_output_dir.push(wallet_dir);
-            psbt_output_dir.push("psbts");
-            psbt_output_dir
-        }
-    };
+    let psbt_output_dir = psbt_output_dir.unwrap_or(wallet_dir.join("psbts"));
     if !psbt_output_dir.exists() {
         fs::create_dir_all(&psbt_output_dir)
             .with_context(|| format!("Creating PSBT dir {}", psbt_output_dir.display()))?;
@@ -141,8 +133,7 @@ fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> 
     rand::rngs::OsRng.fill_bytes(&mut random_bytes);
 
     let hex_randomness = hex::encode(&random_bytes);
-    let mut secret_file = wallet_dir.to_path_buf();
-    secret_file.push("secret_protocol_randomness");
+    let secret_file = wallet_dir.join("secret_protocol_randomness");
     fs::write(secret_file, hex_randomness)?;
     Ok(())
 }
@@ -157,8 +148,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
     std::fs::create_dir(&wallet_dir)?;
 
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
+    let config_file = wallet_dir.join("config.json");
 
     let config = match cmd {
         InitOpt::Seed {
@@ -268,8 +258,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             if !import_entropy {
                 create_secret_randomness(wallet_dir)?;
             } else {
-                let mut entropy_file = coldcard_sd_dir.to_path_buf();
-                entropy_file.push("drv-hex-idx330.txt");
+                let entropy_file = coldcard_sd_dir.as_path().join("drv-hex-idx330.txt");
                 let contents = match fs::read_to_string(entropy_file.clone()) {
                     Ok(contents) => contents,
                     Err(e) => {
@@ -294,13 +283,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     ));
                 }
 
-                let mut secret_file = wallet_dir.to_path_buf();
-                secret_file.push("secret_protocol_randomness");
+                let secret_file = wallet_dir.join("secret_protocol_randomness");
                 fs::write(secret_file, hex_entropy)?;
             };
 
-            let mut wallet_export_file = coldcard_sd_dir.clone();
-            wallet_export_file.push("coldcard-export.json");
+            let wallet_export_file = coldcard_sd_dir.as_path().join("coldcard-export.json");
             let wallet_export_str = match fs::read_to_string(wallet_export_file.clone()) {
                 Ok(contents) => contents,
                 Err(e) => {
