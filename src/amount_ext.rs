@@ -16,7 +16,7 @@ impl FromCliStr for Amount {
                 let value = String::from_str(&string[..=i])?;
                 Ok(Amount::from_str_in(&value, denom)?)
             }
-            None => Err(anyhow!("{} is not a Bitcoin amount")),
+            None => Err(anyhow!("'{}' is not a Bitcoin amount", string)),
         }
     }
 }

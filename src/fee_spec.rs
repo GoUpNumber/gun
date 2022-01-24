@@ -74,7 +74,7 @@ impl FromStr for FeeSpec {
             return Ok(FeeSpec::Height(in_blocks));
         }
 
-        return Err(anyhow!("{} is not a valid fee specification"));
+        Err(anyhow!("'{}' is not a valid fee specification", string))
     }
 }
 

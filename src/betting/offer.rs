@@ -47,7 +47,7 @@ impl Ciphertext {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_base2048_string(&self) -> String {
         crate::encode::serialize_base2048(self)
     }
 
@@ -55,17 +55,17 @@ impl Ciphertext {
         &self,
         pad_to: usize,
         pad_cipher: &mut impl StreamCipher,
-    ) -> (String, Option<usize>) {
+    ) -> (String, usize) {
         let mut bytes = crate::encode::serialize(self);
-        let mut overflow = None;
-        if bytes.len() < pad_to {
-            let mut padding = vec![0u8; pad_to - bytes.len()];
-            pad_cipher.apply_keystream(&mut padding);
-            bytes.append(&mut padding);
-        } else if bytes.len() > pad_to {
-            overflow = Some(bytes.len() - pad_to);
+        let mut overflow = 0;
+        match bytes.len() {
+            len if len < pad_to => {
+                let mut padding = vec![0u8; pad_to - len];
+                pad_cipher.apply_keystream(&mut padding);
+                bytes.append(&mut padding);
+            }
+            len => overflow = len - pad_to,
         }
-
         (base2048::encode(&bytes), overflow)
     }
 

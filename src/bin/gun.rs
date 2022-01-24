@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
 
     let res = match opt.command {
         Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt, sync),
-        Commands::Balance => cmd::run_balance(wallet_dir),
+        Commands::Balance => cmd::run_balance(wallet_dir, sync),
         Commands::Address(opt) => cmd::get_address(&wallet_dir, opt),
         Commands::Send(opt) => cmd::run_send(&wallet_dir, opt),
         Commands::Init(opt) => cmd::run_init(&wallet_dir, opt),
@@ -90,10 +90,8 @@ fn main() -> anyhow::Result<()> {
                 )
             } else if opt.tabs {
                 println!("{}", output.render_simple())
-            } else {
-                if let Some(output) = output.render() {
-                    println!("{}", output)
-                }
+            } else if let Some(output) = output.render() {
+                println!("{}", output)
             }
         }
         Err(e) => {

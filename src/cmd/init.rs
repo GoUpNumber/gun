@@ -19,6 +19,7 @@ pub enum NWords {}
 #[derive(Clone, Debug, StructOpt)]
 pub struct InitOpt {
     /// The network name (bitcoin|regtest|testnet)
+    #[structopt(name = "bitcoin|regtest|testnet")]
     network: Network,
     /// Existing BIP39 seed words file. Use "-" to read words from stdin.
     #[structopt(long, name = "FILE")]
@@ -29,7 +30,7 @@ pub struct InitOpt {
 }
 
 pub fn run_init(
-    wallet_dir: &PathBuf,
+    wallet_dir: &std::path::Path,
     InitOpt {
         network,
         n_words,
@@ -69,14 +70,14 @@ pub fn run_init(
     if wallet_dir.exists() {
         return Err(anyhow!(
             "wallet directory {} already exists -- delete it to create a new wallet",
-            wallet_dir.as_path().display()
+            wallet_dir.display()
         ));
     }
 
     std::fs::create_dir(&wallet_dir)?;
 
     {
-        let mut config_file = wallet_dir.clone();
+        let mut config_file = wallet_dir.to_path_buf();
         config_file.push("config.json");
 
         let config = Config::default_config(network);

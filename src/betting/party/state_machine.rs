@@ -30,7 +30,7 @@ where
         let bet_state = self
             .bet_db
             .get_entity(bet_id)?
-            .ok_or(anyhow!("Bet {} does not exist"))?;
+            .ok_or(anyhow!("Bet {} does not exist", bet_id))?;
         let blockchain = self.wallet.client();
 
         match bet_state {
@@ -140,7 +140,7 @@ where
                             update_bet! { self, bet_id,
                                BetState::Offered { bet, .. } => {
                                    let bet = bet.add_counterparty_sigs(tx.clone());
-                                   BetState::Included { bet: bet.clone(), height }
+                                   BetState::Included { bet, height }
                                }
                             }
                         }
@@ -159,7 +159,7 @@ where
                                    bet_spent_vin: vin_target,
                                    cancel_txid: txid,
                                    cancel_vin: vin,
-                                   height: height,
+                                   height,
                                    i_intend_cancel,
                                }
                             }
@@ -235,13 +235,13 @@ where
 
     fn try_get_outcome(&self, bet_id: BetId, bet: Bet) -> anyhow::Result<()> {
         let event_id = bet.oracle_event.event.id;
-        let event_url = reqwest::Url::parse(&format!("https://{}{}", bet.oracle_id, event_id))?;
+        let event_url = format!("https://{}{}", bet.oracle_id, event_id);
         let event_response = self
             .client
-            .get(event_url)
-            .send()?
-            .error_for_status()?
-            .json::<EventResponse>()?;
+            .get(&event_url)
+            .call()
+            .with_context(|| format!("trying to outcome for bet {} from {}", bet_id, event_url))?
+            .into_json::<EventResponse>()?;
 
         if let Some(attestation) = event_response.attestation {
             self.learn_outcome(bet_id, attestation)?;

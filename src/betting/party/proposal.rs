@@ -55,7 +55,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .unsigned_tx
             .input
             .iter()
-            .map(|txin| txin.previous_output.clone())
+            .map(|txin| txin.previous_output)
             .collect();
 
         let value = Amount::from_sat(
@@ -85,7 +85,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         };
 
         let mut proposal = Proposal {
-            oracle: oracle_id.clone(),
+            oracle: oracle_id,
             event_id: event_id.clone(),
             value,
             inputs: tx_inputs,
@@ -97,7 +97,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         proposal.public_key = keypair.public_key;
 
         let local_proposal = LocalProposal {
-            proposal: proposal.clone(),
+            proposal,
             oracle_event,
             change,
             tags: args.tags,

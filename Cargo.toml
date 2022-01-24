@@ -1,6 +1,6 @@
 [package]
 name = "gun_wallet"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["LLFourn <lloyd.fourn@gmail.com>"]
 edition = "2018"
 license = "0BSD"
@@ -9,8 +9,8 @@ license = "0BSD"
 
 [dependencies]
 dirs = "3.0"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "7cf457ac31a7b40efb31662c6470597b1340fb43", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
-# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
+#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
 serde_json = "1.0"
 olivia_core = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
 olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
@@ -25,8 +25,8 @@ thiserror = "1.0"
 structopt = "0.3"
 miniscript = { version = "6", features = ["serde"] }
 term-table = {  version = "1", default-features = false }
-reqwest = { version = "0.11", features = ["blocking"] }
-
+ureq = { version = "2", features = ["json"] }
+url = "2"
 
 [features]
 nightly = ["olivia_secp256k1/nightly"]
@@ -34,5 +34,5 @@ nightly = ["olivia_secp256k1/nightly"]
 
 [dev-dependencies]
 rand = "0.8"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "7cf457ac31a7b40efb31662c6470597b1340fb43", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
-# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
+#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }

@@ -10,7 +10,7 @@ use bdk::{
 use std::collections::HashMap;
 use structopt::StructOpt;
 
-pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
+pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput> {
     let party = load_party(&wallet_dir)?;
 
     let (in_bet, unclaimed) = party
@@ -54,8 +54,7 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
 
             if currently_used
                 .iter()
-                .find(|outpoint| local_utxo.outpoint == **outpoint)
-                .is_some()
+                .any(|outpoint| local_utxo.outpoint == *outpoint)
             {
                 (confirmed, unconfirmed, in_use + value)
             } else if is_confirmed {
@@ -68,6 +67,10 @@ pub fn run_balance(wallet_dir: PathBuf) -> anyhow::Result<CmdOutput> {
             }
         },
     );
+
+    if !sync && (confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO) {
+        eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date. i.e. run `gun -s balance` ");
+    }
 
     Ok(item! {
         "confirmed" => Cell::Amount(confirmed),
@@ -91,7 +94,10 @@ pub enum AddressOpt {
     Show { address: Address },
 }
 
-pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result<CmdOutput> {
+pub fn get_address(
+    wallet_dir: &std::path::Path,
+    addr_opt: AddressOpt,
+) -> anyhow::Result<CmdOutput> {
     match addr_opt {
         AddressOpt::New => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;
@@ -120,7 +126,7 @@ pub fn get_address(wallet_dir: &PathBuf, addr_opt: AddressOpt) -> anyhow::Result
                     .iter()
                     .take(index as usize + 1)
                     .map(|script| {
-                        let address = Address::from_script(&script, config.network).unwrap();
+                        let address = Address::from_script(script, config.network).unwrap();
                         let value = map
                             .get(script)
                             .map(|utxos| {
@@ -243,7 +249,7 @@ impl SpendOpt {
 
         let in_use = party.bet_db().currently_used_utxos(&[])?;
 
-        if !spend_in_use && in_use.len() > 0 {
+        if !spend_in_use && !in_use.is_empty() {
             eprintln!(
                 "note that {} utxos are not availble becuase they are in use",
                 in_use.len()
@@ -296,7 +302,7 @@ impl SpendOpt {
         Ok(output)
     }
 }
-pub fn run_send(wallet_dir: &PathBuf, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_send(wallet_dir: &std::path::Path, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
     let SendOpt {
         to,
         value,
@@ -319,7 +325,10 @@ pub enum TransactionOpt {
     Show { txid: Txid },
 }
 
-pub fn run_transaction_cmd(wallet_dir: &PathBuf, opt: TransactionOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_transaction_cmd(
+    wallet_dir: &std::path::Path,
+    opt: TransactionOpt,
+) -> anyhow::Result<CmdOutput> {
     use TransactionOpt::*;
     let (wallet, _, _, _) = load_wallet(wallet_dir)?;
 
@@ -393,10 +402,10 @@ pub enum UtxoOpt {
     Show { outpoint: OutPoint },
 }
 
-pub fn run_utxo_cmd(wallet_dir: &PathBuf, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
     match opt {
         UtxoOpt::List => {
-            let party = load_party(&wallet_dir)?;
+            let party = load_party(wallet_dir)?;
             let in_use_utxos = party.bet_db().currently_used_utxos(&[])?;
             let wallet = party.wallet();
             let rows = wallet
@@ -501,7 +510,7 @@ pub struct SplitOpt {
     spend_opt: SpendOpt,
 }
 
-pub fn run_split_cmd(wallet_dir: &PathBuf, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
     let SplitOpt {
         output_size,
         n,

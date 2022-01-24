@@ -31,7 +31,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let anticipated_attestations = oracle_event
-            .anticipate_attestations_olivia_v1(&oracle_info.oracle_keys.olivia_v1.ok_or(anyhow!("Oracle {} does not support olivia_v1"))?, 0)
+            .anticipate_attestations_olivia_v1(&oracle_info.oracle_keys.olivia_v1.ok_or(anyhow!("Oracle '{}' does not support olivia_v1", oracle_info.id))?, 0)
             .ok_or(anyhow!("Cannot make bet on {} since {} doesn't support olivia_v1 attestation for this event", event_id, oracle_info.id))?
             [..2]
             .try_into()
@@ -132,7 +132,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .output
             .iter()
             .enumerate()
-            .find(|(_i, txout)| &txout.script_pubkey == &output_script)
+            .find(|(_i, txout)| txout.script_pubkey == output_script)
             .expect("The bet output must be in there");
 
         let joint_output_value = Amount::from_sat(txout.value);
@@ -175,7 +175,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             psbt,
             my_input_indexes,
             vout: vout as u32,
-            joint_output: joint_output.clone(),
+            joint_output,
             oracle_id: oracle_info.id,
             oracle_event,
             local_value,
@@ -198,10 +198,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let encrypted_offer = Ciphertext::create(
             local_public_key,
             cipher,
-            Plaintext::Offerv1 {
-                offer: offer.clone(),
-                message,
-            },
+            Plaintext::Offerv1 { offer, message },
         );
         let bet_id = self.bet_db.insert_bet(BetState::Offered {
             bet: OfferedBet(bet),

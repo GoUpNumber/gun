@@ -187,12 +187,12 @@ impl BetDatabase {
                 for bet_id in bet_ids {
                     let key = VersionedKey::from(MapKey::Bet(*bet_id));
                     let key = key.to_bytes();
-                    let old_state =
-                        db.remove(key.clone())?
-                            .ok_or(ConflictableTransactionError::Abort(anyhow!(
-                                "bet {} does not exist",
-                                bet_id
-                            )))?;
+                    let old_state = db.remove(key.clone())?.ok_or_else(|| {
+                        ConflictableTransactionError::Abort(anyhow!(
+                            "bet {} does not exist",
+                            bet_id
+                        ))
+                    })?;
                     let old_state = serde_json::from_slice(&old_state[..])
                         .expect("it's in the DB so it should be deserializable");
                     let new_state = f(old_state, *bet_id, TxDb(db))

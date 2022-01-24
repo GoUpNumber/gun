@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, clippy::or_fun_call, clippy::vec_init_then_push)]
 
 use std::str::FromStr;
 
@@ -14,12 +14,11 @@ mod fee_spec;
 pub mod keychain;
 pub mod psbt_ext;
 pub use fee_spec::*;
-pub use reqwest;
 
 pub use chacha20::cipher;
 pub use olivia_core::chrono;
 pub use olivia_secp256k1::schnorr_fun::fun::{hex, rand_core};
-pub use reqwest::Url;
+pub use url::Url;
 
 #[derive(Clone, Debug)]
 pub enum ValueChoice {
@@ -44,8 +43,7 @@ impl FromStr for ValueChoice {
 pub(crate) fn placeholder_point(
 ) -> olivia_secp256k1::fun::Point<olivia_secp256k1::fun::marker::EvenY> {
     use olivia_secp256k1::fun::marker::*;
-    olivia_secp256k1::fun::G
-        .clone()
+    (*olivia_secp256k1::fun::G)
         .mark::<Normal>()
         .into_point_with_even_y()
         .0
