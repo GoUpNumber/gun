@@ -89,9 +89,65 @@ pub enum AddressOpt {
     /// First one that hasn't been used.
     LastUnused,
     /// List addresses
-    List,
+    List {
+        /// Show all addresses (internal & external)
+        #[structopt(long, short)]
+        all: bool,
+        /// Show only internal addresses
+        #[structopt(long, short)]
+        internal: bool,
+        /// Hide addresses with zero balance
+        #[structopt(long)]
+        hide_zeros: bool,
+    },
     /// Show details of an address
     Show { address: Address },
+}
+
+fn list_keychain_addresses(
+    wallet_dir: &Path,
+    config: Config,
+    keychain_kind: KeychainKind,
+    hide_zeros: bool,
+) -> anyhow::Result<Vec<Vec<Cell>>> {
+    let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
+    let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
+    let index = wallet_db.get_last_index(keychain_kind)?;
+    let map = index_utxos(&wallet_db)?;
+    let rows = match index {
+        Some(index) => scripts
+            .iter()
+            .take(index as usize + 1)
+            .filter_map(|script| {
+                let address = Address::from_script(script, config.network).unwrap();
+                let value = map
+                    .get(script)
+                    .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
+                    .unwrap_or(Amount::ZERO);
+
+                if hide_zeros && (value == Amount::ZERO) {
+                    return None;
+                }
+
+                let count = map.get(script).map(Vec::len).unwrap_or(0);
+                let keychain_name = match keychain_kind {
+                    KeychainKind::External => "external",
+                    KeychainKind::Internal => "internal",
+                }
+                .to_string();
+                Some(vec![
+                    Cell::String(address.to_string()),
+                    Cell::Amount(value),
+                    Cell::Int(count as u64),
+                    Cell::String(keychain_name),
+                ])
+            })
+            // newest should go first
+            .rev()
+            .collect(),
+        None => vec![],
+    };
+    Ok(rows)
 }
 
 pub fn get_address(
@@ -115,40 +171,29 @@ pub fn get_address(
                 other: vec![],
             })
         }
-        AddressOpt::List => {
-            let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
-            let scripts = wallet_db.iter_script_pubkeys(Some(KeychainKind::External))?;
+        AddressOpt::List {
+            internal,
+            hide_zeros,
+            all,
+        } => {
             let config = load_config(wallet_dir).context("loading config")?;
-            let index = wallet_db.get_last_index(KeychainKind::External)?;
-            let map = index_utxos(&wallet_db)?;
-            let rows = match index {
-                Some(index) => scripts
-                    .iter()
-                    .take(index as usize + 1)
-                    .map(|script| {
-                        let address = Address::from_script(script, config.network).unwrap();
-                        let value = map
-                            .get(script)
-                            .map(|utxos| {
-                                Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum())
-                            })
-                            .unwrap_or(Amount::ZERO);
+            let mut rows: Vec<Vec<Cell>> = Vec::new();
+            let header = vec!["address", "value", "utxos", "keychain"];
 
-                        let count = map.get(script).map(Vec::len).unwrap_or(0);
-
-                        vec![
-                            Cell::String(address.to_string()),
-                            Cell::Amount(value),
-                            Cell::Int(count as u64),
-                        ]
-                    })
-                    // newest should go first
-                    .rev()
-                    .collect(),
-                None => vec![],
+            let keychains = match (internal, all) {
+                (_, true) => vec![KeychainKind::External, KeychainKind::Internal],
+                (true, false) => vec![KeychainKind::Internal],
+                _ => vec![KeychainKind::External],
             };
 
-            Ok(CmdOutput::table(vec!["address", "value", "utxos"], rows))
+            for keychain in keychains {
+                let mut internal_rows =
+                    list_keychain_addresses(wallet_dir, config.clone(), keychain, hide_zeros)
+                        .expect("fetching addresses from wallet_db");
+                rows.append(&mut internal_rows);
+            }
+
+            Ok(CmdOutput::table(header, rows))
         }
         AddressOpt::Show { address } => {
             let (wallet, _, _, _) = load_wallet(wallet_dir)?;
