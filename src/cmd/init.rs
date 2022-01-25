@@ -1,17 +1,17 @@
 use crate::{
     cmd,
-    config::{Config, WalletKey},
+    config::{Config, DerivationBip, GunSigner},
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::Network,
+    bitcoin::{util::bip32::ExtendedPrivKey, Network},
     database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, WordCount},
         GeneratableKey, GeneratedKey,
     },
     miniscript::Segwitv0,
-    Wallet,
+    KeychainKind, Wallet,
 };
 use olivia_secp256k1::fun::hex;
 use serde::Deserialize;
@@ -74,7 +74,7 @@ pub enum InitOpt {
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
         /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
         #[structopt(long, parse(from_os_str))]
-        psbt_output_dir: Option<PathBuf>,
+        psbt_signer_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
@@ -162,7 +162,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             from_existing,
             n_words,
         } => {
-            let wallet_key = match from_existing {
+            let (sw_file, seed_words) = match from_existing {
                 Some(existing_words_file) => {
                     let seed_words = match existing_words_file.as_str() {
                         "-" => {
@@ -183,7 +183,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     Mnemonic::parse(&seed_words).context("parsing existing seedwords")?;
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
-                    WalletKey::SeedWordsFile {}
+                    (sw_file, seed_words)
                 }
                 None => {
                     let seed_words: GeneratedKey<_, Segwitv0> = Mnemonic::generate((
@@ -199,12 +199,52 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     let sw_file = cmd::get_seed_words_file(wallet_dir);
                     fs::write(sw_file.clone(), seed_words.clone())?;
                     eprintln!("Wrote seeds words to {}", sw_file.display());
-                    WalletKey::SeedWordsFile {}
+                    (sw_file, seed_words)
                 }
             };
+
+            let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
+                anyhow!(
+                    "parsing seed phrase in '{}' failed: {}",
+                    sw_file.as_path().display(),
+                    e
+                )
+            })?;
+
+            let seed_bytes = mnemonic.to_seed("");
+            // Create secret randomness from seed.
+            let hex_seed_bytes = hex::encode(&seed_bytes);
+            let mut secret_file = wallet_dir.to_path_buf();
+            secret_file.push("secret_protocol_randomness");
+            fs::write(secret_file, hex_seed_bytes)?;
+
+            let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+            let temp_wallet = Wallet::new_offline(
+                bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
+                Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
+                common_args.network,
+                MemoryDatabase::new(),
+            )
+            .context("Initializing wallet with xpriv derived from seed phrase")?;
+
+            let signers = vec![GunSigner::SeedWordsFile {
+                path: sw_file,
+                derivation: DerivationBip::Bip84,
+                has_passphrase: false,
+            }];
+
+            let external = temp_wallet
+                .get_descriptor_for_keychain(KeychainKind::External)
+                .to_string();
+            let internal = temp_wallet
+                .get_descriptor_for_keychain(KeychainKind::Internal)
+                .to_string();
+
             Config {
-                wallet_key,
-                ..Config::default_config(common_args.network)
+                descriptor_external: external.clone(),
+                descriptor_internal: Some(internal),
+                signers,
+                ..Config::default_config(common_args.network, external)
             }
         }
         InitOpt::Descriptor {
@@ -223,18 +263,21 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 MemoryDatabase::default(),
             )?;
 
+            let signers = vec![GunSigner::PsbtSdCard { path: psbt_dir }];
+
             Config {
-                wallet_key: WalletKey::Descriptor { external, internal },
-                psbt_output_dir: psbt_dir,
-                ..Config::default_config(common_args.network)
+                descriptor_external: external.clone(),
+                descriptor_internal: internal,
+                signers,
+                ..Config::default_config(common_args.network, external)
             }
         }
         InitOpt::XPub {
             common_args,
-            psbt_output_dir,
+            psbt_signer_dir,
             ref xpub,
         } => {
-            let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
+            let psbt_dir = create_psbt_dir(wallet_dir, psbt_signer_dir)?;
             create_secret_randomness(&wallet_dir)?;
             let external = format!("wpkh({}/0/*)", xpub);
             let internal = format!("wpkh({}/1/*)", xpub);
@@ -247,13 +290,13 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 MemoryDatabase::default(),
             )?;
 
+            let signers = vec![GunSigner::PsbtSdCard { path: psbt_dir }];
+
             Config {
-                wallet_key: WalletKey::Descriptor {
-                    external,
-                    internal: Some(internal),
-                },
-                psbt_output_dir: psbt_dir,
-                ..Config::default_config(common_args.network)
+                descriptor_external: external.clone(),
+                descriptor_internal: Some(internal),
+                signers,
+                ..Config::default_config(common_args.network, external)
             }
         }
         InitOpt::Coldcard {
@@ -317,14 +360,15 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 "wpkh([{}/84'/0'/0']{}/1/*)",
                 &wallet_export.xfp, &wallet_export.bip84.xpub
             );
+            let signers = vec![GunSigner::PsbtSdCard {
+                path: coldcard_sd_dir,
+            }];
 
             Config {
-                wallet_key: WalletKey::Descriptor {
-                    external,
-                    internal: Some(internal),
-                },
-                psbt_output_dir: coldcard_sd_dir,
-                ..Config::default_config(common_args.network)
+                descriptor_external: external.clone(),
+                descriptor_internal: Some(internal),
+                signers,
+                ..Config::default_config(common_args.network, external)
             }
         }
     };
