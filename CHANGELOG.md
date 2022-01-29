@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.6.0
+
+- Add support for signet
+- Add support for coldcard bip84
+
 ## v0.5.0
 
 - Upgrade to new bdk commit
