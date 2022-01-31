@@ -1,6 +1,6 @@
 mod init;
 mod oracle;
-use crate::{sd_card_signer::SDCardSigner, xkey_signer::XKeySigner};
+use crate::signers::{SDCardSigner, XKeySigner};
 mod wallet;
 use anyhow::Context;
 use bdk::{
