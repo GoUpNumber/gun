@@ -1,5 +1,5 @@
 use crate::{
-    cmd,
+    cmd::{self, read_yn},
     config::{Config, GunSigner},
 };
 use anyhow::{anyhow, Context};
@@ -45,6 +45,9 @@ pub enum InitOpt {
         #[structopt(long, default_value = "12", name = "[12|24]")]
         /// The number of BIP39 seed words to use
         n_words: usize,
+        /// Wallet has BIP39 passphrase
+        #[structopt(long)]
+        has_passphrase: bool,
     },
     /// Initialize using a wallet descriptor
     Descriptor {
@@ -142,6 +145,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             common_args,
             from_existing,
             n_words,
+            has_passphrase,
         } => {
             let (sw_file, seed_words) = match from_existing {
                 Some(existing_words_file) => {
@@ -192,7 +196,32 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 )
             })?;
 
-            let seed_bytes = mnemonic.to_seed("");
+            let passphrase = if has_passphrase {
+                loop {
+                    let mut passphrase = String::new();
+                    eprintln!("Please enter your wallet passphrase: ");
+                    let _ = std::io::stdin().read_line(&mut passphrase);
+                    passphrase = passphrase.trim().to_string();
+
+                    let mut passphrase_confirmation = String::new();
+                    eprintln!("Please confirm your wallet passphrase: ");
+                    let _ = std::io::stdin().read_line(&mut passphrase_confirmation);
+                    passphrase_confirmation = passphrase_confirmation.trim().to_string();
+
+                    if !passphrase.eq(&passphrase_confirmation) {
+                        eprintln!("Mismatching passphrases. Try again.\n")
+                    } else if read_yn(&format!(
+                        "Your wallet passphrase will be set as `{}`\nOk",
+                        passphrase
+                    )) {
+                        break passphrase;
+                    }
+                }
+            } else {
+                "".to_string()
+            };
+
+            let seed_bytes = mnemonic.to_seed(passphrase);
             // Create secret randomness from seed.
             let hex_seed_bytes = hex::encode(&seed_bytes);
             let mut secret_file = wallet_dir.to_path_buf();
@@ -211,7 +240,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
-                has_passphrase: false,
+                has_passphrase,
             }];
 
             let external = temp_wallet

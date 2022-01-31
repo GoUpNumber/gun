@@ -1,12 +1,16 @@
 use std::{path::PathBuf, str::FromStr};
 
+use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         secp256k1::{self, All, Secp256k1},
         util::{bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction},
         Network,
     },
+    database::MemoryDatabase,
+    keys::{bip39::Mnemonic, DerivableKey, ExtendedKey},
     wallet::signer::{Signer, SignerError, SignerId},
+    KeychainKind, Wallet,
 };
 use miniscript::bitcoin::{PrivateKey, PublicKey};
 
@@ -70,6 +74,48 @@ impl Signer for XKeySigner {
 
     fn id(&self, secp: &Secp256k1<All>) -> SignerId {
         SignerId::from(self.master_xkey.fingerprint(secp))
+    }
+}
+
+#[derive(Debug)]
+pub struct PwSeedSigner {
+    /// Seed Mnemonic (without passphrase)
+    pub mnemonic: Mnemonic,
+    /// Bitcoin network
+    pub network: Network,
+    /// The expected external wallet descriptor
+    pub correct_descriptor: String,
+}
+
+impl PwSeedSigner {
+    pub fn create_signer(self) -> anyhow::Result<XKeySigner> {
+        let mut passphrase = String::new();
+        eprintln!("Please enter your wallet passphrase: ");
+        let _ = std::io::stdin().read_line(&mut passphrase);
+        let full_seed = self.mnemonic.to_seed(passphrase);
+
+        let xkey: ExtendedKey = full_seed.into_extended_key().unwrap();
+        let xpriv = xkey.into_xprv(self.network).unwrap();
+
+        let temp_wallet = Wallet::new_offline(
+            bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
+            Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
+            self.network,
+            MemoryDatabase::new(),
+        )
+        .context("Initializing wallet with xpriv derived from seed phrase")?;
+
+        let external = temp_wallet
+            .get_descriptor_for_keychain(KeychainKind::External)
+            .to_string();
+
+        if self.correct_descriptor != external {
+            Err(anyhow!(
+                "Invalid passphrase, derived descriptor does not match."
+            ))
+        } else {
+            Ok(XKeySigner { master_xkey: xpriv })
+        }
     }
 }
 
