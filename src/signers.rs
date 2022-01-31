@@ -3,9 +3,13 @@ use std::{path::PathBuf, str::FromStr};
 use bdk::{
     bitcoin::{
         secp256k1::{self, All, Secp256k1},
-        util::{bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction},
+        util::{
+            bip32::{ExtendedPrivKey, Fingerprint},
+            psbt::PartiallySignedTransaction,
+        },
         Network,
     },
+    keys::{bip39::Mnemonic, DerivableKey, ExtendedKey},
     wallet::signer::{Signer, SignerError, SignerId},
 };
 use miniscript::bitcoin::{PrivateKey, PublicKey};
@@ -70,6 +74,56 @@ impl Signer for XKeySigner {
 
     fn id(&self, secp: &Secp256k1<All>) -> SignerId {
         SignerId::from(self.master_xkey.fingerprint(secp))
+    }
+}
+
+#[derive(Debug)]
+pub struct PwSeedSigner {
+    /// Seed Mnemonic (without passphrase)
+    pub mnemonic: Mnemonic,
+    /// Bitcoin network
+    pub network: Network,
+    /// The expected external wallet descriptor
+    pub master_fingerprint: Fingerprint,
+}
+
+impl Signer for PwSeedSigner {
+    fn sign(
+        &self,
+        psbt: &mut PartiallySignedTransaction,
+        input_index: Option<usize>,
+        secp: &Secp256k1<All>,
+    ) -> Result<(), SignerError> {
+        let master_xkey = loop {
+            let p = rpassword::prompt_password_stderr("Please enter your wallet passphrase: ");
+            let passphrase = match p {
+                Ok(passphrase) => passphrase,
+                Err(e) => {
+                    eprintln!("Failed to read in password: {}", e);
+                    return Err(SignerError::InvalidKey);
+                }
+            };
+            let full_seed = self.mnemonic.to_seed(passphrase);
+            let xkey: ExtendedKey = full_seed.into_extended_key().unwrap();
+            let master_xkey = xkey.into_xprv(self.network).unwrap();
+
+            if master_xkey.fingerprint(secp) != self.master_fingerprint {
+                eprintln!("Invalid passphrase, derived fingerprint does not match. Try again.\n");
+            } else {
+                break master_xkey;
+            }
+        };
+
+        let signer = XKeySigner { master_xkey };
+        signer.sign(psbt, input_index, secp)
+    }
+
+    fn sign_whole_tx(&self) -> bool {
+        false
+    }
+
+    fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
+        SignerId::from(self.master_fingerprint)
     }
 }
 

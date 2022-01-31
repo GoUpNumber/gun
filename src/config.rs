@@ -1,7 +1,11 @@
 use crate::hex;
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::bip32::ExtendedPrivKey, Network},
+    bitcoin::{
+        secp256k1::Secp256k1,
+        util::bip32::{ExtendedPrivKey, Fingerprint},
+        Network,
+    },
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
     database::MemoryDatabase,
     keys::bip39::Mnemonic,
@@ -28,6 +32,7 @@ pub enum GunSigner {
     SeedWordsFile {
         file_path: PathBuf,
         has_passphrase: bool,
+        master_fingerprint: Fingerprint,
     },
     PsbtSdCard {
         psbt_signer_dir: PathBuf,
@@ -82,10 +87,12 @@ impl ConfigV0 {
         };
 
         let xpriv = ExtendedPrivKey::new_master(self.network, &seed_bytes).unwrap();
+        let secp = Secp256k1::signing_only();
 
         let signers = vec![GunSigner::SeedWordsFile {
             file_path: old_seed_words_file,
             has_passphrase: false,
+            master_fingerprint: xpriv.fingerprint(&secp),
         }];
 
         let temp_wallet = Wallet::new_offline(
