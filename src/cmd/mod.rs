@@ -1,12 +1,11 @@
 mod init;
 mod oracle;
-use crate::sd_card_signer::SDCardSigner;
+use crate::{sd_card_signer::SDCardSigner, xkey_signer::XKeySigner};
 mod wallet;
 use anyhow::Context;
 use bdk::{
     bitcoin::{
         consensus::encode,
-        secp256k1::Secp256k1,
         util::{
             address::Payload,
             bip32::{DerivationPath, ExtendedPrivKey},
@@ -21,7 +20,6 @@ use bdk::{
     wallet::signer::SignerOrdering,
     KeychainKind, Wallet,
 };
-use miniscript::descriptor::{DescriptorXKey, Wildcard};
 use std::{str::FromStr, sync::Arc};
 
 pub use init::*;
@@ -202,8 +200,6 @@ pub fn load_wallet(
     )
     .context("Initializing wallet from descriptors")?;
 
-    let secp = Secp256k1::signing_only();
-
     for (i, signer) in config.signers.iter().enumerate() {
         use crate::config::GunSigner::*;
         let signer: Arc<dyn Signer> = match signer {
@@ -226,21 +222,19 @@ pub fn load_wallet(
                     )
                 })?;
                 let seed_bytes = mnemonic.to_seed("");
-                let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
+                let master_xpriv =
+                    ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
-                match derivation {
-                    DerivationBip::Bip84 => {
-                        let path = DerivationPath::from_str("m/84'/0'/0'").unwrap();
-                        let bip84_xpriv = xpriv.derive_priv(&secp, &path).unwrap();
-                        let descriptor_xkey = DescriptorXKey {
-                            origin: Some((xpriv.fingerprint(&secp), path.clone())),
-                            xkey: bip84_xpriv,
-                            derivation_path: path,
-                            wildcard: Wildcard::None,
-                        };
-                        Arc::new(descriptor_xkey)
-                    }
-                }
+                let path = match derivation {
+                    DerivationBip::Bip84 => DerivationPath::from_str("m/84'/0'/0'").unwrap(),
+                };
+
+                let descriptor_xkey = XKeySigner {
+                    path,
+                    parent_xkey: master_xpriv,
+                };
+
+                Arc::new(descriptor_xkey)
             }
         };
         wallet.add_signer(

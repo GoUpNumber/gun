@@ -219,6 +219,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             fs::write(secret_file, hex_seed_bytes)?;
 
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+
             let temp_wallet = Wallet::new_offline(
                 bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
                 Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
