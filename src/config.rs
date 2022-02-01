@@ -26,12 +26,11 @@ pub enum WalletKeyOld {
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum GunSigner {
     SeedWordsFile {
-        path: PathBuf,
-        derivation: DerivationBip,
+        file_path: PathBuf,
         has_passphrase: bool,
     },
     PsbtSdCard {
-        path: PathBuf,
+        psbt_signer_dir: PathBuf,
     },
 }
 
@@ -85,8 +84,7 @@ impl ConfigV0 {
         let xpriv = ExtendedPrivKey::new_master(self.network, &seed_bytes).unwrap();
 
         let signers = vec![GunSigner::SeedWordsFile {
-            path: old_seed_words_file,
-            derivation: DerivationBip::Bip84,
+            file_path: old_seed_words_file,
             has_passphrase: false,
         }];
 
