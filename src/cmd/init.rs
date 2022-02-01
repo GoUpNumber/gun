@@ -52,7 +52,7 @@ pub enum InitOpt {
         common_args: CommonArgs,
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
         /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
-        /// If you do not set a signer-dir, this will be a watch-only wallet.
+        /// If this is left unset the wallet will be watch-only.
         #[structopt(long, parse(from_os_str))]
         psbt_signer_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
@@ -67,7 +67,6 @@ pub enum InitOpt {
     /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub6...a6" --psbt-output-dir ~/.gun/psbts
     ///
     /// With descriptor in format [masterfingerprint/derivation'/path']xpub.
-    /// Unsigned PSBTs will be saved to a --psbt-output-dir for signing.
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
