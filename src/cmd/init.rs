@@ -1,5 +1,5 @@
 use crate::{
-    cmd::{self, read_yn},
+    cmd::{self},
     config::{Config, GunSigner},
 };
 use anyhow::{anyhow, Context};
@@ -197,23 +197,17 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             })?;
 
             let passphrase = if has_passphrase {
+                eprintln!("Warning: by using a passphrase you are mutating the secret derived from your seed words. \
+                If you lose or forget your seedphrase, you will lose access to your funds.");
                 loop {
-                    let mut passphrase = String::new();
-                    eprintln!("Please enter your wallet passphrase: ");
-                    let _ = std::io::stdin().read_line(&mut passphrase);
-                    passphrase = passphrase.trim().to_string();
-
-                    let mut passphrase_confirmation = String::new();
-                    eprintln!("Please confirm your wallet passphrase: ");
-                    let _ = std::io::stdin().read_line(&mut passphrase_confirmation);
-                    passphrase_confirmation = passphrase_confirmation.trim().to_string();
-
+                    let passphrase =
+                        rpassword::prompt_password_stderr("Please enter your wallet passphrase: ")?;
+                    let passphrase_confirmation = rpassword::prompt_password_stderr(
+                        "Please confirm your wallet passphrase: ",
+                    )?;
                     if !passphrase.eq(&passphrase_confirmation) {
                         eprintln!("Mismatching passphrases. Try again.\n")
-                    } else if read_yn(&format!(
-                        "Your wallet passphrase will be set as `{}`\nOk",
-                        passphrase
-                    )) {
+                    } else {
                         break passphrase;
                     }
                 }

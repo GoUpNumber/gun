@@ -94,23 +94,28 @@ impl Signer for PwSeedSigner {
         input_index: Option<usize>,
         secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
-        let mut passphrase = String::new();
-        eprintln!("Please enter your wallet passphrase: ");
-        let _ = std::io::stdin().read_line(&mut passphrase);
-        passphrase = passphrase.trim().to_string();
+        let master_xkey = loop {
+            let p = rpassword::prompt_password_stderr("Please enter your wallet passphrase: ");
+            let passphrase = match p {
+                Ok(passphrase) => passphrase,
+                Err(e) => {
+                    eprintln!("Failed to read in password: {}", e);
+                    return Err(SignerError::InvalidKey);
+                }
+            };
+            let full_seed = self.mnemonic.to_seed(passphrase);
+            let xkey: ExtendedKey = full_seed.into_extended_key().unwrap();
+            let master_xkey = xkey.into_xprv(self.network).unwrap();
 
-        let full_seed = self.mnemonic.to_seed(passphrase);
-        let xkey: ExtendedKey = full_seed.into_extended_key().unwrap();
-        let master_xkey = xkey.into_xprv(self.network).unwrap();
+            if master_xkey.fingerprint(secp) != self.master_fingerprint {
+                eprintln!("Invalid passphrase, derived fingerprint does not match. Try again.\n");
+            } else {
+                break master_xkey;
+            }
+        };
 
-        if master_xkey.fingerprint(secp) != self.master_fingerprint {
-            eprintln!("Invalid passphrase, derived fingerprint does not match.");
-            dbg!(master_xkey.fingerprint(secp), self.master_fingerprint);
-            Err(SignerError::InvalidKey)
-        } else {
-            let signer = XKeySigner { master_xkey };
-            signer.sign(psbt, input_index, secp)
-        }
+        let signer = XKeySigner { master_xkey };
+        signer.sign(psbt, input_index, secp)
     }
 
     fn sign_whole_tx(&self) -> bool {
