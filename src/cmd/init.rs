@@ -4,7 +4,12 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey, Network},
+    bitcoin::{
+        hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
+        secp256k1::Secp256k1,
+        util::bip32::{DerivationPath, ExtendedPrivKey},
+        Network,
+    },
     database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, WordCount},
@@ -217,10 +222,24 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let seed_bytes = mnemonic.to_seed(passphrase);
             // Create secret randomness from seed.
-            let hex_seed_bytes = hex::encode(&seed_bytes);
+            let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+            let secp = Secp256k1::signing_only();
+            let bip85_key = xpriv
+                .derive_priv(
+                    &secp,
+                    &DerivationPath::from_str("m/83696968'/128169'/64'/330'").unwrap(),
+                )
+                .unwrap();
+
+            let message = hex::decode(&format!("{}", bip85_key.private_key.display_secret()))?;
+            let mut engine = HmacEngine::<sha512::Hash>::new("bip-entropy-from-k".as_bytes());
+            engine.input(&message);
+            let hash = Hmac::<sha512::Hash>::from_engine(engine);
+
+            let hex_bip85_bytes = hash.to_string();
             let mut secret_file = wallet_dir.to_path_buf();
             secret_file.push("secret_protocol_randomness");
-            fs::write(secret_file, hex_seed_bytes)?;
+            fs::write(secret_file, hex_bip85_bytes)?;
 
             let secp = Secp256k1::signing_only();
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
