@@ -3,10 +3,7 @@ use std::{path::PathBuf, str::FromStr};
 use bdk::{
     bitcoin::{
         secp256k1::{self, All, Secp256k1},
-        util::{
-            bip32::{self, ChildNumber, DerivationPath, ExtendedPrivKey},
-            psbt::PartiallySignedTransaction,
-        },
+        util::{bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction},
         Network,
     },
     wallet::signer::{Signer, SignerError, SignerId},
@@ -17,10 +14,8 @@ use crate::cmd::{display_psbt, read_yn};
 
 #[derive(Debug)]
 pub struct XKeySigner {
-    /// The derivation path
-    pub path: bip32::DerivationPath,
     /// The extended key
-    pub parent_xkey: ExtendedPrivKey,
+    pub master_xkey: ExtendedPrivKey,
 }
 
 impl Signer for XKeySigner {
@@ -30,8 +25,7 @@ impl Signer for XKeySigner {
         input_index: Option<usize>,
         secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
-        let xkey = self.parent_xkey.derive_priv(secp, &self.path).unwrap();
-        let signer_fingerprint = self.parent_xkey.fingerprint(secp);
+        let signer_fingerprint = self.master_xkey.fingerprint(secp);
         let input_index = input_index.unwrap();
         if input_index >= psbt.inputs.len() {
             return Err(SignerError::InputIndexOutOfRange);
@@ -43,36 +37,17 @@ impl Signer for XKeySigner {
             return Ok(());
         }
 
-        let child_matches = psbt.inputs[input_index].bip32_derivation.iter().find(
-            |(_, &(fingerprint, ref path))| {
-                if fingerprint != signer_fingerprint {
-                    return false;
-                }
-                if self.path.len() > path.len() {
-                    return false;
-                }
-                for (i, child_n) in self.path.into_iter().enumerate() {
-                    if path[i] != *child_n {
-                        return false;
-                    }
-                }
-                true
-            },
-        );
+        let child_matches = psbt.inputs[input_index]
+            .bip32_derivation
+            .iter()
+            .find(|(_, &(fingerprint, _))| fingerprint == signer_fingerprint);
 
         let (public_key, full_path) = match child_matches {
             Some((pk, (_, full_path))) => (pk, full_path.clone()),
             None => return Ok(()),
         };
 
-        let deriv_path = DerivationPath::from(
-            full_path
-                .into_iter()
-                .cloned()
-                .skip(self.path.len())
-                .collect::<Vec<ChildNumber>>(),
-        );
-        let derived_key = xkey.derive_priv(secp, &deriv_path).unwrap();
+        let derived_key = self.master_xkey.derive_priv(secp, &full_path).unwrap();
 
         if &PublicKey::new(secp256k1::PublicKey::from_secret_key(
             secp,
@@ -94,20 +69,20 @@ impl Signer for XKeySigner {
     }
 
     fn id(&self, secp: &Secp256k1<All>) -> SignerId {
-        SignerId::from(self.parent_xkey.fingerprint(secp))
+        SignerId::from(self.master_xkey.fingerprint(secp))
     }
 }
 
 #[derive(Debug)]
 pub struct SDCardSigner {
-    psbt_output_dir: PathBuf,
+    psbt_signer_dir: PathBuf,
     network: Network,
 }
 
 impl SDCardSigner {
-    pub fn create(psbt_output_dir: PathBuf, network: Network) -> Self {
+    pub fn create(psbt_signer_dir: PathBuf, network: Network) -> Self {
         SDCardSigner {
-            psbt_output_dir,
+            psbt_signer_dir,
             network,
         }
     }
@@ -129,14 +104,14 @@ impl Signer for SDCardSigner {
 
         let txid = psbt.clone().extract_tx().txid();
         let psbt_file = self
-            .psbt_output_dir
+            .psbt_signer_dir
             .as_path()
             .join(format!("{}.psbt", txid.to_string()));
         loop {
-            if !self.psbt_output_dir.exists() {
+            if !self.psbt_signer_dir.exists() {
                 eprintln!(
                     "psbt-output-dir '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
-                    self.psbt_output_dir.display()
+                    self.psbt_signer_dir.display()
                 );
                 let _ = std::io::stdin().read_line(&mut String::new());
             } else if let Err(e) = std::fs::write(&psbt_file, psbt.to_string()) {
@@ -154,11 +129,11 @@ impl Signer for SDCardSigner {
         eprintln!("Wrote PSBT to {}", psbt_file.display());
 
         let file_locations = [
-            self.psbt_output_dir
+            self.psbt_signer_dir
                 .as_path()
                 .join(format!("{}-signed.psbt", txid))
                 .to_path_buf(),
-            self.psbt_output_dir
+            self.psbt_signer_dir
                 .as_path()
                 .join(format!("{}-part.psbt", txid))
                 .to_path_buf(),

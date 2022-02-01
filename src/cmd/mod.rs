@@ -1,15 +1,16 @@
 mod init;
 mod oracle;
-use crate::signers::{SDCardSigner, XKeySigner};
+use crate::{
+    config::GunSigner,
+    signers::{SDCardSigner, XKeySigner},
+};
 mod wallet;
 use anyhow::Context;
 use bdk::{
     bitcoin::{
         consensus::encode,
         util::{
-            address::Payload,
-            bip32::{DerivationPath, ExtendedPrivKey},
-            psbt::PartiallySignedTransaction as Psbt,
+            address::Payload, bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction as Psbt,
         },
         Address, Amount, Network, Txid,
     },
@@ -20,7 +21,7 @@ use bdk::{
     wallet::signer::SignerOrdering,
     KeychainKind, Wallet,
 };
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 pub use init::*;
 pub mod bet;
@@ -32,7 +33,7 @@ pub use wallet::*;
 use crate::{
     betting::{BetDatabase, Party},
     chrono::NaiveDateTime,
-    config::{Config, ConfigV0, DerivationBip, VersionedConfig},
+    config::{Config, ConfigV0, VersionedConfig},
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     FeeSpec, ValueChoice,
@@ -201,23 +202,25 @@ pub fn load_wallet(
     .context("Initializing wallet from descriptors")?;
 
     for (i, signer) in config.signers.iter().enumerate() {
-        use crate::config::GunSigner::*;
         let signer: Arc<dyn Signer> = match signer {
-            PsbtSdCard { path } => Arc::new(SDCardSigner::create(path.to_owned(), config.network)),
-            SeedWordsFile {
-                path,
-                derivation,
+            GunSigner::PsbtSdCard { psbt_signer_dir } => Arc::new(SDCardSigner::create(
+                psbt_signer_dir.to_owned(),
+                config.network,
+            )),
+            GunSigner::SeedWordsFile {
+                file_path,
                 has_passphrase,
             } => {
                 if *has_passphrase {
                     todo!();
                 }
 
-                let seed_words = fs::read_to_string(path.clone()).context("loading seed words")?;
+                let seed_words =
+                    fs::read_to_string(file_path.clone()).context("loading seed words")?;
                 let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
                     anyhow!(
                         "parsing seed phrase in '{}' failed: {}",
-                        path.as_path().display(),
+                        file_path.as_path().display(),
                         e
                     )
                 })?;
@@ -225,16 +228,9 @@ pub fn load_wallet(
                 let master_xpriv =
                     ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
-                let path = match derivation {
-                    DerivationBip::Bip84 => DerivationPath::from_str("m/84'/0'/0'").unwrap(),
-                };
-
-                let descriptor_xkey = XKeySigner {
-                    path,
-                    parent_xkey: master_xpriv,
-                };
-
-                Arc::new(descriptor_xkey)
+                Arc::new(XKeySigner {
+                    master_xkey: master_xpriv,
+                })
             }
         };
         wallet.add_signer(

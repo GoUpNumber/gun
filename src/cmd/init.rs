@@ -1,6 +1,6 @@
 use crate::{
     cmd,
-    config::{Config, DerivationBip, GunSigner},
+    config::{Config, GunSigner},
 };
 use anyhow::{anyhow, Context};
 use bdk::{
@@ -52,8 +52,9 @@ pub enum InitOpt {
         common_args: CommonArgs,
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
         /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
+        /// If you do not set a signer-dir, this will be a watch-only wallet.
         #[structopt(long, parse(from_os_str))]
-        psbt_output_dir: Option<PathBuf>,
+        psbt_signer_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
         #[structopt(name = "wpkh([AAB893A5/84'/0'/0']xpub66..mSXJj/0/*")]
         external: String,
@@ -66,13 +67,14 @@ pub enum InitOpt {
     /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub6...a6" --psbt-output-dir ~/.gun/psbts
     ///
     /// With descriptor in format [masterfingerprint/derivation'/path']xpub.
-    /// Unsigned PSBTs will be saved to a --psbt-output-dir for signing (default: $GUNDIR/psbts).
+    /// Unsigned PSBTs will be saved to a --psbt-output-dir for signing.
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
         common_args: CommonArgs,
         /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
         /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
+        /// If you do not set a signer-dir, this will be a watch-only wallet.
         #[structopt(long, parse(from_os_str))]
         psbt_signer_dir: Option<PathBuf>,
         /// Initialize the wallet from a descriptor
@@ -109,26 +111,6 @@ struct WalletExport {
 #[derive(Deserialize)]
 struct BIP84Export {
     xpub: String,
-}
-
-fn create_psbt_dir(
-    wallet_dir: &std::path::Path,
-    psbt_output_dir: Option<PathBuf>,
-) -> anyhow::Result<PathBuf> {
-    let psbt_output_dir = match psbt_output_dir {
-        Some(psbt_output_dir) => psbt_output_dir,
-        None => {
-            let mut psbt_output_dir = PathBuf::new();
-            psbt_output_dir.push(wallet_dir);
-            psbt_output_dir.push("psbts");
-            psbt_output_dir
-        }
-    };
-    if !psbt_output_dir.exists() {
-        fs::create_dir_all(&psbt_output_dir)
-            .with_context(|| format!("Creating PSBT dir {}", psbt_output_dir.display()))?;
-    }
-    Ok(psbt_output_dir.to_owned())
 }
 
 fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> {
@@ -229,8 +211,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             .context("Initializing wallet with xpriv derived from seed phrase")?;
 
             let signers = vec![GunSigner::SeedWordsFile {
-                path: sw_file,
-                derivation: DerivationBip::Bip84,
+                file_path: sw_file,
                 has_passphrase: false,
             }];
 
@@ -250,11 +231,10 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         }
         InitOpt::Descriptor {
             common_args,
-            psbt_output_dir,
+            psbt_signer_dir,
             external,
             internal,
         } => {
-            let psbt_dir = create_psbt_dir(wallet_dir, psbt_output_dir)?;
             create_secret_randomness(&wallet_dir)?;
             // Check descriptors are valid
             let _ = Wallet::new_offline(
@@ -264,13 +244,20 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 MemoryDatabase::default(),
             )?;
 
-            let signers = vec![GunSigner::PsbtSdCard { path: psbt_dir }];
+            let signers = match psbt_signer_dir {
+                Some(psbt_signer_dir) => {
+                    vec![GunSigner::PsbtSdCard { psbt_signer_dir }]
+                }
+                None => {
+                    vec![]
+                }
+            };
 
             Config {
                 descriptor_external: external.clone(),
                 descriptor_internal: internal,
                 signers,
-                ..Config::default_config(common_args.network, external)
+                ..Config::default_config(common_args.network, external.clone())
             }
         }
         InitOpt::XPub {
@@ -278,7 +265,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             psbt_signer_dir,
             ref xpub,
         } => {
-            let psbt_dir = create_psbt_dir(wallet_dir, psbt_signer_dir)?;
             create_secret_randomness(&wallet_dir)?;
             let external = format!("wpkh({}/0/*)", xpub);
             let internal = format!("wpkh({}/1/*)", xpub);
@@ -291,7 +277,14 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 MemoryDatabase::default(),
             )?;
 
-            let signers = vec![GunSigner::PsbtSdCard { path: psbt_dir }];
+            let signers = match psbt_signer_dir {
+                Some(psbt_signer_dir) => {
+                    vec![GunSigner::PsbtSdCard { psbt_signer_dir }]
+                }
+                None => {
+                    vec![]
+                }
+            };
 
             Config {
                 descriptor_external: external.clone(),
@@ -362,7 +355,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 &wallet_export.xfp, &wallet_export.bip84.xpub
             );
             let signers = vec![GunSigner::PsbtSdCard {
-                path: coldcard_sd_dir,
+                psbt_signer_dir: coldcard_sd_dir,
             }];
 
             Config {
