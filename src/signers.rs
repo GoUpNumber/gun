@@ -1,16 +1,16 @@
 use std::{path::PathBuf, str::FromStr};
 
-use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         secp256k1::{self, All, Secp256k1},
-        util::{bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction},
+        util::{
+            bip32::{ExtendedPrivKey, Fingerprint},
+            psbt::PartiallySignedTransaction,
+        },
         Network,
     },
-    database::MemoryDatabase,
     keys::{bip39::Mnemonic, DerivableKey, ExtendedKey},
     wallet::signer::{Signer, SignerError, SignerId},
-    KeychainKind, Wallet,
 };
 use miniscript::bitcoin::{PrivateKey, PublicKey};
 
@@ -84,38 +84,41 @@ pub struct PwSeedSigner {
     /// Bitcoin network
     pub network: Network,
     /// The expected external wallet descriptor
-    pub correct_descriptor: String,
+    pub master_fingerprint: Fingerprint,
 }
 
-impl PwSeedSigner {
-    pub fn create_signer(self) -> anyhow::Result<XKeySigner> {
+impl Signer for PwSeedSigner {
+    fn sign(
+        &self,
+        psbt: &mut PartiallySignedTransaction,
+        input_index: Option<usize>,
+        secp: &Secp256k1<All>,
+    ) -> Result<(), SignerError> {
         let mut passphrase = String::new();
         eprintln!("Please enter your wallet passphrase: ");
         let _ = std::io::stdin().read_line(&mut passphrase);
+        passphrase = passphrase.trim().to_string();
+
         let full_seed = self.mnemonic.to_seed(passphrase);
-
         let xkey: ExtendedKey = full_seed.into_extended_key().unwrap();
-        let xpriv = xkey.into_xprv(self.network).unwrap();
+        let master_xkey = xkey.into_xprv(self.network).unwrap();
 
-        let temp_wallet = Wallet::new_offline(
-            bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
-            Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
-            self.network,
-            MemoryDatabase::new(),
-        )
-        .context("Initializing wallet with xpriv derived from seed phrase")?;
-
-        let external = temp_wallet
-            .get_descriptor_for_keychain(KeychainKind::External)
-            .to_string();
-
-        if self.correct_descriptor != external {
-            Err(anyhow!(
-                "Invalid passphrase, derived descriptor does not match."
-            ))
+        if master_xkey.fingerprint(secp) != self.master_fingerprint {
+            eprintln!("Invalid passphrase, derived fingerprint does not match.");
+            dbg!(master_xkey.fingerprint(secp), self.master_fingerprint);
+            Err(SignerError::InvalidKey)
         } else {
-            Ok(XKeySigner { master_xkey: xpriv })
+            let signer = XKeySigner { master_xkey };
+            signer.sign(psbt, input_index, secp)
         }
+    }
+
+    fn sign_whole_tx(&self) -> bool {
+        false
+    }
+
+    fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
+        SignerId::from(self.master_fingerprint)
     }
 }
 

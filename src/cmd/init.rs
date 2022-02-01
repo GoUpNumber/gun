@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::bip32::ExtendedPrivKey, Network},
+    bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey, Network},
     database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, WordCount},
@@ -228,7 +228,9 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             secret_file.push("secret_protocol_randomness");
             fs::write(secret_file, hex_seed_bytes)?;
 
+            let secp = Secp256k1::signing_only();
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+            let master_fingerprint = xpriv.fingerprint(&secp);
 
             let temp_wallet = Wallet::new_offline(
                 bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
@@ -241,6 +243,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
                 has_passphrase,
+                master_fingerprint,
             }];
 
             let external = temp_wallet
