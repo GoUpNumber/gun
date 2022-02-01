@@ -1,4 +1,5 @@
 use crate::{
+    bip85::get_bip85_bytes,
     cmd::{self},
     config::{Config, GunSigner},
 };
@@ -121,8 +122,7 @@ fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> 
     rand::rngs::OsRng.fill_bytes(&mut random_bytes);
 
     let hex_randomness = hex::encode(&random_bytes);
-    let mut secret_file = wallet_dir.to_path_buf();
-    secret_file.push("secret_protocol_randomness");
+    let secret_file = wallet_dir.join("secret_protocol_randomness");
     fs::write(secret_file, hex_randomness)?;
     Ok(())
 }
@@ -216,14 +216,13 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             };
 
             let seed_bytes = mnemonic.to_seed(passphrase);
-            // Create secret randomness from seed.
-            let hex_seed_bytes = hex::encode(&seed_bytes);
-            let mut secret_file = wallet_dir.to_path_buf();
-            secret_file.push("secret_protocol_randomness");
-            fs::write(secret_file, hex_seed_bytes)?;
+            let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
 
             let secp = Secp256k1::signing_only();
-            let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, &secp);
+            let secret_file = wallet_dir.join("secret_protocol_randomness");
+            fs::write(secret_file, hex::encode(&bip85_bytes))?;
+
             let master_fingerprint = xpriv.fingerprint(&secp);
 
             let temp_wallet = Wallet::new_offline(
@@ -236,8 +235,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
-                has_passphrase,
-                master_fingerprint,
+                passphrase_fingerprint: if has_passphrase {
+                    Some(master_fingerprint)
+                } else {
+                    None
+                },
             }];
 
             let external = temp_wallet

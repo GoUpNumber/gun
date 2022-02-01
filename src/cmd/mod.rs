@@ -209,8 +209,7 @@ pub fn load_wallet(
             )),
             GunSigner::SeedWordsFile {
                 file_path,
-                has_passphrase,
-                master_fingerprint,
+                passphrase_fingerprint,
             } => {
                 let seed_words =
                     fs::read_to_string(file_path.clone()).context("loading seed words")?;
@@ -226,16 +225,15 @@ pub fn load_wallet(
                 let master_xpriv =
                     ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
-                if !has_passphrase {
-                    Arc::new(XKeySigner {
-                        master_xkey: master_xpriv,
-                    })
-                } else {
-                    Arc::new(PwSeedSigner {
+                match passphrase_fingerprint {
+                    Some(fingerprint) => Arc::new(PwSeedSigner {
                         mnemonic,
                         network: config.network,
-                        master_fingerprint: *master_fingerprint,
-                    })
+                        master_fingerprint: *fingerprint,
+                    }),
+                    None => Arc::new(XKeySigner {
+                        master_xkey: master_xpriv,
+                    }),
                 }
             }
         };
