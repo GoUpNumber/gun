@@ -126,8 +126,7 @@ fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> 
     rand::rngs::OsRng.fill_bytes(&mut random_bytes);
 
     let hex_randomness = hex::encode(&random_bytes);
-    let mut secret_file = wallet_dir.to_path_buf();
-    secret_file.push("secret_protocol_randomness");
+    let secret_file = wallet_dir.join("secret_protocol_randomness");
     fs::write(secret_file, hex_randomness)?;
     Ok(())
 }
@@ -237,8 +236,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let hash = Hmac::<sha512::Hash>::from_engine(engine);
 
             let hex_bip85_bytes = hash.to_string();
-            let mut secret_file = wallet_dir.to_path_buf();
-            secret_file.push("secret_protocol_randomness");
+            let secret_file = wallet_dir.join("secret_protocol_randomness");
             fs::write(secret_file, hex_bip85_bytes)?;
 
             let secp = Secp256k1::signing_only();
