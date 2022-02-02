@@ -235,8 +235,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
-                has_passphrase,
-                master_fingerprint,
+                passphrase_fingerprint: if has_passphrase {
+                    Some(master_fingerprint)
+                } else {
+                    None
+                },
             }];
 
             let external = temp_wallet
