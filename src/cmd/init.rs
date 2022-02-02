@@ -226,7 +226,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let bip85_key = xpriv
                 .derive_priv(
                     &secp,
-                    &DerivationPath::from_str("m/83696968'/128169'/64'/330'").unwrap(),
+                    &DerivationPath::from_str("m/83696968'/128169'/64'/0'").unwrap(),
                 )
                 .unwrap();
 
