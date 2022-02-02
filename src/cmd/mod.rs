@@ -1,6 +1,9 @@
 mod init;
 mod oracle;
-use crate::sd_card_signer::SDCardSigner;
+use crate::{
+    config::GunSigner,
+    signers::{SDCardSigner, XKeySigner},
+};
 mod wallet;
 use anyhow::Context;
 use bdk::{
@@ -13,6 +16,7 @@ use bdk::{
     },
     blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
+    signer::Signer,
     sled,
     wallet::signer::SignerOrdering,
     KeychainKind, Wallet,
@@ -67,7 +71,7 @@ pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
         true => {
             let json_config = fs::read_to_string(config_file.clone())?;
             Ok(match serde_json::from_str::<ConfigV0>(&json_config) {
-                Ok(configv0) => configv0.into(),
+                Ok(configv0) => configv0.into_v1(wallet_dir)?,
                 Err(_) => serde_json::from_str::<VersionedConfig>(&json_config)?.into(),
             })
         }
@@ -187,59 +191,58 @@ pub fn load_wallet(
         _ => return Err(anyhow!("At the moment only esplora is supported")),
     };
 
-    let (wallet, keychain) = match config.wallet_key {
-        crate::config::WalletKey::SeedWordsFile { .. } => {
-            let sw_file = get_seed_words_file(wallet_dir);
-            let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
-            let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
-                anyhow!(
-                    "parsing seed phrase in '{}' failed: {}",
-                    sw_file.as_path().display(),
-                    e
-                )
-            })?;
-            let seed_bytes = mnemonic.to_seed("");
-            let xpriv = ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
-            let keychain = Keychain::new(seed_bytes);
+    let secret_randomness = get_secret_randomness(&wallet_dir)?;
+    let mut wallet = Wallet::new(
+        &config.descriptor_external,
+        config.descriptor_internal.as_ref(),
+        config.network,
+        wallet_db,
+        esplora,
+    )
+    .context("Initializing wallet from descriptors")?;
 
-            (
-                Wallet::new(
-                    bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
-                    Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
-                    config.network,
-                    wallet_db,
-                    esplora,
-                )
-                .context("Initializing wallet with xpriv derived from seed phrase")?,
-                keychain,
-            )
-        }
-        crate::config::WalletKey::Descriptor {
-            ref external,
-            ref internal,
-        } => {
-            let secret_randomness = get_secret_randomness(&wallet_dir)?;
-            let mut wallet = Wallet::new(
-                external,
-                internal.as_ref(),
+    for (i, signer) in config.signers.iter().enumerate() {
+        let signer: Arc<dyn Signer> = match signer {
+            GunSigner::PsbtSdCard { psbt_signer_dir } => Arc::new(SDCardSigner::create(
+                psbt_signer_dir.to_owned(),
                 config.network,
-                wallet_db,
-                esplora,
-            )
-            .context("Initializing wallet from descriptors")?;
-            let signer = SDCardSigner::create(config.psbt_output_dir.clone(), config.network);
-            wallet.add_signer(
-                KeychainKind::External, //NOTE: will sign internal inputs as well!
-                SignerOrdering(100),
-                Arc::new(signer),
-            );
-            (wallet, Keychain::new(secret_randomness))
-        }
-    };
+            )),
+            GunSigner::SeedWordsFile {
+                file_path,
+                has_passphrase,
+            } => {
+                if *has_passphrase {
+                    todo!();
+                }
+
+                let seed_words =
+                    fs::read_to_string(file_path.clone()).context("loading seed words")?;
+                let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
+                    anyhow!(
+                        "parsing seed phrase in '{}' failed: {}",
+                        file_path.as_path().display(),
+                        e
+                    )
+                })?;
+                let seed_bytes = mnemonic.to_seed("");
+                let master_xpriv =
+                    ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
+
+                Arc::new(XKeySigner {
+                    master_xkey: master_xpriv,
+                })
+            }
+        };
+        wallet.add_signer(
+            KeychainKind::External, //NOTE: will sign internal inputs as well!
+            SignerOrdering(i),
+            signer,
+        );
+    }
 
     let bet_db = BetDatabase::new(database.open_tree("bets").context("opening bets tree")?);
 
-    Ok((wallet, bet_db, keychain, config))
+    Ok((wallet, bet_db, Keychain::new(secret_randomness), config))
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
