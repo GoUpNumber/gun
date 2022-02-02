@@ -5,11 +5,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{
-        secp256k1::Secp256k1,
-        util::bip32::{DerivationPath, ExtendedPrivKey},
-        Network,
-    },
+    bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey, Network},
     database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, WordCount},
@@ -222,10 +218,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let seed_bytes = mnemonic.to_seed(passphrase);
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
 
-            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(
-                xpriv,
-                DerivationPath::from_str("m/83696968'/128169'/64'/330'").unwrap(),
-            );
+            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, 0);
             let secret_file = wallet_dir.join("secret_protocol_randomness");
             fs::write(secret_file, hex::encode(&bip85_bytes))?;
 
