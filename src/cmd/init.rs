@@ -218,11 +218,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let seed_bytes = mnemonic.to_seed(passphrase);
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
 
-            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, 0);
+            let secp = Secp256k1::signing_only();
+            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, &secp);
             let secret_file = wallet_dir.join("secret_protocol_randomness");
             fs::write(secret_file, hex::encode(&bip85_bytes))?;
 
-            let secp = Secp256k1::signing_only();
             let master_fingerprint = xpriv.fingerprint(&secp);
 
             let temp_wallet = Wallet::new_offline(
