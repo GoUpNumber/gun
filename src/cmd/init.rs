@@ -1,10 +1,11 @@
 use crate::{
-    cmd,
+    bip85::get_bip85_bytes,
+    cmd::{self},
     config::{Config, GunSigner},
 };
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{util::bip32::ExtendedPrivKey, Network},
+    bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey, Network},
     database::MemoryDatabase,
     keys::{
         bip39::{Language, Mnemonic, WordCount},
@@ -45,6 +46,9 @@ pub enum InitOpt {
         #[structopt(long, default_value = "12", name = "[12|24]")]
         /// The number of BIP39 seed words to use
         n_words: usize,
+        /// Wallet has BIP39 passphrase
+        #[structopt(long)]
+        has_passphrase: bool,
     },
     /// Initialize using a wallet descriptor
     Descriptor {
@@ -118,8 +122,7 @@ fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> 
     rand::rngs::OsRng.fill_bytes(&mut random_bytes);
 
     let hex_randomness = hex::encode(&random_bytes);
-    let mut secret_file = wallet_dir.to_path_buf();
-    secret_file.push("secret_protocol_randomness");
+    let secret_file = wallet_dir.join("secret_protocol_randomness");
     fs::write(secret_file, hex_randomness)?;
     Ok(())
 }
@@ -142,6 +145,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             common_args,
             from_existing,
             n_words,
+            has_passphrase,
         } => {
             let (sw_file, seed_words) = match from_existing {
                 Some(existing_words_file) => {
@@ -192,14 +196,34 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 )
             })?;
 
-            let seed_bytes = mnemonic.to_seed("");
-            // Create secret randomness from seed.
-            let hex_seed_bytes = hex::encode(&seed_bytes);
-            let mut secret_file = wallet_dir.to_path_buf();
-            secret_file.push("secret_protocol_randomness");
-            fs::write(secret_file, hex_seed_bytes)?;
+            let passphrase = if has_passphrase {
+                eprintln!("Warning: by using a passphrase you are mutating the secret derived from your seed words. \
+                If you lose or forget your seedphrase, you will lose access to your funds.");
+                loop {
+                    let passphrase =
+                        rpassword::prompt_password_stderr("Please enter your wallet passphrase: ")?;
+                    let passphrase_confirmation = rpassword::prompt_password_stderr(
+                        "Please confirm your wallet passphrase: ",
+                    )?;
+                    if !passphrase.eq(&passphrase_confirmation) {
+                        eprintln!("Mismatching passphrases. Try again.\n")
+                    } else {
+                        break passphrase;
+                    }
+                }
+            } else {
+                "".to_string()
+            };
 
+            let seed_bytes = mnemonic.to_seed(passphrase);
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
+
+            let secp = Secp256k1::signing_only();
+            let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, &secp);
+            let secret_file = wallet_dir.join("secret_protocol_randomness");
+            fs::write(secret_file, hex::encode(&bip85_bytes))?;
+
+            let master_fingerprint = xpriv.fingerprint(&secp);
 
             let temp_wallet = Wallet::new_offline(
                 bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
@@ -211,7 +235,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
-                has_passphrase: false,
+                passphrase_fingerprint: if has_passphrase {
+                    Some(master_fingerprint)
+                } else {
+                    None
+                },
             }];
 
             let external = temp_wallet

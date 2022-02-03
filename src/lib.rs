@@ -15,6 +15,7 @@ pub mod keychain;
 pub mod psbt_ext;
 pub mod signers;
 pub use fee_spec::*;
+pub mod bip85;
 
 pub use chacha20::cipher;
 pub use olivia_core::chrono;

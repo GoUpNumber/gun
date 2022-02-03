@@ -2,7 +2,7 @@ mod init;
 mod oracle;
 use crate::{
     config::GunSigner,
-    signers::{SDCardSigner, XKeySigner},
+    signers::{PwSeedSigner, SDCardSigner, XKeySigner},
 };
 mod wallet;
 use anyhow::Context;
@@ -209,12 +209,8 @@ pub fn load_wallet(
             )),
             GunSigner::SeedWordsFile {
                 file_path,
-                has_passphrase,
+                passphrase_fingerprint,
             } => {
-                if *has_passphrase {
-                    todo!();
-                }
-
                 let seed_words =
                     fs::read_to_string(file_path.clone()).context("loading seed words")?;
                 let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
@@ -224,13 +220,21 @@ pub fn load_wallet(
                         e
                     )
                 })?;
+                // Any passphrase is added later within PwSeedSigner
                 let seed_bytes = mnemonic.to_seed("");
                 let master_xpriv =
                     ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
-                Arc::new(XKeySigner {
-                    master_xkey: master_xpriv,
-                })
+                match passphrase_fingerprint {
+                    Some(fingerprint) => Arc::new(PwSeedSigner {
+                        mnemonic,
+                        network: config.network,
+                        master_fingerprint: *fingerprint,
+                    }),
+                    None => Arc::new(XKeySigner {
+                        master_xkey: master_xpriv,
+                    }),
+                }
             }
         };
         wallet.add_signer(
