@@ -32,8 +32,8 @@ pub enum GunSigner {
         #[serde(skip_serializing_if = "Option::is_none")]
         passphrase_fingerprint: Option<Fingerprint>,
     },
-    PsbtSdCard {
-        psbt_signer_dir: PathBuf,
+    PsbtDir {
+        path: PathBuf,
     },
 }
 

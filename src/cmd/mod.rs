@@ -2,7 +2,7 @@ mod init;
 mod oracle;
 use crate::{
     config::GunSigner,
-    signers::{PwSeedSigner, SDCardSigner, XKeySigner},
+    signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
 };
 mod wallet;
 use anyhow::Context;
@@ -203,7 +203,9 @@ pub fn load_wallet(
 
     for (i, signer) in config.signers.iter().enumerate() {
         let signer: Arc<dyn Signer> = match signer {
-            GunSigner::PsbtSdCard { psbt_signer_dir } => Arc::new(SDCardSigner::create(
+            GunSigner::PsbtDir {
+                path: psbt_signer_dir,
+            } => Arc::new(PsbtDirSigner::create(
                 psbt_signer_dir.to_owned(),
                 config.network,
             )),

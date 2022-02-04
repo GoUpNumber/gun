@@ -128,21 +128,21 @@ impl Signer for PwSeedSigner {
 }
 
 #[derive(Debug)]
-pub struct SDCardSigner {
-    psbt_signer_dir: PathBuf,
+pub struct PsbtDirSigner {
+    path: PathBuf,
     network: Network,
 }
 
-impl SDCardSigner {
+impl PsbtDirSigner {
     pub fn create(psbt_signer_dir: PathBuf, network: Network) -> Self {
-        SDCardSigner {
-            psbt_signer_dir,
+        PsbtDirSigner {
+            path: psbt_signer_dir,
             network,
         }
     }
 }
 
-impl Signer for SDCardSigner {
+impl Signer for PsbtDirSigner {
     fn sign(
         &self,
         psbt: &mut PartiallySignedTransaction,
@@ -158,14 +158,14 @@ impl Signer for SDCardSigner {
 
         let txid = psbt.clone().extract_tx().txid();
         let psbt_file = self
-            .psbt_signer_dir
+            .path
             .as_path()
             .join(format!("{}.psbt", txid.to_string()));
         loop {
-            if !self.psbt_signer_dir.exists() {
+            if !self.path.exists() {
                 eprintln!(
-                    "psbt-output-dir '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
-                    self.psbt_signer_dir.display()
+                    "PSBT directory '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
+                    self.path.display()
                 );
                 let _ = std::io::stdin().read_line(&mut String::new());
             } else if let Err(e) = std::fs::write(&psbt_file, psbt.to_string()) {
@@ -183,11 +183,11 @@ impl Signer for SDCardSigner {
         eprintln!("Wrote PSBT to {}", psbt_file.display());
 
         let file_locations = [
-            self.psbt_signer_dir
+            self.path
                 .as_path()
                 .join(format!("{}-signed.psbt", txid))
                 .to_path_buf(),
-            self.psbt_signer_dir
+            self.path
                 .as_path()
                 .join(format!("{}-part.psbt", txid))
                 .to_path_buf(),
