@@ -97,6 +97,9 @@ pub enum AddressOpt {
         /// Hide addresses with zero balance
         #[structopt(long)]
         hide_zeros: bool,
+        /// Show unused addresses
+        #[structopt(long)]
+        unused: bool,
     },
     /// Show details of an address
     Show { address: Address },
@@ -106,9 +109,11 @@ fn list_keychain_addresses(
     wallet: &GunWallet,
     keychain_kind: KeychainKind,
     hide_zeros: bool,
+    unused: bool,
 ) -> anyhow::Result<Vec<Vec<Cell>>> {
     let wallet_db = wallet.bdk_wallet().database();
     let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
+    let txns = wallet_db.iter_txs(true)?;
     let index = wallet_db.get_last_index(keychain_kind)?;
     let map = index_utxos(&*wallet_db)?;
     let rows = match index {
@@ -121,6 +126,16 @@ fn list_keychain_addresses(
                     .get(script)
                     .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                     .unwrap_or(Amount::ZERO);
+
+                let address_used = txns
+                    .iter()
+                    .flat_map(|tx_details| tx_details.transaction.as_ref())
+                    .flat_map(|tx| tx.output.iter())
+                    .any(|o| &o.script_pubkey == script);
+
+                if unused && address_used {
+                    return None;
+                }
 
                 if hide_zeros && (value == Amount::ZERO) {
                     return None;
@@ -167,6 +182,7 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             internal,
             hide_zeros,
             all,
+            unused,
         } => {
             let mut rows: Vec<Vec<Cell>> = Vec::new();
             let header = vec!["address", "value", "utxos", "keychain"];
@@ -178,8 +194,9 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             };
 
             for keychain in keychains {
-                let mut internal_rows = list_keychain_addresses(wallet, keychain, hide_zeros)
-                    .expect("fetching addresses from wallet_db");
+                let mut internal_rows =
+                    list_keychain_addresses(wallet, keychain, hide_zeros, unused)
+                        .expect("fetching addresses from wallet_db");
                 rows.append(&mut internal_rows);
             }
 
