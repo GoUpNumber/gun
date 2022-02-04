@@ -272,8 +272,8 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             )?;
 
             let signers = match psbt_signer_dir {
-                Some(psbt_signer_dir) => {
-                    vec![GunSigner::PsbtSdCard { psbt_signer_dir }]
+                Some(path) => {
+                    vec![GunSigner::PsbtDir { path }]
                 }
                 None => {
                     vec![]
@@ -305,12 +305,8 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             )?;
 
             let signers = match psbt_signer_dir {
-                Some(psbt_signer_dir) => {
-                    vec![GunSigner::PsbtSdCard { psbt_signer_dir }]
-                }
-                None => {
-                    vec![]
-                }
+                Some(path) => vec![GunSigner::PsbtDir { path }],
+                None => vec![],
             };
 
             Config {
@@ -381,8 +377,8 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 "wpkh([{}/84'/0'/0']{}/1/*)",
                 &wallet_export.xfp, &wallet_export.bip84.xpub
             );
-            let signers = vec![GunSigner::PsbtSdCard {
-                psbt_signer_dir: coldcard_sd_dir,
+            let signers = vec![GunSigner::PsbtDir {
+                path: coldcard_sd_dir,
             }];
 
             Config {
