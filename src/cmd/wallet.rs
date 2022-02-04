@@ -1,7 +1,7 @@
 use super::*;
 use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
 use bdk::{
-    bitcoin::{Address, OutPoint, Script, Txid},
+    bitcoin::{Address, OutPoint, Script, Transaction, Txid},
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
@@ -113,9 +113,9 @@ fn list_keychain_addresses(
 ) -> anyhow::Result<Vec<Vec<Cell>>> {
     let wallet_db = wallet.bdk_wallet().database();
     let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
-    let txns = wallet_db.iter_txs(true)?;
     let index = wallet_db.get_last_index(keychain_kind)?;
     let map = index_utxos(&*wallet_db)?;
+    let txn_map = index_script_txns(&*wallet_db)?;
     let rows = match index {
         Some(index) => scripts
             .iter()
@@ -126,17 +126,14 @@ fn list_keychain_addresses(
                     .get(script)
                     .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                     .unwrap_or(Amount::ZERO);
+                let txn_count = match txn_map.get(script) {
+                    Some(txn_vec) => txn_vec.len() as u64,
+                    None => 0,
+                };
 
-                let address_used = txns
-                    .iter()
-                    .flat_map(|tx_details| tx_details.transaction.as_ref())
-                    .flat_map(|tx| tx.output.iter())
-                    .any(|o| &o.script_pubkey == script);
-
-                if unused && address_used {
+                if unused && (txn_count != 0) {
                     return None;
                 }
-
                 if hide_zeros && (value == Amount::ZERO) {
                     return None;
                 }
@@ -152,6 +149,7 @@ fn list_keychain_addresses(
                     Cell::Amount(value),
                     Cell::Int(count as u64),
                     Cell::String(keychain_name),
+                    Cell::Int(txn_count),
                 ])
             })
             // newest should go first
@@ -185,7 +183,7 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             unused,
         } => {
             let mut rows: Vec<Vec<Cell>> = Vec::new();
-            let header = vec!["address", "value", "utxos", "keychain"];
+            let header = vec!["address", "value", "utxos", "keychain", "txns"];
 
             let keychains = match (internal, all) {
                 (_, true) => vec![KeychainKind::External, KeychainKind::Internal],
@@ -244,6 +242,25 @@ fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script,
         map.entry(local_utxo.txout.script_pubkey.clone())
             .and_modify(|v| v.push(local_utxo.clone()))
             .or_insert(vec![local_utxo.clone()]);
+    }
+
+    Ok(map)
+}
+
+fn index_script_txns(
+    wallet_db: &impl BatchDatabase,
+) -> anyhow::Result<HashMap<Script, Vec<Transaction>>> {
+    let mut map: HashMap<Script, Vec<Transaction>> = HashMap::new();
+    for txn in wallet_db
+        .iter_txs(true)?
+        .iter()
+        .flat_map(|tx_details| tx_details.transaction.as_ref())
+    {
+        for out in &txn.output {
+            map.entry(out.script_pubkey.clone())
+                .and_modify(|v| v.push(txn.clone()))
+                .or_insert(vec![txn.clone()]);
+        }
     }
 
     Ok(map)
