@@ -1,7 +1,7 @@
-use crate::betting::*;
+use crate::{betting::*, keychain::ProtocolSecret, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{OutPoint, Txid},
+    bitcoin::OutPoint,
     sled::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
@@ -10,14 +10,13 @@ use bdk::{
 use olivia_core::OracleId;
 
 pub const DB_VERSION: u8 = 0;
-pub type BetId = u32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MapKey {
     BetId,
     OracleInfo(OracleId),
     Bet(BetId),
-    ClaimTx(Txid),
+    ProtocolSecret(()),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -50,6 +49,7 @@ pub enum KeyKind {
     BetId,
     OracleInfo,
     Bet,
+    ProtocolSecret,
 }
 
 impl KeyKind {
@@ -58,7 +58,7 @@ impl KeyKind {
     }
 }
 
-pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {
+pub trait Entity: serde::de::DeserializeOwned + Clone + 'static + serde::Serialize {
     type Key: Clone;
     fn key_kind() -> KeyKind;
     fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key>;
@@ -68,7 +68,7 @@ pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {
 }
 
 macro_rules! impl_entity {
-    ($key_name:ident, $type:ty, $type_name:ident) => {
+    ($key_name:ty, $type:ty, $type_name:ident) => {
         impl Entity for $type {
             type Key = $key_name;
             fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key> {
@@ -108,8 +108,9 @@ macro_rules! impl_entity {
 
 impl_entity!(OracleId, OracleInfo, OracleInfo);
 impl_entity!(BetId, BetState, Bet);
+impl_entity!((), ProtocolSecret, ProtocolSecret);
 
-pub struct BetDatabase(sled::Tree);
+pub struct GunDatabase(sled::Tree);
 
 fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyhow::Result<()> {
     tree.insert(
@@ -119,9 +120,9 @@ fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyh
     Ok(())
 }
 
-impl BetDatabase {
+impl GunDatabase {
     pub fn new(tree: sled::Tree) -> Self {
-        BetDatabase(tree)
+        GunDatabase(tree)
     }
 
     pub fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
@@ -159,6 +160,11 @@ impl BetDatabase {
     pub fn insert_oracle_info(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
         let key = MapKey::OracleInfo(oracle_info.id.clone());
         insert(&self.0, key, oracle_info)
+    }
+
+    pub fn insert_entity<T: Entity>(&self, key: T::Key, entity: T) -> anyhow::Result<()> {
+        let key = T::to_map_key(key);
+        insert(&self.0, key, entity)
     }
 
     pub fn get_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
@@ -229,13 +235,13 @@ impl BetDatabase {
     }
 
     pub fn test_new() -> Self {
-        BetDatabase::new(
+        GunDatabase::new(
             bdk::sled::Config::new()
                 .temporary(true)
                 .flush_every_ms(None)
                 .open()
                 .unwrap()
-                .open_tree("test")
+                .open_tree("test-gun")
                 .unwrap(),
         )
     }
@@ -259,7 +265,7 @@ mod test {
     use super::*;
     #[test]
     fn insert_and_list_oracles() {
-        let db = BetDatabase::new(
+        let db = GunDatabase::new(
             sled::Config::new()
                 .temporary(true)
                 .flush_every_ms(None)

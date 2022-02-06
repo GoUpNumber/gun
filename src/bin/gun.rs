@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use gun_wallet::cmd::{
     self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
 };
@@ -54,31 +55,45 @@ fn main() -> anyhow::Result<()> {
         default_dir
     });
 
-    if sync {
-        use Commands::*;
+    let res = if let Commands::Init(opt) = opt.command {
+        cmd::run_init(&wallet_dir, opt)
+    } else {
+        let (wallet, keychain, config) = cmd::load_wallet(&wallet_dir)?;
 
-        if let Balance | Address(_) | Send(_) | Tx(_) | Utxo(_) = opt.command {
-            let (wallet, _, _, config) = cmd::load_wallet(&wallet_dir)?;
-            eprintln!("syncing wallet with {:?}", config.blockchain);
-            wallet.sync(bdk::blockchain::noop_progress(), None)?;
+        if sync {
+            use Commands::*;
+
+            if let Balance | Address(_) | Send(_) | Tx(_) | Utxo(_) = opt.command {
+                eprintln!("syncing wallet with {:?}", config.blockchain);
+                wallet.sync()?;
+            }
+
+            // we poke bets to update balance from bets as well.
+            if let Balance = opt.command {
+                wallet.poke_bets()
+            }
         }
 
-        // we poke bets to update balance from bets as well.
-        if let Balance = opt.command {
-            let party = cmd::load_party(&wallet_dir)?;
-            party.poke_bets();
+        match opt.command {
+            Commands::Bet(opt) => {
+                let keychain = match keychain {
+                    Some(keychain) => keychain,
+                    None => {
+                        return Err(anyhow!(
+                        "This wallet wasn't set up with a protocol secret so you can't do betting"
+                    ))
+                    }
+                };
+                cmd::run_bet_cmd(&wallet, &keychain, opt, sync)
+            }
+            Commands::Balance => cmd::run_balance(&wallet, sync),
+            Commands::Address(opt) => cmd::get_address(&wallet, opt),
+            Commands::Send(opt) => cmd::run_send(&wallet, opt),
+            Commands::Init(_) => unreachable!("we handled init already"),
+            Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet, opt),
+            Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
+            Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
         }
-    }
-
-    let res = match opt.command {
-        Commands::Bet(opt) => cmd::run_bet_cmd(&wallet_dir, opt, sync),
-        Commands::Balance => cmd::run_balance(wallet_dir, sync),
-        Commands::Address(opt) => cmd::get_address(&wallet_dir, opt),
-        Commands::Send(opt) => cmd::run_send(&wallet_dir, opt),
-        Commands::Init(opt) => cmd::run_init(&wallet_dir, opt),
-        Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet_dir, opt),
-        Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet_dir, opt),
-        Commands::Split(opt) => cmd::run_split_cmd(&wallet_dir, opt),
     };
 
     match res {

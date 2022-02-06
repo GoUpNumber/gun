@@ -2,6 +2,7 @@ use crate::{
     bip85::get_bip85_bytes,
     cmd::{self},
     config::{Config, GunSigner},
+    keychain::ProtocolSecret,
 };
 use anyhow::{anyhow, Context};
 use bdk::{
@@ -101,7 +102,7 @@ pub enum InitOpt {
         /// Gun will use entropy from drv-hex-idx330.txt for secret randomness
         /// which means you may be able to recover funds engaged in protocols if you lose your gun database.
         #[structopt(long, short)]
-        import_entropy: bool,
+        use_entropy: bool,
     },
 }
 
@@ -140,7 +141,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
     let mut config_file = wallet_dir.to_path_buf();
     config_file.push("config.json");
 
-    let config = match cmd {
+    let (config, protocol_secret) = match cmd {
         InitOpt::Seed {
             common_args,
             from_existing,
@@ -198,7 +199,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let passphrase = if has_passphrase {
                 eprintln!("Warning: by using a passphrase you are mutating the secret derived from your seed words. \
-                If you lose or forget your seedphrase, you will lose access to your funds.");
+                           If you lose or forget your seedphrase, you will lose access to your funds.");
                 loop {
                     let passphrase =
                         rpassword::prompt_password_stderr("Please enter your wallet passphrase: ")?;
@@ -220,8 +221,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let secp = Secp256k1::signing_only();
             let bip85_bytes: [u8; 64] = get_bip85_bytes::<64>(xpriv, 330, &secp);
-            let secret_file = wallet_dir.join("secret_protocol_randomness");
-            fs::write(secret_file, hex::encode(&bip85_bytes))?;
 
             let master_fingerprint = xpriv.fingerprint(&secp);
 
@@ -248,13 +247,15 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let internal = temp_wallet
                 .get_descriptor_for_keychain(KeychainKind::Internal)
                 .to_string();
-
-            Config {
-                descriptor_external: external.clone(),
-                descriptor_internal: Some(internal),
-                signers,
-                ..Config::default_config(common_args.network, external)
-            }
+            (
+                Config {
+                    descriptor_external: external.clone(),
+                    descriptor_internal: Some(internal),
+                    signers,
+                    ..Config::default_config(common_args.network, external)
+                },
+                Some(bip85_bytes),
+            )
         }
         InitOpt::Descriptor {
             common_args,
@@ -280,12 +281,15 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 }
             };
 
-            Config {
-                descriptor_external: external.clone(),
-                descriptor_internal: internal,
-                signers,
-                ..Config::default_config(common_args.network, external.clone())
-            }
+            (
+                Config {
+                    descriptor_external: external.clone(),
+                    descriptor_internal: internal,
+                    signers,
+                    ..Config::default_config(common_args.network, external.clone())
+                },
+                None,
+            )
         }
         InitOpt::XPub {
             common_args,
@@ -309,21 +313,22 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 None => vec![],
             };
 
-            Config {
-                descriptor_external: external.clone(),
-                descriptor_internal: Some(internal),
-                signers,
-                ..Config::default_config(common_args.network, external)
-            }
+            (
+                Config {
+                    descriptor_external: external.clone(),
+                    descriptor_internal: Some(internal),
+                    signers,
+                    ..Config::default_config(common_args.network, external)
+                },
+                None,
+            )
         }
         InitOpt::Coldcard {
             common_args,
             coldcard_sd_dir,
-            import_entropy,
+            use_entropy: import_entropy,
         } => {
-            if !import_entropy {
-                create_secret_randomness(wallet_dir)?;
-            } else {
+            let bip85_bytes = if import_entropy {
                 let mut entropy_file = coldcard_sd_dir.to_path_buf();
                 entropy_file.push("drv-hex-idx330.txt");
                 let contents = match fs::read_to_string(entropy_file.clone()) {
@@ -341,18 +346,17 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     .nth(1)
                     .ok_or(anyhow!("Unable to read second line from entropy file"))?;
 
-                // Validate hex by decoding
-                if let Err(e) = hex::decode(hex_entropy) {
-                    return Err(anyhow!(
-                        "Unable to decode hex from entropy file.\n{} {}",
-                        e,
-                        hex_entropy
-                    ));
+                let hex_vec = hex::decode(hex_entropy).with_context(|| {
+                    format!("importing entropy from {}", entropy_file.display())
+                })?;
+                if hex_vec.len() != 64 {
+                    return Err(anyhow!("entropy in {} wasn't the right length. We expected 64 bytes of hex but got {}", entropy_file.display(), hex_vec.len()));
                 }
-
-                let mut secret_file = wallet_dir.to_path_buf();
-                secret_file.push("secret_protocol_randomness");
-                fs::write(secret_file, hex_entropy)?;
+                let mut bip85_bytes = [0u8; 64];
+                bip85_bytes.copy_from_slice(&hex_vec[..]);
+                Some(bip85_bytes)
+            } else {
+                None
             };
 
             let mut wallet_export_file = coldcard_sd_dir.clone();
@@ -381,14 +385,23 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 path: coldcard_sd_dir,
             }];
 
-            Config {
-                descriptor_external: external.clone(),
-                descriptor_internal: Some(internal),
-                signers,
-                ..Config::default_config(common_args.network, external)
-            }
+            (
+                Config {
+                    descriptor_external: external.clone(),
+                    descriptor_internal: Some(internal),
+                    signers,
+                    ..Config::default_config(common_args.network, external)
+                },
+                bip85_bytes,
+            )
         }
     };
+
+    if let Some(protocol_secret) = protocol_secret {
+        let gun_db = cmd::load_gun_db(wallet_dir)?;
+        gun_db.insert_entity((), ProtocolSecret::Bytes(protocol_secret))?;
+    }
+
     fs::write(
         config_file,
         serde_json::to_string_pretty(&config.into_versioned())

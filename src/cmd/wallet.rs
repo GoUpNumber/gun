@@ -10,11 +10,9 @@ use bdk::{
 use std::collections::HashMap;
 use structopt::StructOpt;
 
-pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput> {
-    let party = load_party(&wallet_dir)?;
-
-    let (in_bet, unclaimed) = party
-        .bet_db()
+pub fn run_balance(wallet: &GunWallet, sync: bool) -> anyhow::Result<CmdOutput> {
+    let (in_bet, unclaimed) = wallet
+        .gun_db()
         .list_entities_print_error::<BetState>()
         .filter_map(|(_, bet_state)| match bet_state {
             BetState::Included { bet, .. } => Some((bet.local_value, Amount::ZERO)),
@@ -28,14 +26,14 @@ pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput>
             )
         });
 
-    let tx_list = party
-        .wallet()
+    let tx_list = wallet
+        .bdk_wallet()
         .list_transactions(false)?
         .into_iter()
         .map(|tx_details| (tx_details.txid, tx_details.confirmation_time.is_some()))
         .collect::<Vec<_>>();
-    let unspent = party.wallet().list_unspent()?;
-    let currently_used = party.bet_db().currently_used_utxos(&[])?;
+    let unspent = wallet.bdk_wallet().list_unspent()?;
+    let currently_used = wallet.gun_db().currently_used_utxos(&[])?;
 
     let (confirmed, unconfirmed, in_use) = unspent.into_iter().fold(
         (Amount::ZERO, Amount::ZERO, Amount::ZERO),
@@ -105,21 +103,20 @@ pub enum AddressOpt {
 }
 
 fn list_keychain_addresses(
-    wallet_dir: &Path,
-    config: Config,
+    wallet: &GunWallet,
     keychain_kind: KeychainKind,
     hide_zeros: bool,
 ) -> anyhow::Result<Vec<Vec<Cell>>> {
-    let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
+    let wallet_db = wallet.bdk_wallet().database();
     let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
     let index = wallet_db.get_last_index(keychain_kind)?;
-    let map = index_utxos(&wallet_db)?;
+    let map = index_utxos(&*wallet_db)?;
     let rows = match index {
         Some(index) => scripts
             .iter()
             .take(index as usize + 1)
             .filter_map(|script| {
-                let address = Address::from_script(script, config.network).unwrap();
+                let address = Address::from_script(script, wallet.bdk_wallet().network()).unwrap();
                 let value = map
                     .get(script)
                     .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
@@ -150,22 +147,17 @@ fn list_keychain_addresses(
     Ok(rows)
 }
 
-pub fn get_address(
-    wallet_dir: &std::path::Path,
-    addr_opt: AddressOpt,
-) -> anyhow::Result<CmdOutput> {
+pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<CmdOutput> {
     match addr_opt {
         AddressOpt::New => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
-            let address = wallet.get_address(AddressIndex::New)?;
+            let address = wallet.bdk_wallet().get_address(AddressIndex::New)?;
             Ok(CmdOutput::EmphasisedItem {
                 main: ("address", Cell::string(address)),
                 other: vec![],
             })
         }
         AddressOpt::LastUnused => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
-            let address = wallet.get_address(AddressIndex::LastUnused)?;
+            let address = wallet.bdk_wallet().get_address(AddressIndex::LastUnused)?;
             Ok(CmdOutput::EmphasisedItem {
                 main: ("address", Cell::string(address)),
                 other: vec![],
@@ -176,7 +168,6 @@ pub fn get_address(
             hide_zeros,
             all,
         } => {
-            let config = load_config(wallet_dir).context("loading config")?;
             let mut rows: Vec<Vec<Cell>> = Vec::new();
             let header = vec!["address", "value", "utxos", "keychain"];
 
@@ -187,23 +178,23 @@ pub fn get_address(
             };
 
             for keychain in keychains {
-                let mut internal_rows =
-                    list_keychain_addresses(wallet_dir, config.clone(), keychain, hide_zeros)
-                        .expect("fetching addresses from wallet_db");
+                let mut internal_rows = list_keychain_addresses(&wallet, keychain, hide_zeros)
+                    .expect("fetching addresses from wallet_db");
                 rows.append(&mut internal_rows);
             }
 
             Ok(CmdOutput::table(header, rows))
         }
         AddressOpt::Show { address } => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
+            let bdk_db = &*wallet.bdk_wallet().database();
             let script_pubkey = address.script_pubkey();
             let output_descriptor = wallet
+                .bdk_wallet()
                 .get_descriptor_for_script_pubkey(&address.script_pubkey())?
                 .map(|desc| Cell::String(desc.to_string()))
                 .unwrap_or(Cell::Empty);
-            let keychain = wallet
-                .query_db(|db| db.get_path_from_script_pubkey(&script_pubkey))?
+            let keychain = bdk_db
+                .get_path_from_script_pubkey(&script_pubkey)?
                 .map(|(keychain, _)| {
                     Cell::string(match keychain {
                         KeychainKind::External => "external",
@@ -211,7 +202,7 @@ pub fn get_address(
                     })
                 })
                 .unwrap_or(Cell::Empty);
-            let map = wallet.query_db(|db| index_utxos(db))?;
+            let map = index_utxos(bdk_db)?;
             let value = map
                 .get(&script_pubkey)
                 .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
@@ -276,7 +267,7 @@ pub struct SpendOpt {
 impl SpendOpt {
     pub fn spend_coins<D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
         self,
-        party: &Party<EsploraBlockchain, D>,
+        wallet: &GunWallet,
         mut builder: TxBuilder<'_, EsploraBlockchain, D, Cs, Ctx>,
     ) -> anyhow::Result<CmdOutput> {
         let SpendOpt {
@@ -292,7 +283,7 @@ impl SpendOpt {
             .enable_rbf()
             .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
 
-        let in_use = party.bet_db().currently_used_utxos(&[])?;
+        let in_use = wallet.gun_db().currently_used_utxos(&[])?;
 
         if !spend_in_use && !in_use.is_empty() {
             eprintln!(
@@ -304,10 +295,10 @@ impl SpendOpt {
 
         fee_args
             .fee
-            .apply_to_builder(party.wallet().client(), &mut builder)?;
+            .apply_to_builder(wallet.bdk_wallet().client(), &mut builder)?;
 
         let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
-            party
+            wallet
                 .spend_won_bets(builder, bump_claiming)?
                 .expect("Won't be None since builder we pass in is not manually_selected_only")
         } else {
@@ -315,17 +306,19 @@ impl SpendOpt {
             (psbt, vec![])
         };
 
-        party.wallet().sign(&mut psbt, SignOptions::default())?;
+        wallet
+            .bdk_wallet()
+            .sign(&mut psbt, SignOptions::default())?;
 
-        let finalized = party
-            .wallet()
+        let finalized = wallet
+            .bdk_wallet()
             .finalize_psbt(&mut psbt, SignOptions::default())?;
 
         assert!(finalized, "transaction must be finalized at this point");
 
         let (output, txid) = cmd::decide_to_broadcast(
-            party.wallet().network(),
-            party.wallet().client(),
+            wallet.bdk_wallet().network(),
+            wallet.bdk_wallet().client(),
             psbt,
             yes,
             print_tx,
@@ -334,7 +327,7 @@ impl SpendOpt {
         if let Some(txid) = txid {
             if !print_tx {
                 for bet_id in claiming_bet_ids {
-                    if let Err(e) = party.take_next_action(bet_id, false) {
+                    if let Err(e) = wallet.take_next_action(bet_id, false) {
                         eprintln!(
                             "error updating state of bet {} after broadcasting claim tx {}: {}",
                             bet_id, txid, e
@@ -347,21 +340,20 @@ impl SpendOpt {
         Ok(output)
     }
 }
-pub fn run_send(wallet_dir: &std::path::Path, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_send(wallet: &GunWallet, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
     let SendOpt {
         to,
         value,
         spend_opt,
     } = send_opt;
-    let party = load_party(wallet_dir)?;
-    let mut builder = party.wallet().build_tx();
+    let mut builder = wallet.bdk_wallet().build_tx();
 
     match value {
         ValueChoice::All => builder.drain_wallet().drain_to(to.script_pubkey()),
         ValueChoice::Amount(amount) => builder.add_recipient(to.script_pubkey(), amount.as_sat()),
     };
 
-    spend_opt.spend_coins(&party, builder)
+    spend_opt.spend_coins(wallet, builder)
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -370,16 +362,12 @@ pub enum TransactionOpt {
     Show { txid: Txid },
 }
 
-pub fn run_transaction_cmd(
-    wallet_dir: &std::path::Path,
-    opt: TransactionOpt,
-) -> anyhow::Result<CmdOutput> {
+pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::Result<CmdOutput> {
     use TransactionOpt::*;
-    let (wallet, _, _, _) = load_wallet(wallet_dir)?;
 
     match opt {
         List => {
-            let mut txns = wallet.list_transactions(false)?;
+            let mut txns = wallet.bdk_wallet().list_transactions(false)?;
 
             txns.sort_unstable_by_key(|x| {
                 std::cmp::Reverse(
@@ -416,6 +404,7 @@ pub fn run_transaction_cmd(
         }
         Show { txid } => {
             let tx = wallet
+                .bdk_wallet()
                 .list_transactions(false)?
                 .into_iter()
                 .find(|tx| tx.txid == txid)
@@ -447,12 +436,11 @@ pub enum UtxoOpt {
     Show { outpoint: OutPoint },
 }
 
-pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_utxo_cmd(wallet: &GunWallet, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
     match opt {
         UtxoOpt::List => {
-            let party = load_party(wallet_dir)?;
-            let in_use_utxos = party.bet_db().currently_used_utxos(&[])?;
-            let wallet = party.wallet();
+            let in_use_utxos = wallet.gun_db().currently_used_utxos(&[])?;
+            let wallet = wallet.bdk_wallet();
             let rows = wallet
                 .list_unspent()?
                 .into_iter()
@@ -491,14 +479,15 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
             ))
         }
         UtxoOpt::Show { outpoint } => {
-            let party = load_party(wallet_dir)?;
-            let wallet = party.wallet();
             let utxo = wallet
+                .bdk_wallet()
                 .query_db(|db| db.get_utxo(&outpoint))?
                 .ok_or(anyhow!("UTXO {} not in wallet database", outpoint))?;
             let script_pubkey = utxo.txout.script_pubkey.clone();
 
-            let tx = wallet.query_db(|db| db.get_tx(&utxo.outpoint.txid, false))?;
+            let tx = wallet
+                .bdk_wallet()
+                .query_db(|db| db.get_tx(&utxo.outpoint.txid, false))?;
             let (tx_seen, tx_height) = tx
                 .map(|tx| {
                     (
@@ -515,11 +504,12 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
                 .unwrap_or((Cell::Empty, Cell::Empty));
 
             let output_descriptor = wallet
+                .bdk_wallet()
                 .get_descriptor_for_script_pubkey(&script_pubkey)?
                 .map(|desc| Cell::String(desc.to_string()))
                 .unwrap_or(Cell::Empty);
-            let in_use = party
-                .bet_db()
+            let in_use = wallet
+                .gun_db()
                 .currently_used_utxos(&[])?
                 .contains(&utxo.outpoint);
 
@@ -529,7 +519,7 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
                 "value" => Cell::Amount(Amount::from_sat(utxo.txout.value)),
                 "tx-seen-at" => tx_seen,
                 "tx-confirmed-at" => tx_height,
-                "address" => Address::from_script(&utxo.txout.script_pubkey, wallet.network())
+                "address" => Address::from_script(&utxo.txout.script_pubkey, wallet.bdk_wallet().network())
                             .map(|address| Cell::String(address.to_string()))
                             .unwrap_or(Cell::Empty),
                 "script-pubkey" => Cell::String(script_pubkey.asm()),
@@ -555,17 +545,16 @@ pub struct SplitOpt {
     spend_opt: SpendOpt,
 }
 
-pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_split_cmd(wallet: &GunWallet, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
     let SplitOpt {
         output_size,
         n,
         spend_opt,
     } = opt;
-    let party = load_party(wallet_dir)?;
-    let wallet = party.wallet();
-    let mut builder = wallet.build_tx();
+    let bdk_wallet = wallet.bdk_wallet();
+    let mut builder = bdk_wallet.build_tx();
 
-    let already_correct = wallet
+    let already_correct = bdk_wallet
         .list_unspent()?
         .into_iter()
         .filter(|utxo| utxo.txout.value == output_size.as_sat());
@@ -576,7 +565,7 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
         Some(n) => {
             for _ in 0..n {
                 builder.add_recipient(
-                    wallet
+                    bdk_wallet
                         .get_change_address(AddressIndex::New)?
                         .address
                         .script_pubkey(),
@@ -589,7 +578,7 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
                 .drain_wallet()
                 // add one recipient so we at least get one split utxo of the correct size.
                 .add_recipient(
-                    wallet
+                    bdk_wallet
                         .get_change_address(AddressIndex::New)?
                         .address
                         .script_pubkey(),
@@ -599,5 +588,5 @@ pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Res
         }
     };
 
-    spend_opt.spend_coins(&party, builder)
+    spend_opt.spend_coins(&wallet, builder)
 }
