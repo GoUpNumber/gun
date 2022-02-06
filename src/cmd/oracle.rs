@@ -1,7 +1,4 @@
-use crate::{
-    betting::{BetDatabase, OracleInfo},
-    cmd, item, Url,
-};
+use crate::{cmd, database::GunDatabase, item, OracleInfo, Url};
 use anyhow::anyhow;
 use olivia_core::{http::RootResponse, OracleId};
 use olivia_secp256k1::Secp256k1;
@@ -34,7 +31,7 @@ pub enum OracleOpt {
     },
 }
 
-pub fn run_oralce_cmd(bet_db: BetDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
     match cmd {
         OracleOpt::Add { url, yes } => {
             let url =

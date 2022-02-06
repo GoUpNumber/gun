@@ -2,7 +2,9 @@ mod init;
 mod oracle;
 use crate::{
     config::GunSigner,
+    keychain::ProtocolSecret,
     signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
+    wallet::GunWallet,
 };
 mod wallet;
 use anyhow::Context;
@@ -14,7 +16,7 @@ use bdk::{
         },
         Address, Amount, Network, Txid,
     },
-    blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
+    blockchain::{AnyBlockchain, ConfigurableBlockchain},
     database::BatchDatabase,
     signer::Signer,
     sled,
@@ -31,9 +33,9 @@ use term_table::{row::Row, Table};
 pub use wallet::*;
 
 use crate::{
-    betting::{BetDatabase, Party},
     chrono::NaiveDateTime,
     config::{Config, ConfigV0, VersionedConfig},
+    database::GunDatabase,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     FeeSpec, ValueChoice,
@@ -128,7 +130,7 @@ pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
     seed_words_file
 }
 
-pub fn get_secret_randomness(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
+pub fn load_protocol_keychain(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
     let mut secret_randomness_file = wallet_dir.to_path_buf();
     secret_randomness_file.push("secret_protocol_randomness");
     let hex_randomness =
@@ -141,30 +143,17 @@ pub fn get_secret_randomness(wallet_dir: &Path) -> anyhow::Result<[u8; 64]> {
     Ok(byte_randomness)
 }
 
-pub fn load_bet_db(wallet_dir: &Path) -> anyhow::Result<BetDatabase> {
+pub fn load_gun_db(wallet_dir: &Path) -> anyhow::Result<GunDatabase> {
     let mut db_file = wallet_dir.to_path_buf();
     db_file.push("database.sled");
     let database = sled::open(db_file.to_str().unwrap())?;
-    let bet_db = BetDatabase::new(database.open_tree("bets")?);
+    let bet_db = GunDatabase::new(database.open_tree("bets")?);
     Ok(bet_db)
-}
-
-pub fn load_party(
-    wallet_dir: &Path,
-) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
-    let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
-    let party = Party::new(wallet, bet_db, keychain, config.blockchain);
-    Ok(party)
 }
 
 pub fn load_wallet(
     wallet_dir: &std::path::Path,
-) -> anyhow::Result<(
-    Wallet<EsploraBlockchain, impl BatchDatabase>,
-    BetDatabase,
-    Keychain,
-    Config,
-)> {
+) -> anyhow::Result<(GunWallet, Option<Keychain>, Config)> {
     use bdk::keys::bip39::Mnemonic;
 
     if !wallet_dir.exists() {
@@ -191,7 +180,6 @@ pub fn load_wallet(
         _ => return Err(anyhow!("At the moment only esplora is supported")),
     };
 
-    let secret_randomness = get_secret_randomness(&wallet_dir)?;
     let mut wallet = Wallet::new(
         &config.descriptor_external,
         config.descriptor_internal.as_ref(),
@@ -246,9 +234,11 @@ pub fn load_wallet(
         );
     }
 
-    let bet_db = BetDatabase::new(database.open_tree("bets").context("opening bets tree")?);
+    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
+    let keychain = gun_db.get_entity::<ProtocolSecret>(())?.map(Keychain::from);
+    let gun_wallet = GunWallet::new(wallet, gun_db);
 
-    Ok((wallet, bet_db, Keychain::new(secret_randomness), config))
+    Ok((gun_wallet, keychain, config))
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {

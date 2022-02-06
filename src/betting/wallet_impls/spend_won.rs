@@ -1,4 +1,4 @@
-use crate::{betting::*, FeeSpec};
+use crate::{betting::*, wallet::GunWallet, FeeSpec};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
@@ -13,24 +13,19 @@ use bdk::{
 };
 use std::sync::Arc;
 
-use super::Party;
-
-impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
-where
-    D: bdk::database::BatchDatabase,
-{
+impl GunWallet {
     pub fn claim(
         &self,
         fee: FeeSpec,
         bump_claiming: bool,
     ) -> anyhow::Result<Option<(Vec<BetId>, Psbt)>> {
-        let wallet = self.wallet();
-        let mut builder = wallet.build_tx();
+        let bdk_wallet = self.bdk_wallet();
+        let mut builder = bdk_wallet.build_tx();
         builder.manually_selected_only().enable_rbf();
 
-        fee.apply_to_builder(wallet.client(), &mut builder)?;
+        fee.apply_to_builder(bdk_wallet.client(), &mut builder)?;
 
-        let recipient = wallet
+        let recipient = bdk_wallet
             .get_change_address(AddressIndex::New)?
             .script_pubkey();
 
@@ -41,7 +36,7 @@ where
             None => return Ok(None),
         };
 
-        let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+        let finalized = bdk_wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
 
         assert!(
             finalized,
@@ -51,13 +46,18 @@ where
         Ok(Some((claiming_bet_ids, psbt)))
     }
 
-    pub fn spend_won_bets<B: Blockchain, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
+    pub fn spend_won_bets<
+        D: bdk::database::BatchDatabase,
+        B: Blockchain,
+        Cs: CoinSelectionAlgorithm<D>,
+        Ctx: TxBuilderContext,
+    >(
         &self,
         mut builder: TxBuilder<'_, B, D, Cs, Ctx>,
         bump_claiming: bool,
     ) -> anyhow::Result<Option<(Psbt, Vec<BetId>)>> {
         let claimable_bets = self
-            .bet_db
+            .gun_db()
             .list_entities::<BetState>()
             .filter_map(|result| match result {
                 Ok(ok) => Some(ok),
@@ -116,14 +116,14 @@ where
         for (_, bet, secret_key) in claimable_bets {
             let signer = PrivateKey {
                 compressed: true,
-                network: self.wallet.network(),
+                network: self.bdk_wallet().network(),
                 key: secret_key,
             };
             let output_descriptor = bet.joint_output.wallet_descriptor();
             let mut tmp_wallet = Wallet::new_offline(
                 output_descriptor,
                 None,
-                self.wallet.network(),
+                self.bdk_wallet().network(),
                 MemoryDatabase::default(),
             )
             .expect("nothing can go wrong here");

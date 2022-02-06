@@ -16,11 +16,16 @@ pub mod psbt_ext;
 pub mod signers;
 pub use fee_spec::*;
 pub mod bip85;
+pub mod database;
+mod serde_hacks;
+pub mod wallet;
 
 pub use chacha20::cipher;
 pub use olivia_core::chrono;
 pub use olivia_secp256k1::schnorr_fun::fun::{hex, rand_core};
 pub use url::Url;
+
+pub type OracleInfo = olivia_core::OracleInfo<olivia_secp256k1::Secp256k1>;
 
 #[derive(Clone, Debug)]
 pub enum ValueChoice {
