@@ -730,10 +730,10 @@ fn reply(
     (ciphertext, cipher)
 }
 
-fn list_bets(bet_db: &GunDatabase) -> CmdOutput {
+fn list_bets(gun_db: &GunDatabase) -> CmdOutput {
     let mut rows = vec![];
 
-    for (id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
+    for (id, bet_state) in gun_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
         match bet_state.into_bet_or_prop() {
             BetOrProp::Proposal(local_proposal) => rows.push(vec![
@@ -807,7 +807,7 @@ fn list_bets(bet_db: &GunDatabase) -> CmdOutput {
 }
 
 fn get_oracle_event_from_url(
-    bet_db: &GunDatabase,
+    gun_db: &GunDatabase,
     url: Url,
 ) -> anyhow::Result<(OracleEvent, OracleInfo, bool)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
@@ -823,7 +823,7 @@ fn get_oracle_event_from_url(
             )
         })?;
 
-    let oracle_info = bet_db
+    let oracle_info = gun_db
         .get_entity::<OracleInfo>(oracle_id.to_string())?
         .ok_or(anyhow!(
             "oracle '{}' is not trusted -- run `gun bet oracle add '{}' to trust it",

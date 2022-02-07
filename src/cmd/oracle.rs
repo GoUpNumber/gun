@@ -31,7 +31,7 @@ pub enum OracleOpt {
     },
 }
 
-pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_oralce_cmd(gun_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<CmdOutput> {
     match cmd {
         OracleOpt::Add { url, yes } => {
             let url =
@@ -40,21 +40,21 @@ pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
                 .host()
                 .ok_or(anyhow!("orcale url missing host"))?
                 .to_string();
-            match bet_db.get_entity::<OracleInfo>(oracle_id.clone())? {
+            match gun_db.get_entity::<OracleInfo>(oracle_id.clone())? {
                 Some(_) => eprintln!("oracle {} is already trusted", oracle_id),
                 None => {
                     let root_response = ureq::get(url.as_str())
                         .call()?
                         .into_json::<RootResponse<Secp256k1>>()?;
                     let oracle_info = OracleInfo {
-                        id: oracle_id,
+                        id: oracle_id.clone(),
                         oracle_keys: root_response.public_keys,
                     };
 
                     println!("{}", serde_json::to_string_pretty(&oracle_info).unwrap());
 
                     if yes || cmd::read_yn("Trust the oracle displayed above") {
-                        bet_db.insert_oracle_info(oracle_info)?;
+                        gun_db.insert_entity(oracle_id, oracle_info)?;
                     }
                 }
             }
@@ -62,7 +62,7 @@ pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
             Ok(CmdOutput::None)
         }
         OracleOpt::List => {
-            let oracles = bet_db.list_entities_print_error::<OracleInfo>();
+            let oracles = gun_db.list_entities_print_error::<OracleInfo>();
             let mut rows = vec![];
 
             for (oracle_id, oracle_info) in oracles {
@@ -80,7 +80,7 @@ pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
             ))
         }
         OracleOpt::Remove { oracle_id } => {
-            if bet_db
+            if gun_db
                 .remove_entity::<OracleInfo>(oracle_id.clone())?
                 .is_none()
             {
@@ -89,7 +89,7 @@ pub fn run_oralce_cmd(bet_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
             Ok(CmdOutput::None)
         }
         OracleOpt::Show { oracle_id } => {
-            let oracle_info = bet_db
+            let oracle_info = gun_db
                 .get_entity::<OracleInfo>(oracle_id.clone())?
                 .ok_or(anyhow!("Oracle {} not in database", oracle_id))?;
             let oracle_keys = oracle_info.oracle_keys;

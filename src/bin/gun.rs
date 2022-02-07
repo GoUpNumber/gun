@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use bdk::blockchain::esplora::EsploraBlockchainConfig;
 use gun_wallet::cmd::{
     self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
 };
@@ -64,7 +65,18 @@ fn main() -> anyhow::Result<()> {
             use Commands::*;
 
             if let Balance | Address(_) | Send(_) | Tx(_) | Utxo(_) = opt.command {
-                eprintln!("syncing wallet with {:?}", config.blockchain);
+                let EsploraBlockchainConfig {
+                    stop_gap,
+                    base_url,
+                    concurrency,
+                    ..
+                } = config.blockchain_config();
+                eprintln!(
+                    "syncing wallet with {} (stop_gap: {}, parallel_connections: {})",
+                    base_url,
+                    stop_gap,
+                    concurrency.unwrap_or(1)
+                );
                 wallet.sync()?;
             }
 

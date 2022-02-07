@@ -24,14 +24,14 @@ type BdkWallet = bdk::Wallet<EsploraBlockchain, sled::Tree>;
 pub struct GunWallet {
     wallet: BdkWallet,
     client: ureq::Agent,
-    bet_db: GunDatabase,
+    db: GunDatabase,
 }
 
 impl GunWallet {
-    pub fn new(wallet: BdkWallet, bet_db: GunDatabase) -> Self {
+    pub fn new(wallet: BdkWallet, db: GunDatabase) -> Self {
         Self {
             wallet,
-            bet_db,
+            db,
             client: ureq::Agent::new(),
         }
     }
@@ -41,15 +41,11 @@ impl GunWallet {
     }
 
     pub fn gun_db(&self) -> &GunDatabase {
-        &self.bet_db
+        &self.db
     }
 
     pub fn http_client(&self) -> &ureq::Agent {
         &self.client
-    }
-
-    pub fn trust_oracle(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
-        self.bet_db.insert_oracle_info(oracle_info)
     }
 
     pub fn learn_outcome(
@@ -57,7 +53,7 @@ impl GunWallet {
         bet_id: BetId,
         attestation: Attestation<Secp256k1>,
     ) -> anyhow::Result<()> {
-        self.bet_db
+        self.db
             .update_bets(&[bet_id], move |old_state, _, txdb| match old_state {
                 BetState::Included { bet, .. } => {
                     let event_id = bet.oracle_event.event.id.clone();
@@ -267,7 +263,6 @@ impl GunWallet {
 
     // convenience methods
     pub fn sync(&self) -> anyhow::Result<()> {
-        eprintln!("syncing wallet...");
         self.wallet.sync(noop_progress(), None)?;
         Ok(())
     }

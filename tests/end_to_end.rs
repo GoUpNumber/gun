@@ -82,8 +82,14 @@ macro_rules! setup_test {
             },
         };
 
-        party_1.trust_oracle(oracle_info.clone()).unwrap();
-        party_2.trust_oracle(oracle_info.clone()).unwrap();
+        party_1
+            .gun_db()
+            .insert_entity(oracle_id.clone(), oracle_info.clone())
+            .unwrap();
+        party_2
+            .gun_db()
+            .insert_entity(oracle_id.clone(), oracle_info.clone())
+            .unwrap();
 
         let oracle_event = OracleEvent {
             event: Event {
