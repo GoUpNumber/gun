@@ -157,14 +157,8 @@ impl GunDatabase {
             .collect())
     }
 
-    pub fn insert_oracle_info(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
-        let key = MapKey::OracleInfo(oracle_info.id.clone());
-        insert(&self.0, key, oracle_info)
-    }
-
     pub fn insert_entity<T: Entity>(&self, key: T::Key, entity: T) -> anyhow::Result<()> {
-        let key = T::to_map_key(key);
-        insert(&self.0, key, entity)
+        insert(&self.0, T::to_map_key(key), entity)
     }
 
     pub fn get_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
@@ -265,29 +259,20 @@ mod test {
     use super::*;
     #[test]
     fn insert_and_list_oracles() {
-        let db = GunDatabase::new(
-            sled::Config::new()
-                .temporary(true)
-                .flush_every_ms(None)
-                .open()
-                .unwrap()
-                .open_tree("test")
-                .unwrap(),
-        );
-
+        let db = GunDatabase::test_new();
         let info1 = OracleInfo::test_oracle_info();
         let info2 = {
             let mut info2 = OracleInfo::test_oracle_info();
             info2.id = "oracle2.test".into();
             info2
         };
-        db.insert_oracle_info(info1.clone()).unwrap();
+        db.insert_entity(info1.id.clone(), info1.clone()).unwrap();
         let oracle_list = db
             .list_entities::<OracleInfo>()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(oracle_list, vec![(info1.id.clone(), info1.clone())]);
-        db.insert_oracle_info(info2.clone()).unwrap();
+        db.insert_entity(info2.id.clone(), info2.clone()).unwrap();
         let mut oracle_list = db
             .list_entities::<OracleInfo>()
             .collect::<Result<Vec<_>, _>>()

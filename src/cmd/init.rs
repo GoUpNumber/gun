@@ -2,6 +2,7 @@ use crate::{
     bip85::get_bip85_bytes,
     cmd::{self},
     config::{Config, GunSigner},
+    database::GunDatabase,
     keychain::ProtocolSecret,
 };
 use anyhow::{anyhow, Context};
@@ -13,7 +14,7 @@ use bdk::{
         GeneratableKey, GeneratedKey,
     },
     miniscript::Segwitv0,
-    KeychainKind, Wallet,
+    sled, KeychainKind, Wallet,
 };
 use olivia_secp256k1::fun::hex;
 use serde::Deserialize;
@@ -96,13 +97,13 @@ pub enum InitOpt {
         /// Coldcard SD card directory. PSBTs will be saved, signed, and loaded here.
         #[structopt(parse(from_os_str))]
         coldcard_sd_dir: PathBuf,
-        /// Instruct gun to use secret randomness from an exported deterministic entropy file.
+        /// Import entropy from deterministic entropy file.
         /// On Coldcard: Advanced -> Derive Entropy -> 64-bytes hex.
         /// Enter index 330 and press 1 to export to SD.
-        /// Gun will use entropy from drv-hex-idx330.txt for secret randomness
-        /// which means you may be able to recover funds engaged in protocols if you lose your gun database.
-        #[structopt(long, short)]
-        use_entropy: bool,
+        /// Gun will use entropy from drv-hex-idx330.txt.
+        /// This is necessary for gun to be able to execute protocols which need auxiliary keys (like gun bet).
+        #[structopt(long)]
+        import_entropy: bool,
     },
 }
 
@@ -115,17 +116,6 @@ struct WalletExport {
 #[derive(Deserialize)]
 struct BIP84Export {
     xpub: String,
-}
-
-fn create_secret_randomness(wallet_dir: &std::path::Path) -> anyhow::Result<()> {
-    let mut random_bytes = [0u8; 64];
-    use rand::RngCore;
-    rand::rngs::OsRng.fill_bytes(&mut random_bytes);
-
-    let hex_randomness = hex::encode(&random_bytes);
-    let secret_file = wallet_dir.join("secret_protocol_randomness");
-    fs::write(secret_file, hex_randomness)?;
-    Ok(())
 }
 
 pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<CmdOutput> {
@@ -263,7 +253,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             external,
             internal,
         } => {
-            create_secret_randomness(&wallet_dir)?;
             // Check descriptors are valid
             let _ = Wallet::new_offline(
                 &external,
@@ -296,7 +285,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             psbt_signer_dir,
             ref xpub,
         } => {
-            create_secret_randomness(&wallet_dir)?;
             let external = format!("wpkh({}/0/*)", xpub);
             let internal = format!("wpkh({}/1/*)", xpub);
 
@@ -326,7 +314,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         InitOpt::Coldcard {
             common_args,
             coldcard_sd_dir,
-            use_entropy: import_entropy,
+            import_entropy,
         } => {
             let bip85_bytes = if import_entropy {
                 let mut entropy_file = coldcard_sd_dir.to_path_buf();
@@ -398,7 +386,9 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
     };
 
     if let Some(protocol_secret) = protocol_secret {
-        let gun_db = cmd::load_gun_db(wallet_dir)?;
+        let gun_db = GunDatabase::new(
+            sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
+        );
         gun_db.insert_entity((), ProtocolSecret::Bytes(protocol_secret))?;
     }
 

@@ -1,16 +1,8 @@
-use crate::hex;
-use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{
-        util::bip32::{ExtendedPrivKey, Fingerprint},
-        Network,
-    },
+    bitcoin::{util::bip32::Fingerprint, Network},
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
-    database::MemoryDatabase,
-    keys::bip39::Mnemonic,
-    KeychainKind, Wallet,
 };
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -44,75 +36,10 @@ pub enum DerivationBip {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct ConfigV0 {
-    pub network: Network,
-    pub blockchain: AnyBlockchainConfig,
-    pub keys: WalletKeys,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "version")]
 pub enum VersionedConfig {
     #[serde(rename = "1")]
     V1(Config),
-}
-
-impl ConfigV0 {
-    pub fn into_v1(self, wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-        let old_seed_words_file = wallet_dir.join("seed.txt");
-
-        let seed_words = fs::read_to_string(old_seed_words_file.clone()).context(format!(
-            "loading existing seed words from {}",
-            old_seed_words_file.display()
-        ))?;
-
-        let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
-            anyhow!(
-                "parsing seed phrase in '{}' failed: {}",
-                old_seed_words_file.as_path().display(),
-                e
-            )
-        })?;
-
-        let seed_bytes = mnemonic.to_seed("");
-        let mut secret_file = wallet_dir.to_path_buf();
-        secret_file.push("secret_protocol_randomness");
-        // Create secret randomness from seed.
-        if !secret_file.exists() {
-            let hex_seed_bytes = hex::encode(&seed_bytes);
-            fs::write(secret_file, hex_seed_bytes)?;
-        };
-
-        let xpriv = ExtendedPrivKey::new_master(self.network, &seed_bytes).unwrap();
-
-        let signers = vec![GunSigner::SeedWordsFile {
-            file_path: old_seed_words_file,
-            passphrase_fingerprint: None,
-        }];
-
-        let temp_wallet = Wallet::new_offline(
-            bdk::template::Bip84(xpriv, bdk::KeychainKind::External),
-            Some(bdk::template::Bip84(xpriv, bdk::KeychainKind::Internal)),
-            self.network,
-            MemoryDatabase::new(),
-        )
-        .context("Initializing wallet with xpriv derived from seed phrase")?;
-
-        Ok(Config {
-            network: self.network,
-            blockchain: self.blockchain,
-            descriptor_external: temp_wallet
-                .get_descriptor_for_keychain(KeychainKind::External)
-                .to_string(),
-            descriptor_internal: Some(
-                temp_wallet
-                    .get_descriptor_for_keychain(KeychainKind::Internal)
-                    .to_string(),
-            ),
-            signers: signers,
-        })
-    }
 }
 
 impl From<VersionedConfig> for Config {
@@ -158,5 +85,11 @@ impl Config {
     }
     pub fn into_versioned(self) -> VersionedConfig {
         VersionedConfig::V1(self)
+    }
+
+    pub fn blockchain_config(&self) -> &EsploraBlockchainConfig {
+        match &self.blockchain {
+            AnyBlockchainConfig::Esplora(config) => config,
+        }
     }
 }
