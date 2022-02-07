@@ -49,12 +49,9 @@ fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
     let sync = opt.sync;
 
-    let wallet_dir = opt.gun_dir.unwrap_or_else(|| {
-        let mut default_dir = PathBuf::new();
-        default_dir.push(&dirs::home_dir().unwrap());
-        default_dir.push(".gun");
-        default_dir
-    });
+    let wallet_dir = opt
+        .gun_dir
+        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".gun"));
 
     let res = if let Commands::Init(opt) = opt.command {
         cmd::run_init(&wallet_dir, opt)

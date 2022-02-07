@@ -131,8 +131,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
     std::fs::create_dir(&wallet_dir)?;
 
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
+    let config_file = wallet_dir.join("config.json");
 
     let (config, protocol_secret) = match cmd {
         InitOpt::Seed {
@@ -320,8 +319,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             import_entropy,
         } => {
             let bip85_bytes = if import_entropy {
-                let mut entropy_file = coldcard_sd_dir.to_path_buf();
-                entropy_file.push("drv-hex-idx330.txt");
+                let entropy_file = coldcard_sd_dir.join("drv-hex-idx330.txt");
                 let contents = match fs::read_to_string(entropy_file.clone()) {
                     Ok(contents) => contents,
                     Err(e) => {
@@ -350,8 +348,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 None
             };
 
-            let mut wallet_export_file = coldcard_sd_dir.clone();
-            wallet_export_file.push("coldcard-export.json");
+            let wallet_export_file = coldcard_sd_dir.join("coldcard-export.json");
             let wallet_export_str = match fs::read_to_string(wallet_export_file.clone()) {
                 Ok(contents) => contents,
                 Err(e) => {

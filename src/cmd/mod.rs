@@ -65,8 +65,7 @@ pub enum FeeChoice {
 }
 
 pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
+    let config_file = wallet_dir.join("config.json");
 
     match config_file.exists() {
         true => {
@@ -123,9 +122,7 @@ pub fn read_input<V>(
 }
 
 pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
-    let mut seed_words_file = wallet_dir.to_path_buf();
-    seed_words_file.push("seed.txt");
-    seed_words_file
+    wallet_dir.join("seed.txt")
 }
 
 pub fn load_wallet(
@@ -141,11 +138,8 @@ pub fn load_wallet(
     }
 
     let config = load_config(wallet_dir).context("loading configuration")?;
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
 
     let wallet_db = database
         .open_tree("wallet")
@@ -215,12 +209,8 @@ pub fn load_wallet(
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
-
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
     database.open_tree("wallet").context("opening wallet tree")
 }
 
