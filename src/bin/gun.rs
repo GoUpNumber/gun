@@ -26,6 +26,7 @@ pub struct Opt {
 }
 
 #[derive(StructOpt, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Make or take a bet
     Bet(BetOpt),

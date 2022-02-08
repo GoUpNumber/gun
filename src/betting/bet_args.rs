@@ -9,6 +9,7 @@ use bdk::{
 
 // TODO remove autism
 
+#[derive(Clone, Debug)]
 pub struct BetArgs<'a, 'b> {
     pub value: ValueChoice,
     pub may_overlap: &'a [BetId],

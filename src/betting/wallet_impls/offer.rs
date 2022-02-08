@@ -1,7 +1,4 @@
-use crate::{
-    betting::*, change::Change, keychain::Keychain, wallet::GunWallet, FeeSpec, OracleInfo,
-    ValueChoice,
-};
+use crate::{betting::*, change::Change, wallet::GunWallet, ValueChoice};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Amount,
@@ -15,13 +12,15 @@ use std::convert::TryInto;
 impl GunWallet {
     pub fn generate_offer_with_oracle_event(
         &self,
-        proposal: Proposal,
-        choose_right: bool,
-        oracle_event: OracleEvent,
-        oracle_info: OracleInfo,
-        args: BetArgs<'_, '_>,
-        fee_spec: FeeSpec,
-        keychain: &Keychain,
+        OfferArgs {
+            proposal,
+            choose_right,
+            oracle_event,
+            oracle_info,
+            args,
+            fee_spec,
+            keychain,
+        }: OfferArgs,
     ) -> anyhow::Result<(Bet, Point<EvenY>, impl StreamCipher)> {
         let remote_public_key = &proposal.public_key;
         let event_id = &oracle_event.event.id;

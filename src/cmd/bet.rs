@@ -359,15 +359,16 @@ pub fn run_bet_cmd(
 
             let args = args.prompt_to_core_bet_args(Some(proposal.value));
 
-            let (bet, local_public_key, mut cipher) = wallet.generate_offer_with_oracle_event(
-                proposal,
-                outcome.value == 1,
-                oracle_event,
-                oracle_info,
-                args,
-                fee_args.fee,
-                keychain,
-            )?;
+            let (bet, local_public_key, mut cipher) =
+                wallet.generate_offer_with_oracle_event(OfferArgs {
+                    choose_right: outcome.value == 1,
+                    fee_spec: fee_args.fee,
+                    proposal,
+                    oracle_event,
+                    oracle_info,
+                    args,
+                    keychain,
+                })?;
 
             if yes || cmd::read_yn(&bet_prompt(&bet, "offer", true)) {
                 let (id, encrypted_offer, _) = wallet.sign_save_and_encrypt_offer(
