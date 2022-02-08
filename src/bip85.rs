@@ -13,9 +13,9 @@ pub fn get_bip85_bytes<const L: usize>(
         ChildNumber::Hardened { index: 83696968 },
         ChildNumber::Hardened { index: 128169 },
         ChildNumber::Hardened { index: L as u32 },
-        ChildNumber::Hardened { index: index },
+        ChildNumber::Hardened { index },
     ]);
-    let bip85_key = xpriv.derive_priv(&secp, &path).unwrap();
+    let bip85_key = xpriv.derive_priv(secp, &path).unwrap();
 
     let mut engine = HmacEngine::<sha512::Hash>::new("bip-entropy-from-k".as_bytes());
     engine.input(&bip85_key.private_key.serialize_secret());

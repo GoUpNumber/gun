@@ -277,7 +277,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                     descriptor_external: external.clone(),
                     descriptor_internal: internal,
                     signers,
-                    ..Config::default_config(common_args.network, external.clone())
+                    ..Config::default_config(common_args.network, external)
                 },
                 None,
             )
