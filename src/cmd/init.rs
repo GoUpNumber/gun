@@ -51,7 +51,7 @@ pub enum InitOpt {
         n_words: usize,
         /// Wallet has BIP39 passphrase
         #[structopt(long)]
-        has_passphrase: bool,
+        use_passphrase: bool,
     },
     /// Initialize using a output descriptor
     ///
@@ -138,7 +138,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             common_args,
             from_existing,
             n_words,
-            has_passphrase,
+            use_passphrase,
         } => {
             let (sw_file, seed_words) = match from_existing {
                 Some(existing_words_file) => {
@@ -189,7 +189,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 )
             })?;
 
-            let passphrase = if has_passphrase {
+            let passphrase = if use_passphrase {
                 eprintln!("Warning: by using a passphrase you are mutating the secret derived from your seed words. \
                            If you lose or forget your seedphrase, you will lose access to your funds.");
                 loop {
@@ -226,7 +226,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
             let signers = vec![GunSigner::SeedWordsFile {
                 file_path: sw_file,
-                passphrase_fingerprint: if has_passphrase {
+                passphrase_fingerprint: if use_passphrase {
                     Some(master_fingerprint)
                 } else {
                     None
