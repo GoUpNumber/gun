@@ -92,7 +92,7 @@ impl GunWallet {
                     script_pubkey: bet.joint_output.descriptor().script_pubkey(),
                 }),
                 non_witness_utxo: Some(bet.tx()),
-                witness_script: Some(bet.joint_output.descriptor().script_code()),
+                witness_script: Some(bet.joint_output.descriptor().script_code().unwrap()),
                 ..Default::default()
             };
             builder

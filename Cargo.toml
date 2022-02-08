@@ -45,5 +45,6 @@ bdk = { git = "https://github.com/nickfarrow/bdk", rev = "3cb90020457e5ae0fb3cd2
 
 
 [patch.crates-io]
-bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin.git", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1" }
-miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript.git", rev = "f3c38b8cc04fed0a68f4d6074d8c30f6912d958f" }
+bitcoin = {git = "https://github.com/rust-bitcoin/rust-bitcoin", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1"}
+miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript", rev = "6a89bd0d1aa2a4b2e78d624276471727bf61b753" }
+
