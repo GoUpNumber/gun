@@ -177,10 +177,6 @@ pub fn load_wallet(
                         e
                     )
                 })?;
-                // Any passphrase is added later within PwSeedSigner
-                let seed_bytes = mnemonic.to_seed("");
-                let master_xpriv =
-                    ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
                 match passphrase_fingerprint {
                     Some(fingerprint) => Arc::new(PwSeedSigner {
@@ -189,7 +185,11 @@ pub fn load_wallet(
                         master_fingerprint: *fingerprint,
                     }),
                     None => Arc::new(XKeySigner {
-                        master_xkey: master_xpriv,
+                        master_xkey: ExtendedPrivKey::new_master(
+                            config.network,
+                            &mnemonic.to_seed(""),
+                        )
+                        .unwrap(),
                     }),
                 }
             }
