@@ -1,12 +1,21 @@
+mod bet;
+mod config;
 mod init;
 mod oracle;
+mod wallet;
+pub use bet::*;
+pub use config::*;
+pub use init::*;
+pub use oracle::*;
+pub use wallet::*;
+
 use crate::{
     config::GunSigner,
+    database::{ProtocolKind, StringDescriptor},
     keychain::ProtocolSecret,
     signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
     wallet::GunWallet,
 };
-mod wallet;
 use anyhow::Context;
 use bdk::{
     bitcoin::{
@@ -25,12 +34,7 @@ use bdk::{
 };
 use std::sync::Arc;
 
-pub use init::*;
-pub mod bet;
-pub use bet::*;
-pub use oracle::*;
 use term_table::{row::Row, Table};
-pub use wallet::*;
 
 use crate::{
     chrono::NaiveDateTime,
@@ -64,24 +68,27 @@ pub enum FeeChoice {
     Speed(u32),
 }
 
-pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
-
+pub fn load_config(config_file: &std::path::Path) -> anyhow::Result<Config> {
     match config_file.exists() {
         true => {
-            let json_config = fs::read_to_string(config_file.clone())?;
+            let json_config = fs::read_to_string(config_file)?;
             Ok(serde_json::from_str::<VersionedConfig>(&json_config)
                 .context("Perhaps you are trying to load an old config?")?
                 .into())
         }
-        false => {
-            return Err(anyhow!(
-                "missing config file at {}",
-                config_file.as_path().display()
-            ))
-        }
+        false => return Err(anyhow!("missing config file at {}", config_file.display())),
     }
+}
+
+pub fn write_config(config_file: &std::path::Path, config: Config) -> anyhow::Result<()> {
+    fs::write(
+        config_file,
+        serde_json::to_string_pretty(&config.into_versioned())
+            .unwrap()
+            .as_bytes(),
+    )
+    .context("writing config file")?;
+    Ok(())
 }
 
 pub fn read_yn(question: &str) -> bool {
@@ -123,9 +130,7 @@ pub fn read_input<V>(
 }
 
 pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
-    let mut seed_words_file = wallet_dir.to_path_buf();
-    seed_words_file.push("seed.txt");
-    seed_words_file
+    wallet_dir.join("seed.txt")
 }
 
 pub fn load_wallet(
@@ -140,12 +145,9 @@ pub fn load_wallet(
         ));
     }
 
-    let config = load_config(wallet_dir).context("loading configuration")?;
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
+    let config = load_config(&wallet_dir.join("config.json")).context("loading configuration")?;
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
 
     let wallet_db = database
         .open_tree("wallet")
@@ -153,9 +155,18 @@ pub fn load_wallet(
 
     let esplora = EsploraBlockchain::from_config(config.blockchain_config())?;
 
+    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
+
+    let external = gun_db
+        .get_entity::<StringDescriptor>(KeychainKind::External)?
+        .ok_or(anyhow!(
+            "external descriptor couldn't be retrieved from database"
+        ))?;
+    let internal = gun_db.get_entity::<StringDescriptor>(KeychainKind::Internal)?;
+
     let mut wallet = Wallet::new(
-        &config.descriptor_external,
-        config.descriptor_internal.as_ref(),
+        &external.0,
+        internal.as_ref().map(|x| &x.0),
         config.network,
         wallet_db,
         esplora,
@@ -183,10 +194,6 @@ pub fn load_wallet(
                         e
                     )
                 })?;
-                // Any passphrase is added later within PwSeedSigner
-                let seed_bytes = mnemonic.to_seed("");
-                let master_xpriv =
-                    ExtendedPrivKey::new_master(config.network, &seed_bytes).unwrap();
 
                 match passphrase_fingerprint {
                     Some(fingerprint) => Arc::new(PwSeedSigner {
@@ -195,7 +202,11 @@ pub fn load_wallet(
                         master_fingerprint: *fingerprint,
                     }),
                     None => Arc::new(XKeySigner {
-                        master_xkey: master_xpriv,
+                        master_xkey: ExtendedPrivKey::new_master(
+                            config.network,
+                            &mnemonic.to_seed(""),
+                        )
+                        .unwrap(),
                     }),
                 }
             }
@@ -207,20 +218,17 @@ pub fn load_wallet(
         );
     }
 
-    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
-    let keychain = gun_db.get_entity::<ProtocolSecret>(())?.map(Keychain::from);
+    let keychain = gun_db
+        .get_entity::<ProtocolSecret>(ProtocolKind::Bet)?
+        .map(Keychain::from);
     let gun_wallet = GunWallet::new(wallet, gun_db);
 
     Ok((gun_wallet, keychain, config))
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
-
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
     database.open_tree("wallet").context("opening wallet tree")
 }
 
@@ -269,6 +277,10 @@ impl Cell {
         Self::String(string)
     }
 
+    pub fn maybe_string<T: core::fmt::Display>(t: Option<T>) -> Self {
+        t.map(Self::string).unwrap_or(Cell::Empty)
+    }
+
     pub fn datetime(dt: NaiveDateTime) -> Self {
         Self::DateTime(dt.timestamp() as u64)
     }
@@ -279,7 +291,7 @@ impl Cell {
             String(string) => string,
             Amount(amount) => format_amount(amount),
             Int(integer) => integer.to_string(),
-            Empty => "-".into(),
+            Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string(),
@@ -547,11 +559,23 @@ pub fn decide_to_broadcast(
 
 #[macro_export]
 macro_rules! item {
-    ($($key:literal => $value:expr),*$(,)?) => {{
+    ($($key:literal => $value:expr),+$(,)?) => {{
         let mut list = vec![];
         $(
             list.push(($key, $value));
         )*
         $crate::cmd::CmdOutput::Item(list)
+    }}
+}
+
+#[macro_export]
+macro_rules! eitem {
+    ($main_key:literal => $main_value:expr $(,$key:literal => $value:expr)*$(,)?) => {{
+        #[allow(unused_mut)]
+        let mut list = vec![];
+        $(
+            list.push(($key, $value));
+        )*
+        $crate::cmd::CmdOutput::EmphasisedItem { main: ($main_key, $main_value), other: list }
     }}
 }

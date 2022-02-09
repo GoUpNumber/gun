@@ -1,4 +1,4 @@
-use crate::{betting::*, change::Change};
+use crate::{betting::*, change::Change, keychain::Keychain, FeeSpec, OracleInfo};
 use bdk::{
     bitcoin,
     bitcoin::{Amount, Transaction},
@@ -19,6 +19,16 @@ pub struct Offer {
 pub struct ValidatedOffer {
     pub bet_id: BetId,
     pub bet: Bet,
+}
+
+pub struct OfferArgs<'a, 'b, 'c> {
+    pub proposal: Proposal,
+    pub choose_right: bool,
+    pub oracle_event: OracleEvent,
+    pub oracle_info: OracleInfo,
+    pub args: BetArgs<'a, 'b>,
+    pub fee_spec: FeeSpec,
+    pub keychain: &'c Keychain,
 }
 
 impl ValidatedOffer {

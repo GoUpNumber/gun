@@ -178,7 +178,7 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             };
 
             for keychain in keychains {
-                let mut internal_rows = list_keychain_addresses(&wallet, keychain, hide_zeros)
+                let mut internal_rows = list_keychain_addresses(wallet, keychain, hide_zeros)
                     .expect("fetching addresses from wallet_db");
                 rows.append(&mut internal_rows);
             }
@@ -588,5 +588,5 @@ pub fn run_split_cmd(wallet: &GunWallet, opt: SplitOpt) -> anyhow::Result<CmdOut
         }
     };
 
-    spend_opt.spend_coins(&wallet, builder)
+    spend_opt.spend_coins(wallet, builder)
 }

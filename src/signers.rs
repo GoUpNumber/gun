@@ -151,16 +151,13 @@ impl Signer for PsbtDirSigner {
     ) -> Result<(), SignerError> {
         if !read_yn(&format!(
             "This is the transaction that will be saved for signing.\n{}Ok",
-            display_psbt(self.network, &psbt)
+            display_psbt(self.network, psbt)
         )) {
             return Err(SignerError::UserCanceled);
         }
 
         let txid = psbt.clone().extract_tx().txid();
-        let psbt_file = self
-            .path
-            .as_path()
-            .join(format!("{}.psbt", txid.to_string()));
+        let psbt_file = self.path.as_path().join(format!("{}.psbt", txid));
         loop {
             if !self.path.exists() {
                 eprintln!(
@@ -183,14 +180,8 @@ impl Signer for PsbtDirSigner {
         eprintln!("Wrote PSBT to {}", psbt_file.display());
 
         let file_locations = [
-            self.path
-                .as_path()
-                .join(format!("{}-signed.psbt", txid))
-                .to_path_buf(),
-            self.path
-                .as_path()
-                .join(format!("{}-part.psbt", txid))
-                .to_path_buf(),
+            self.path.as_path().join(format!("{}-signed.psbt", txid)),
+            self.path.as_path().join(format!("{}-part.psbt", txid)),
         ];
         eprintln!("gun will look for the signed psbt files at:",);
         for location in &file_locations {
@@ -216,7 +207,7 @@ impl Signer for PsbtDirSigner {
                 ),
             }
         };
-        let psbt_result = PartiallySignedTransaction::from_str(&contents.trim());
+        let psbt_result = PartiallySignedTransaction::from_str(contents.trim());
 
         match psbt_result {
             Err(e) => {

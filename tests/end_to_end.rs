@@ -179,20 +179,20 @@ pub fn test_happy_path() {
     let (p2_bet_id, encrypted_offer, _) = {
         let proposal = VersionedProposal::from_str(&proposal_string).unwrap();
         let (bet, local_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                choose_right: true,
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
             .sign_save_and_encrypt_offer(bet, None, local_public_key, &mut cipher)
@@ -339,20 +339,20 @@ pub fn cancel_proposal() {
     let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_1).unwrap();
         let (bet, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
             .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
@@ -402,20 +402,20 @@ pub fn test_cancel_offer() {
     let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_str).unwrap();
         let (bet, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
             .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
@@ -468,20 +468,20 @@ pub fn cancel_offer_after_offer_taken() {
 
     let (first_p2_bet_id, _, _) = {
         let (bet, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.clone(),
-                true,
-                oracle_event.clone(),
-                oracle_info.clone(),
-                BetArgs {
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.clone(),
+                choose_right: true,
+                oracle_event: oracle_event.clone(),
+                oracle_info: oracle_info.clone(),
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
             .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
@@ -490,21 +490,21 @@ pub fn cancel_offer_after_offer_taken() {
 
     let (second_p2_bet_id, second_encrypted_offer, _) = {
         let (bet, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
+            .generate_offer_with_oracle_event(OfferArgs {
                 proposal,
-                true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                choose_right: true,
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.03 BTC").unwrap(),
                     ),
                     must_overlap: &[first_p2_bet_id],
                     ..Default::default()
                 },
-                FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
             .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
@@ -593,18 +593,18 @@ fn create_proposal_with_dust_change() {
         assert!(
             matches!(
                 party_2
-                    .generate_offer_with_oracle_event(
-                        local_proposal.proposal.clone(),
-                        true,
-                        oracle_event.clone(),
-                        oracle_info.clone(),
-                        BetArgs {
+                    .generate_offer_with_oracle_event(OfferArgs {
+                        proposal: local_proposal.proposal.clone(),
+                        choose_right: true,
+                        oracle_event: oracle_event.clone(),
+                        oracle_info: oracle_info.clone(),
+                        args: BetArgs {
                             value: ValueChoice::Amount(Amount::from_sat(bet_value)),
                             ..Default::default()
                         },
-                        FeeSpec::Absolute(Amount::from_sat(501)),
-                        &keychain_2
-                    )
+                        fee_spec: FeeSpec::Absolute(Amount::from_sat(501)),
+                        keychain: &keychain_2
+                    })
                     .map(|_| ())
                     .unwrap_err()
                     .downcast()
@@ -615,19 +615,19 @@ fn create_proposal_with_dust_change() {
         );
 
         let (bet, local_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                local_proposal.proposal,
-                true,
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: local_proposal.proposal,
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(Amount::from_sat(bet_value)),
                     ..Default::default()
                 },
                 // we can afford 500
-                FeeSpec::Absolute(Amount::from_sat(500)),
-                &keychain_2,
-            )
+                fee_spec: FeeSpec::Absolute(Amount::from_sat(500)),
+                keychain: &keychain_2,
+            })
             .unwrap();
 
         let (bet_id, encrypted_offer, offer) = party_2

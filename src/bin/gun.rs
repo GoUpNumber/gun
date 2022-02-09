@@ -1,8 +1,6 @@
 use anyhow::anyhow;
 use bdk::blockchain::esplora::EsploraBlockchainConfig;
-use gun_wallet::cmd::{
-    self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
-};
+use gun_wallet::cmd::{self, *};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -26,6 +24,7 @@ pub struct Opt {
 }
 
 #[derive(StructOpt, Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Make or take a bet
     Bet(BetOpt),
@@ -43,18 +42,17 @@ pub enum Commands {
     Init(InitOpt),
     /// Split coins into evenly sized outputs.
     Split(SplitOpt),
+    /// Get/set configuration values
+    Config(ConfigOpt),
 }
 
 fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
     let sync = opt.sync;
 
-    let wallet_dir = opt.gun_dir.unwrap_or_else(|| {
-        let mut default_dir = PathBuf::new();
-        default_dir.push(&dirs::home_dir().unwrap());
-        default_dir.push(".gun");
-        default_dir
-    });
+    let wallet_dir = opt
+        .gun_dir
+        .unwrap_or_else(|| dirs::home_dir().unwrap().join(".gun"));
 
     let res = if let Commands::Init(opt) = opt.command {
         cmd::run_init(&wallet_dir, opt)
@@ -105,6 +103,9 @@ fn main() -> anyhow::Result<()> {
             Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet, opt),
             Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
             Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
+            Commands::Config(opt) => {
+                cmd::run_config_cmd(&wallet, &wallet_dir.join("config.json"), opt)
+            }
         }
     };
 
