@@ -1,26 +1,16 @@
-mod bet_args;
-mod offer;
-mod proposal;
-mod spend_won;
-mod state_machine;
-mod take_offer;
-
-pub use bet_args::*;
 use miniscript::DescriptorTrait;
 
-use crate::{betting::*, keychain::Keychain, FeeSpec};
+use crate::{betting::*, database::GunDatabase, FeeSpec, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
-        OutPoint, Txid,
+        OutPoint,
     },
-    blockchain::{
-        noop_progress, AnyBlockchain, AnyBlockchainConfig, Blockchain, ConfigurableBlockchain,
-    },
-    database::MemoryDatabase,
-    descriptor::ExtendedDescriptor,
-    wallet::{AddressIndex, Wallet},
+    blockchain::{noop_progress, Blockchain, EsploraBlockchain},
+    database::Database,
+    sled,
+    wallet::AddressIndex,
     KeychainKind, SignOptions,
 };
 use olivia_core::{Attestation, Outcome};
@@ -29,47 +19,33 @@ use olivia_secp256k1::{
     Secp256k1,
 };
 
-pub struct Party<B, D> {
-    wallet: Wallet<B, D>,
-    pub(crate) keychain: Keychain,
+type BdkWallet = bdk::Wallet<EsploraBlockchain, sled::Tree>;
+
+pub struct GunWallet {
+    wallet: BdkWallet,
     client: ureq::Agent,
-    bet_db: BetDatabase,
-    blockchain_config: AnyBlockchainConfig,
+    db: GunDatabase,
 }
 
-impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
-where
-    D: bdk::database::BatchDatabase,
-{
-    pub fn new(
-        wallet: Wallet<bdk::blockchain::EsploraBlockchain, D>,
-        bet_db: BetDatabase,
-        keychain: Keychain,
-        blockchain_config: AnyBlockchainConfig,
-    ) -> Self {
+impl GunWallet {
+    pub fn new(wallet: BdkWallet, db: GunDatabase) -> Self {
         Self {
             wallet,
-            keychain,
-            bet_db,
+            db,
             client: ureq::Agent::new(),
-            blockchain_config,
         }
     }
 
-    pub fn wallet(&self) -> &Wallet<bdk::blockchain::EsploraBlockchain, D> {
+    pub fn bdk_wallet(&self) -> &BdkWallet {
         &self.wallet
     }
 
-    pub fn bet_db(&self) -> &BetDatabase {
-        &self.bet_db
+    pub fn gun_db(&self) -> &GunDatabase {
+        &self.db
     }
 
-    pub fn trust_oracle(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
-        self.bet_db.insert_oracle_info(oracle_info)
-    }
-
-    pub fn new_blockchain(&self) -> anyhow::Result<AnyBlockchain> {
-        Ok(AnyBlockchain::from_config(&self.blockchain_config)?)
+    pub fn http_client(&self) -> &ureq::Agent {
+        &self.client
     }
 
     pub fn learn_outcome(
@@ -77,7 +53,7 @@ where
         bet_id: BetId,
         attestation: Attestation<Secp256k1>,
     ) -> anyhow::Result<()> {
-        self.bet_db
+        self.db
             .update_bets(&[bet_id], move |old_state, _, txdb| match old_state {
                 BetState::Included { bet, .. } => {
                     let event_id = bet.oracle_event.event.id.clone();
@@ -145,7 +121,7 @@ where
         let mut utxos_that_need_canceling: Vec<OutPoint> = vec![];
 
         for bet_id in bet_ids {
-            let bet_state = self.bet_db().get_entity(*bet_id)?.ok_or(anyhow!(
+            let bet_state = self.gun_db().get_entity(*bet_id)?.ok_or(anyhow!(
                 "can't cancel bet {} because it doesn't exist",
                 bet_id
             ))?;
@@ -203,7 +179,7 @@ where
             }
         }
 
-        let mut builder = self.wallet.build_tx();
+        let mut builder = self.bdk_wallet().build_tx();
         builder
             .manually_selected_only()
             .enable_rbf()
@@ -213,7 +189,7 @@ where
         for utxo in utxos_that_need_canceling {
             // we have to add these as foreign UTXOs because BDK doesn't let you spend
             // outputs that have been spent by tx in the mempool.
-            let tx = match self.wallet.query_db(|db| db.get_tx(&utxo.txid, true))? {
+            let tx = match self.bdk_wallet().database().get_tx(&utxo.txid, true)? {
                 Some(tx) => tx,
                 None => {
                     debug_assert!(false, "we should always be able to find our tx");
@@ -254,30 +230,6 @@ where
         Ok(Some(psbt))
     }
 
-    pub fn is_confirmed(
-        &self,
-        txid: Txid,
-        // output in transaction
-        descriptor: ExtendedDescriptor,
-    ) -> anyhow::Result<Option<u32>> {
-        let blockchain = self.new_blockchain()?;
-        let wallet = Wallet::new(
-            descriptor,
-            None,
-            self.wallet.network(),
-            MemoryDatabase::default(),
-            blockchain,
-        )?;
-        wallet.sync(bdk::blockchain::noop_progress(), None)?;
-        Ok(wallet
-            .list_transactions(true)?
-            .iter()
-            .find_map(|tx| match &tx.confirmation_time {
-                Some(confirmation_time) if tx.txid == txid => Some(confirmation_time.height),
-                _ => None,
-            }))
-    }
-
     // the reason we require p2wpkh inputs here is so the witness is non-malleable.
     // What to do about TR outputs in the future I haven't decided.
     pub fn p2wpkh_outpoint_to_psbt_input(&self, outpoint: OutPoint) -> anyhow::Result<psbt::Input> {
@@ -311,13 +263,12 @@ where
 
     // convenience methods
     pub fn sync(&self) -> anyhow::Result<()> {
-        eprintln!("syncing wallet with {:?}", self.blockchain_config);
         self.wallet.sync(noop_progress(), None)?;
         Ok(())
     }
 
     pub fn poke_bets(&self) {
-        for (bet_id, _) in self.bet_db().list_entities_print_error::<BetState>() {
+        for (bet_id, _) in self.gun_db().list_entities_print_error::<BetState>() {
             match self.take_next_action(bet_id, true) {
                 Ok(_updated) => {}
                 Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),

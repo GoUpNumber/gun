@@ -1,4 +1,4 @@
-use crate::{betting::*, ValueChoice};
+use crate::{betting::*, database::GunDatabase, ValueChoice};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Amount,
@@ -31,12 +31,12 @@ impl Default for BetArgs<'_, '_> {
 impl BetArgs<'_, '_> {
     pub fn apply_args<B, D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
         &self,
-        bet_db: &BetDatabase,
+        gun_db: &GunDatabase,
         builder: &mut TxBuilder<B, D, Cs, Ctx>,
     ) -> anyhow::Result<()> {
-        builder.unspendable(bet_db.currently_used_utxos(self.may_overlap)?);
+        builder.unspendable(gun_db.currently_used_utxos(self.may_overlap)?);
         for bet_id in self.must_overlap {
-            let bet = bet_db.get_entity::<BetState>(*bet_id)?.ok_or_else(|| {
+            let bet = gun_db.get_entity::<BetState>(*bet_id)?.ok_or_else(|| {
                 anyhow!("bet {} that we must overlap with does not exist", bet_id)
             })?;
             for input in bet.reserved_utxos() {

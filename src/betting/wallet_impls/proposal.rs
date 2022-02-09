@@ -1,22 +1,20 @@
-use crate::{betting::*, change::Change, ValueChoice};
+use crate::{betting::*, change::Change, keychain::Keychain, wallet::GunWallet, ValueChoice};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{Amount, Script},
-    database::BatchDatabase,
     wallet::coin_selection::LargestFirstCoinSelection,
     FeeRate,
 };
 use olivia_core::{OracleEvent, OracleId};
 use olivia_secp256k1::Secp256k1;
 
-use super::BetArgs;
-
-impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
+impl GunWallet {
     pub fn make_proposal(
         &self,
         oracle_id: OracleId,
         oracle_event: OracleEvent<Secp256k1>,
         args: BetArgs,
+        keychain: &Keychain,
     ) -> anyhow::Result<LocalProposal> {
         let event_id = &oracle_event.event.id;
         if event_id.n_outcomes() != 2 {
@@ -27,7 +25,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         }
 
         let mut builder = self
-            .wallet
+            .bdk_wallet()
             .build_tx()
             .coin_selection(LargestFirstCoinSelection);
         // we use a 0 feerate because the offerer will pay the fee
@@ -40,7 +38,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             }
         };
 
-        args.apply_args(self.bet_db(), &mut builder)?;
+        args.apply_args(self.gun_db(), &mut builder)?;
 
         let (psbt, txdetails) = builder
             .finish()
@@ -96,7 +94,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             change_script: change.as_ref().map(|x| x.binscript().clone()),
         };
 
-        let keypair = self.keychain.get_key_for_proposal(&proposal);
+        let keypair = keychain.get_key_for_proposal(&proposal);
         proposal.public_key = keypair.public_key;
 
         let local_proposal = LocalProposal {

@@ -1,11 +1,10 @@
-use crate::betting::*;
+use crate::{betting::*, keychain::Keychain, wallet::GunWallet, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
         Amount,
     },
-    database::BatchDatabase,
     miniscript::DescriptorTrait,
     wallet::tx_builder::TxOrdering,
     SignOptions,
@@ -14,20 +13,21 @@ use chacha20::ChaCha20Rng;
 use olivia_secp256k1::fun::{marker::EvenY, Point};
 use std::convert::TryInto;
 
-impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
+impl GunWallet {
     pub fn decrypt_offer(
         &self,
         bet_id: BetId,
         encrypted_offer: Ciphertext,
+        keychain: &Keychain,
     ) -> anyhow::Result<(Plaintext, Point<EvenY>, ChaCha20Rng)> {
         let local_proposal = self
-            .bet_db
+            .gun_db()
             .get_entity(bet_id)?
             .ok_or(anyhow!("Proposal does not exist"))?;
 
         match local_proposal {
             BetState::Proposed { local_proposal } => {
-                let keypair = self.keychain.get_key_for_proposal(&local_proposal.proposal);
+                let keypair = keychain.get_key_for_proposal(&local_proposal.proposal);
                 let (mut cipher, rng) = crate::ecdh::ecdh(&keypair, &encrypted_offer.public_key);
                 let plaintext = encrypted_offer.decrypt(&mut cipher)?;
 
@@ -58,13 +58,14 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         offer: Offer,
         offer_public_key: Point<EvenY>,
         mut rng: ChaCha20Rng,
+        keychain: &Keychain,
     ) -> anyhow::Result<ValidatedOffer> {
         let (offer_psbt_inputs, offer_input_value) = self.lookup_offer_inputs(&offer)?;
 
         let randomize = Randomize::new(&mut rng);
 
         let bet_state = self
-            .bet_db
+            .gun_db()
             .get_entity::<BetState>(bet_id)?
             .ok_or(anyhow!("Bet {} doesn't exist", bet_id))?;
         let local_proposal = match bet_state {
@@ -78,11 +79,11 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             ..
         } = local_proposal;
 
-        let keypair = self.keychain.get_key_for_proposal(&proposal);
+        let keypair = keychain.get_key_for_proposal(&proposal);
         let oracle_id = &proposal.oracle;
 
         let oracle_info = self
-            .bet_db
+            .gun_db()
             .get_entity::<OracleInfo>(oracle_id.clone())?
             .ok_or(anyhow!("Oracle {} isn't in the database", oracle_id))?;
 
@@ -111,7 +112,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .expect("we've checked the offer value on the chain");
         let joint_output_script_pubkey = joint_output.descriptor().script_pubkey();
 
-        let mut builder = self.wallet.build_tx();
+        let mut builder = self.bdk_wallet().build_tx();
 
         builder
             .manually_selected_only()
@@ -197,7 +198,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
     pub fn sign_validated_offer(&self, offer: &mut ValidatedOffer) -> anyhow::Result<()> {
         let psbt = &mut offer.bet.psbt;
         let is_final = self
-            .wallet
+            .bdk_wallet()
             .sign(psbt, SignOptions::default())
             .context("Failed to sign transaction")?;
 
@@ -211,7 +212,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         &self,
         ValidatedOffer { bet_id, bet, .. }: ValidatedOffer,
     ) -> anyhow::Result<Psbt> {
-        self.bet_db
+        self.gun_db()
             .update_bets(&[bet_id], |bet_state, _, _| match bet_state {
                 BetState::Proposed { .. } => Ok(BetState::Included {
                     bet: bet.clone(),
