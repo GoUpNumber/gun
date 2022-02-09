@@ -16,7 +16,12 @@ pub enum MapKey {
     BetId,
     OracleInfo(OracleId),
     Bet(BetId),
-    ProtocolSecret(()),
+    ProtocolSecret(ProtocolKind),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ProtocolKind {
+    Bet
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -108,7 +113,7 @@ macro_rules! impl_entity {
 
 impl_entity!(OracleId, OracleInfo, OracleInfo);
 impl_entity!(BetId, BetState, Bet);
-impl_entity!((), ProtocolSecret, ProtocolSecret);
+impl_entity!(ProtocolKind, ProtocolSecret, ProtocolSecret);
 
 pub struct GunDatabase(sled::Tree);
 
@@ -238,6 +243,21 @@ impl GunDatabase {
                 .open_tree("test-gun")
                 .unwrap(),
         )
+    }
+
+    pub fn safely_set_bet_protocol_secret(&self, new_secret: ProtocolSecret) -> anyhow::Result<()> {
+        let in_use: Vec<_> = self
+            .list_entities::<BetState>()
+            .filter_map(|bet| bet.ok())
+            .filter(|(_, state)| state.relies_on_protocol_secret())
+            .collect();
+        if in_use.is_empty() {
+            self.insert_entity(ProtocolKind::Bet, new_secret)?;
+            Ok(())
+        } else {
+            let in_use = in_use.into_iter().map(|(bet_id,_)| bet_id.to_string()).collect::<Vec<_>>().join(", ");
+            Err(anyhow!("Bets {} are using the protocol secret so you can't change it until they're resolved", in_use))
+        }
     }
 }
 

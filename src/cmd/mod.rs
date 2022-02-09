@@ -1,12 +1,15 @@
+mod bet;
+mod config;
 mod init;
 mod oracle;
-use crate::{
-    config::GunSigner,
-    keychain::ProtocolSecret,
-    signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
-    wallet::GunWallet,
-};
 mod wallet;
+pub use bet::*;
+pub use config::*;
+pub use init::*;
+pub use oracle::*;
+pub use wallet::*;
+
+use crate::{config::GunSigner, database::ProtocolKind, keychain::ProtocolSecret, signers::{PsbtDirSigner, PwSeedSigner, XKeySigner}, wallet::GunWallet};
 use anyhow::Context;
 use bdk::{
     bitcoin::{
@@ -25,12 +28,7 @@ use bdk::{
 };
 use std::sync::Arc;
 
-pub use init::*;
-pub mod bet;
-pub use bet::*;
-pub use oracle::*;
 use term_table::{row::Row, Table};
-pub use wallet::*;
 
 use crate::{
     chrono::NaiveDateTime,
@@ -64,9 +62,7 @@ pub enum FeeChoice {
     Speed(u32),
 }
 
-pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-    let config_file = wallet_dir.join("config.json");
-
+pub fn load_config(config_file: &std::path::Path) -> anyhow::Result<Config> {
     match config_file.exists() {
         true => {
             let json_config = fs::read_to_string(config_file.clone())?;
@@ -74,13 +70,19 @@ pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
                 .context("Perhaps you are trying to load an old config?")?
                 .into())
         }
-        false => {
-            return Err(anyhow!(
-                "missing config file at {}",
-                config_file.as_path().display()
-            ))
-        }
+        false => return Err(anyhow!("missing config file at {}", config_file.display())),
     }
+}
+
+pub fn write_config(config_file: &std::path::Path, config: Config) -> anyhow::Result<()> {
+    fs::write(
+        config_file,
+        serde_json::to_string_pretty(&config.into_versioned())
+            .unwrap()
+            .as_bytes(),
+    )
+    .context("writing config file")?;
+    Ok(())
 }
 
 pub fn read_yn(question: &str) -> bool {
@@ -137,7 +139,7 @@ pub fn load_wallet(
         ));
     }
 
-    let config = load_config(wallet_dir).context("loading configuration")?;
+    let config = load_config(&wallet_dir.join("config.json")).context("loading configuration")?;
     let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
         .context("opening database.sled")?;
 
@@ -202,7 +204,7 @@ pub fn load_wallet(
     }
 
     let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
-    let keychain = gun_db.get_entity::<ProtocolSecret>(())?.map(Keychain::from);
+    let keychain = gun_db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?.map(Keychain::from);
     let gun_wallet = GunWallet::new(wallet, gun_db);
 
     Ok((gun_wallet, keychain, config))
@@ -259,6 +261,10 @@ impl Cell {
         Self::String(string)
     }
 
+    pub fn maybe_string<T: core::fmt::Display>(t: Option<T>) -> Self {
+        t.map(Self::string).unwrap_or(Cell::Empty)
+    }
+
     pub fn datetime(dt: NaiveDateTime) -> Self {
         Self::DateTime(dt.timestamp() as u64)
     }
@@ -269,7 +275,7 @@ impl Cell {
             String(string) => string,
             Amount(amount) => format_amount(amount),
             Int(integer) => integer.to_string(),
-            Empty => "-".into(),
+            Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string(),
@@ -537,11 +543,23 @@ pub fn decide_to_broadcast(
 
 #[macro_export]
 macro_rules! item {
-    ($($key:literal => $value:expr),*$(,)?) => {{
+    ($($key:literal => $value:expr),+$(,)?) => {{
         let mut list = vec![];
         $(
             list.push(($key, $value));
         )*
         $crate::cmd::CmdOutput::Item(list)
+    }}
+}
+
+#[macro_export]
+macro_rules! eitem {
+    ($main_key:literal => $main_value:expr $(,$key:literal => $value:expr)*$(,)?) => {{
+        #[allow(unused_mut)]
+        let mut list = vec![];
+        $(
+            list.push(($key, $value));
+        )*
+        $crate::cmd::CmdOutput::EmphasisedItem { main: ($main_key, $main_value), other: list }
     }}
 }

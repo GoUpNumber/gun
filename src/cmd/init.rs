@@ -1,10 +1,4 @@
-use crate::{
-    bip85::get_bip85_bytes,
-    cmd::{self},
-    config::{Config, GunSigner},
-    database::GunDatabase,
-    keychain::ProtocolSecret,
-};
+use crate::{bip85::get_bip85_bytes, cmd::{self}, config::{Config, GunSigner}, database::{GunDatabase, ProtocolKind}, keychain::ProtocolSecret};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{secp256k1::Secp256k1, util::bip32::ExtendedPrivKey, Network},
@@ -397,15 +391,10 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         let gun_db = GunDatabase::new(
             sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
         );
-        gun_db.insert_entity((), ProtocolSecret::Bytes(protocol_secret))?;
+        gun_db.insert_entity(ProtocolKind::Bet, ProtocolSecret::Bytes(protocol_secret))?;
     }
 
-    fs::write(
-        config_file,
-        serde_json::to_string_pretty(&config.into_versioned())
-            .unwrap()
-            .as_bytes(),
-    )?;
+    cmd::write_config(&config_file, config)?;
 
     Ok(CmdOutput::None)
 }

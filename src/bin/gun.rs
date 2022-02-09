@@ -1,8 +1,6 @@
 use anyhow::anyhow;
 use bdk::blockchain::esplora::EsploraBlockchainConfig;
-use gun_wallet::cmd::{
-    self, bet::BetOpt, AddressOpt, InitOpt, SendOpt, SplitOpt, TransactionOpt, UtxoOpt,
-};
+use gun_wallet::cmd::{self, *};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -44,6 +42,8 @@ pub enum Commands {
     Init(InitOpt),
     /// Split coins into evenly sized outputs.
     Split(SplitOpt),
+    /// Set configuration values
+    Config(ConfigOpt),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -103,6 +103,7 @@ fn main() -> anyhow::Result<()> {
             Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet, opt),
             Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
             Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
+            Commands::Config(opt) => cmd::run_config_cmd(&wallet, &wallet_dir.join("config.json"), opt)
         }
     };
 
