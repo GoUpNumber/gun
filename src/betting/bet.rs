@@ -249,4 +249,11 @@ impl BetState {
             } => &mut bet.tags,
         }
     }
+
+    pub fn relies_on_protocol_secret(&self) -> bool {
+        match self {
+            BetState::Proposed { .. } => true,
+            _ => false,
+        }
+    }
 }
