@@ -9,7 +9,13 @@ pub use init::*;
 pub use oracle::*;
 pub use wallet::*;
 
-use crate::{config::GunSigner, database::ProtocolKind, keychain::ProtocolSecret, signers::{PsbtDirSigner, PwSeedSigner, XKeySigner}, wallet::GunWallet};
+use crate::{
+    config::GunSigner,
+    database::{ProtocolKind, StringDescriptor},
+    keychain::ProtocolSecret,
+    signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
+    wallet::GunWallet,
+};
 use anyhow::Context;
 use bdk::{
     bitcoin::{
@@ -65,7 +71,7 @@ pub enum FeeChoice {
 pub fn load_config(config_file: &std::path::Path) -> anyhow::Result<Config> {
     match config_file.exists() {
         true => {
-            let json_config = fs::read_to_string(config_file.clone())?;
+            let json_config = fs::read_to_string(config_file)?;
             Ok(serde_json::from_str::<VersionedConfig>(&json_config)
                 .context("Perhaps you are trying to load an old config?")?
                 .into())
@@ -149,9 +155,18 @@ pub fn load_wallet(
 
     let esplora = EsploraBlockchain::from_config(config.blockchain_config())?;
 
+    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
+
+    let external = gun_db
+        .get_entity::<StringDescriptor>(KeychainKind::External)?
+        .ok_or(anyhow!(
+            "external descriptor couldn't be retrieved from database"
+        ))?;
+    let internal = gun_db.get_entity::<StringDescriptor>(KeychainKind::Internal)?;
+
     let mut wallet = Wallet::new(
-        &config.descriptor_external,
-        config.descriptor_internal.as_ref(),
+        &external.0,
+        internal.as_ref().map(|x| &x.0),
         config.network,
         wallet_db,
         esplora,
@@ -203,8 +218,9 @@ pub fn load_wallet(
         );
     }
 
-    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
-    let keychain = gun_db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?.map(Keychain::from);
+    let keychain = gun_db
+        .get_entity::<ProtocolSecret>(ProtocolKind::Bet)?
+        .map(Keychain::from);
     let gun_wallet = GunWallet::new(wallet, gun_db);
 
     Ok((gun_wallet, keychain, config))

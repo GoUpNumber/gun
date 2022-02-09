@@ -55,13 +55,11 @@ impl From<VersionedConfig> for Config {
 pub struct Config {
     pub network: Network,
     pub blockchain: AnyBlockchainConfig,
-    pub descriptor_external: String,
-    pub descriptor_internal: Option<String>,
     pub signers: Vec<GunSigner>,
 }
 
 impl Config {
-    pub fn default_config(network: Network, descriptor_external: String) -> Config {
+    pub fn default_config(network: Network) -> Config {
         use Network::*;
         let url = match network {
             Bitcoin => "https://mempool.space/api",
@@ -78,8 +76,6 @@ impl Config {
         Config {
             network,
             blockchain,
-            descriptor_external,
-            descriptor_internal: None,
             signers: vec![],
         }
     }

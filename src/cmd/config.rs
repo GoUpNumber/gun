@@ -1,5 +1,12 @@
-use crate::{cmd, cmd::Cell, database::ProtocolKind, eitem, keychain::ProtocolSecret, wallet::GunWallet};
-use bdk::blockchain::AnyBlockchainConfig;
+use crate::{
+    cmd,
+    cmd::Cell,
+    database::{ProtocolKind, StringDescriptor},
+    eitem,
+    keychain::ProtocolSecret,
+    wallet::GunWallet,
+};
+use bdk::{blockchain::AnyBlockchainConfig, KeychainKind};
 use std::path::Path;
 use structopt::StructOpt;
 
@@ -25,6 +32,12 @@ where
 {
     /// Set the value
     Set { value: T },
+    /// Get the value
+    Get,
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub enum Get {
     /// Get the value
     Get,
 }
@@ -64,6 +77,16 @@ pub enum ConfigOpt {
     Blockchain(BlockchainSettings),
     /// Protocol specific configuration options.
     Protocol(Protocol),
+    /// The wallet's descriptors
+    Descriptor(Descriptors),
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub enum Descriptors {
+    /// The "external" descriptor (where gun derives receiving addresses from).
+    External(Get),
+    /// The "internal" descriptor (where gun derives change addresses from).
+    Internal(Get),
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -77,7 +100,7 @@ pub enum BetSettings {
     /// The protocol secret is used to generate temporary keys used in betting.
     ///
     /// Unlike other configuration options it is stored in the database.
-    ProtocolSecret(SetGet<ProtocolSecret>)
+    ProtocolSecret(SetGet<ProtocolSecret>),
 }
 
 macro_rules! setgetunset {
@@ -139,25 +162,36 @@ pub fn run_config_cmd(
                 StopGap(setget) => setget!(setget, config, config_path, esplora_config, stop_gap),
             }
         }
-        ConfigOpt::Protocol(protocol) => {
-            match protocol {
-                Protocol::Bet(bet_settings) => {
-                    match bet_settings {
-                        BetSettings::ProtocolSecret(setget) => {
-                            let db = wallet.gun_db();
-                            match setget {
-                                SetGet::Get => Ok(
-                                    eitem!( "protocol_secret" => Cell::maybe_string(db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?)),
-                                ),
-                                SetGet::Set { value } => {
-                                    db.safely_set_bet_protocol_secret(value)?;
-                                    Ok(CmdOutput::None)
-                                }
-                            }
+        ConfigOpt::Protocol(protocol) => match protocol {
+            Protocol::Bet(bet_settings) => match bet_settings {
+                BetSettings::ProtocolSecret(setget) => {
+                    let db = wallet.gun_db();
+                    match setget {
+                        SetGet::Get => Ok(
+                            eitem!( "protocol_secret" => Cell::maybe_string(db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?)),
+                        ),
+                        SetGet::Set { value } => {
+                            db.safely_set_bet_protocol_secret(value)?;
+                            Ok(CmdOutput::None)
                         }
                     }
                 }
-            }
+            },
+        },
+        ConfigOpt::Descriptor(desc) => {
+            let db = wallet.gun_db();
+            Ok(match desc {
+                Descriptors::External(Get::Get) => {
+                    eitem! {
+                        "external" => Cell::maybe_string(db.get_entity::<StringDescriptor>(KeychainKind::External)?.map(|x| x.0)),
+                    }
+                }
+                Descriptors::Internal(Get::Get) => {
+                    eitem! {
+                        "internal" =>  Cell::maybe_string(db.get_entity::<StringDescriptor>(KeychainKind::Internal)?.map(|x| x.0))
+                    }
+                }
+            })
         }
     }
 }

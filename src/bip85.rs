@@ -1,13 +1,13 @@
 use bdk::bitcoin::{
     hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
-    secp256k1::{Secp256k1, SignOnly},
+    secp256k1::{Secp256k1, Signing},
     util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey},
 };
 
-pub fn get_bip85_bytes<const L: usize>(
+pub fn get_bip85_bytes<S: Signing, const L: usize>(
     xpriv: ExtendedPrivKey,
     index: u32,
-    secp: &Secp256k1<SignOnly>,
+    secp: &Secp256k1<S>,
 ) -> [u8; L] {
     let path = DerivationPath::from(vec![
         ChildNumber::Hardened { index: 83696968 },
@@ -37,7 +37,7 @@ mod tests {
             hex::decode("ea3ceb0b02ee8e587779c63f4b7b3a21e950a213f1ec53cab608d13e8796e6dc")
                 .expect("reading in expected test bytes");
         assert_eq!(
-            get_bip85_bytes::<32>(xpriv, 0, &secp).to_vec(),
+            get_bip85_bytes::<_, 32>(xpriv, 0, &secp).to_vec(),
             expected_hex
         );
     }
@@ -50,7 +50,7 @@ mod tests {
             hex::decode("492db4698cf3b73a5a24998aa3e9d7fa96275d85724a91e71aa2d645442f878555d078fd1f1f67e368976f04137b1f7a0d19232136ca50c44614af72b5582a5c")
                 .expect("reading in expected test bytes");
         assert_eq!(
-            get_bip85_bytes::<64>(xpriv, 0, &secp).to_vec(),
+            get_bip85_bytes::<_, 64>(xpriv, 0, &secp).to_vec(),
             expected_hex
         );
     }

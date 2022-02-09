@@ -42,7 +42,7 @@ pub enum Commands {
     Init(InitOpt),
     /// Split coins into evenly sized outputs.
     Split(SplitOpt),
-    /// Set configuration values
+    /// Get/set configuration values
     Config(ConfigOpt),
 }
 
@@ -103,7 +103,9 @@ fn main() -> anyhow::Result<()> {
             Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet, opt),
             Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
             Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
-            Commands::Config(opt) => cmd::run_config_cmd(&wallet, &wallet_dir.join("config.json"), opt)
+            Commands::Config(opt) => {
+                cmd::run_config_cmd(&wallet, &wallet_dir.join("config.json"), opt)
+            }
         }
     };
 

@@ -6,6 +6,7 @@ use bdk::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
     },
+    KeychainKind,
 };
 use olivia_core::OracleId;
 
@@ -17,11 +18,12 @@ pub enum MapKey {
     OracleInfo(OracleId),
     Bet(BetId),
     ProtocolSecret(ProtocolKind),
+    Descriptor(KeychainKind),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolKind {
-    Bet
+    Bet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -55,6 +57,7 @@ pub enum KeyKind {
     OracleInfo,
     Bet,
     ProtocolSecret,
+    Descriptor,
 }
 
 impl KeyKind {
@@ -114,6 +117,9 @@ macro_rules! impl_entity {
 impl_entity!(OracleId, OracleInfo, OracleInfo);
 impl_entity!(BetId, BetState, Bet);
 impl_entity!(ProtocolKind, ProtocolSecret, ProtocolSecret);
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct StringDescriptor(pub String);
+impl_entity!(KeychainKind, StringDescriptor, Descriptor);
 
 pub struct GunDatabase(sled::Tree);
 
@@ -255,7 +261,11 @@ impl GunDatabase {
             self.insert_entity(ProtocolKind::Bet, new_secret)?;
             Ok(())
         } else {
-            let in_use = in_use.into_iter().map(|(bet_id,_)| bet_id.to_string()).collect::<Vec<_>>().join(", ");
+            let in_use = in_use
+                .into_iter()
+                .map(|(bet_id, _)| bet_id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             Err(anyhow!("Bets {} are using the protocol secret so you can't change it until they're resolved", in_use))
         }
     }
