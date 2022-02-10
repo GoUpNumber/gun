@@ -5,7 +5,7 @@ use bdk::{
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
-    KeychainKind, LocalUtxo, SignOptions, TxBuilder,
+    KeychainKind, LocalUtxo, SignOptions, TransactionDetails, TxBuilder,
 };
 use std::collections::HashMap;
 use structopt::StructOpt;
@@ -115,7 +115,7 @@ fn list_keychain_addresses(
     let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
     let index = wallet_db.get_last_index(keychain_kind)?;
     let map = index_utxos(&*wallet_db)?;
-    let txn_map = index_script_txns(&*wallet_db)?;
+    let txn_map = index_script_txns(&wallet_db.iter_txs(true)?)?;
     let rows = match index {
         Some(index) => scripts
             .iter()
@@ -131,7 +131,7 @@ fn list_keychain_addresses(
                     None => 0,
                 };
 
-                if unused && (txn_count != 0) {
+                if unused && txn_count != 0 {
                     return None;
                 }
                 if hide_zeros && (value == Amount::ZERO) {
@@ -148,8 +148,8 @@ fn list_keychain_addresses(
                     Cell::String(address.to_string()),
                     Cell::Amount(value),
                     Cell::Int(count as u64),
-                    Cell::String(keychain_name),
                     Cell::Int(txn_count),
+                    Cell::String(keychain_name),
                 ])
             })
             // newest should go first
@@ -183,7 +183,7 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             unused,
         } => {
             let mut rows: Vec<Vec<Cell>> = Vec::new();
-            let header = vec!["address", "value", "utxos", "keychain", "txns"];
+            let header = vec!["address", "value", "utxos", "txos", "keychain"];
 
             let keychains = match (internal, all) {
                 (_, true) => vec![KeychainKind::External, KeychainKind::Internal],
@@ -248,11 +248,11 @@ fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script,
 }
 
 fn index_script_txns(
-    wallet_db: &impl BatchDatabase,
+    wallet_db: &[TransactionDetails],
 ) -> anyhow::Result<HashMap<Script, Vec<Transaction>>> {
     let mut map: HashMap<Script, Vec<Transaction>> = HashMap::new();
     for txn in wallet_db
-        .iter_txs(true)?
+        // .iter_txs(true)?
         .iter()
         .flat_map(|tx_details| tx_details.transaction.as_ref())
     {
