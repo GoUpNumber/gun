@@ -1,11 +1,11 @@
 use super::*;
 use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
 use bdk::{
-    bitcoin::{Address, OutPoint, Script, Txid},
+    bitcoin::{Address, OutPoint, Script, Transaction, Txid},
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
-    KeychainKind, LocalUtxo, SignOptions, TxBuilder,
+    KeychainKind, LocalUtxo, SignOptions, TransactionDetails, TxBuilder,
 };
 use std::collections::HashMap;
 use structopt::StructOpt;
@@ -97,6 +97,9 @@ pub enum AddressOpt {
         /// Hide addresses with zero balance
         #[structopt(long)]
         hide_zeros: bool,
+        /// Show unused addresses
+        #[structopt(long)]
+        unused: bool,
     },
     /// Show details of an address
     Show { address: Address },
@@ -106,11 +109,13 @@ fn list_keychain_addresses(
     wallet: &GunWallet,
     keychain_kind: KeychainKind,
     hide_zeros: bool,
+    unused: bool,
 ) -> anyhow::Result<Vec<Vec<Cell>>> {
     let wallet_db = wallet.bdk_wallet().database();
     let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
     let index = wallet_db.get_last_index(keychain_kind)?;
     let map = index_utxos(&*wallet_db)?;
+    let txn_map = index_script_txns(&wallet_db.iter_txs(true)?)?;
     let rows = match index {
         Some(index) => scripts
             .iter()
@@ -121,7 +126,14 @@ fn list_keychain_addresses(
                     .get(script)
                     .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                     .unwrap_or(Amount::ZERO);
+                let txn_count = match txn_map.get(script) {
+                    Some(txn_vec) => txn_vec.len() as u64,
+                    None => 0,
+                };
 
+                if unused && txn_count != 0 {
+                    return None;
+                }
                 if hide_zeros && (value == Amount::ZERO) {
                     return None;
                 }
@@ -136,6 +148,7 @@ fn list_keychain_addresses(
                     Cell::String(address.to_string()),
                     Cell::Amount(value),
                     Cell::Int(count as u64),
+                    Cell::Int(txn_count),
                     Cell::String(keychain_name),
                 ])
             })
@@ -167,9 +180,10 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             internal,
             hide_zeros,
             all,
+            unused,
         } => {
             let mut rows: Vec<Vec<Cell>> = Vec::new();
-            let header = vec!["address", "value", "utxos", "keychain"];
+            let header = vec!["address", "value", "utxos", "txos", "keychain"];
 
             let keychains = match (internal, all) {
                 (_, true) => vec![KeychainKind::External, KeychainKind::Internal],
@@ -178,8 +192,9 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             };
 
             for keychain in keychains {
-                let mut internal_rows = list_keychain_addresses(wallet, keychain, hide_zeros)
-                    .expect("fetching addresses from wallet_db");
+                let mut internal_rows =
+                    list_keychain_addresses(wallet, keychain, hide_zeros, unused)
+                        .expect("fetching addresses from wallet_db");
                 rows.append(&mut internal_rows);
             }
 
@@ -227,6 +242,25 @@ fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script,
         map.entry(local_utxo.txout.script_pubkey.clone())
             .and_modify(|v| v.push(local_utxo.clone()))
             .or_insert(vec![local_utxo.clone()]);
+    }
+
+    Ok(map)
+}
+
+fn index_script_txns(
+    wallet_db: &[TransactionDetails],
+) -> anyhow::Result<HashMap<Script, Vec<Transaction>>> {
+    let mut map: HashMap<Script, Vec<Transaction>> = HashMap::new();
+    for txn in wallet_db
+        // .iter_txs(true)?
+        .iter()
+        .flat_map(|tx_details| tx_details.transaction.as_ref())
+    {
+        for out in &txn.output {
+            map.entry(out.script_pubkey.clone())
+                .and_modify(|v| v.push(txn.clone()))
+                .or_insert(vec![txn.clone()]);
+        }
     }
 
     Ok(map)
