@@ -1,12 +1,12 @@
 mod bet;
 mod config;
-mod init;
 mod oracle;
+mod setup;
 mod wallet;
 pub use bet::*;
 pub use config::*;
-pub use init::*;
 pub use oracle::*;
+pub use setup::*;
 pub use wallet::*;
 
 use crate::{

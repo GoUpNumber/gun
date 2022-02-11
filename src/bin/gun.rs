@@ -38,8 +38,8 @@ pub enum Commands {
     Utxo(UtxoOpt),
     /// Send funds out of wallet
     Send(SendOpt),
-    /// Initialize a wallet
-    Init(InitOpt),
+    /// Setup a new wallet
+    Setup(SetupOpt),
     /// Split coins into evenly sized outputs.
     Split(SplitOpt),
     /// Get/set configuration values
@@ -54,8 +54,8 @@ fn main() -> anyhow::Result<()> {
         .gun_dir
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".gun"));
 
-    let res = if let Commands::Init(opt) = opt.command {
-        cmd::run_init(&wallet_dir, opt)
+    let res = if let Commands::Setup(opt) = opt.command {
+        cmd::run_setup(&wallet_dir, opt)
     } else {
         let (wallet, keychain, config) = cmd::load_wallet(&wallet_dir)?;
 
@@ -99,7 +99,7 @@ fn main() -> anyhow::Result<()> {
             Commands::Balance => cmd::run_balance(&wallet, sync),
             Commands::Address(opt) => cmd::get_address(&wallet, opt),
             Commands::Send(opt) => cmd::run_send(&wallet, opt),
-            Commands::Init(_) => unreachable!("we handled init already"),
+            Commands::Setup(_) => unreachable!("we handled setup already"),
             Commands::Tx(opt) => cmd::run_transaction_cmd(&wallet, opt),
             Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
             Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
