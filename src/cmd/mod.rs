@@ -45,11 +45,7 @@ use crate::{
     FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs};
 
 #[derive(Clone, Debug, structopt::StructOpt)]
 pub struct FeeArgs {
@@ -127,10 +123,6 @@ pub fn read_input<V>(
     }
     eprintln!("STDIN terminated");
     std::process::exit(2)
-}
-
-pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
-    wallet_dir.join("seed.txt")
 }
 
 pub fn load_wallet(
