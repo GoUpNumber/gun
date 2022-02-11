@@ -340,13 +340,9 @@ impl SpendOpt {
             (psbt, vec![])
         };
 
-        wallet
-            .bdk_wallet()
-            .sign(&mut psbt, SignOptions::default())?;
-
         let finalized = wallet
             .bdk_wallet()
-            .finalize_psbt(&mut psbt, SignOptions::default())?;
+            .sign(&mut psbt, SignOptions::default())?;
 
         assert!(finalized, "transaction must be finalized at this point");
 
@@ -374,7 +370,9 @@ impl SpendOpt {
         Ok(output)
     }
 }
+
 pub fn run_send(wallet: &GunWallet, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     let SendOpt {
         to,
         value,
@@ -580,6 +578,7 @@ pub struct SplitOpt {
 }
 
 pub fn run_split_cmd(wallet: &GunWallet, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     let SplitOpt {
         output_size,
         n,

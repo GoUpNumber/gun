@@ -1,6 +1,4 @@
-use miniscript::DescriptorTrait;
-
-use crate::{betting::*, database::GunDatabase, FeeSpec, OracleInfo};
+use crate::{betting::*, database::GunDatabase, signers::PSBT_SIGNER_ID, FeeSpec, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
@@ -9,10 +7,13 @@ use bdk::{
     },
     blockchain::{noop_progress, Blockchain, EsploraBlockchain},
     database::Database,
+    descriptor::policy::Satisfaction,
+    signer::SignerId,
     sled,
     wallet::AddressIndex,
     KeychainKind, SignOptions,
 };
+use miniscript::DescriptorTrait;
 use olivia_core::{Attestation, Outcome};
 use olivia_secp256k1::{
     fun::{g, marker::*, s, Scalar, G},
@@ -273,6 +274,26 @@ impl GunWallet {
                 Ok(_updated) => {}
                 Err(e) => eprintln!("Error trying to take action on bet {}: {:?}", bet_id, e),
             }
+        }
+    }
+
+    pub fn is_watch_only(&self) -> bool {
+        let (external, _) = self.bdk_wallet().signers();
+
+        // PSBT signers are meant to sign everything so if we've got one of them we can sign anything.
+        if external.ids().contains(&&SignerId::Dummy(PSBT_SIGNER_ID)) {
+            return false;
+        }
+
+        let policy = self
+            .bdk_wallet()
+            .policies(KeychainKind::External)
+            .expect("extracting policy should not have error")
+            .expect("policy for external wallet exists");
+
+        match policy.contribution {
+            Satisfaction::Complete { .. } | Satisfaction::PartialComplete { .. } => false,
+            _ => true,
         }
     }
 }
