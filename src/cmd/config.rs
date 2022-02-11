@@ -96,7 +96,10 @@ pub enum SignerActions {
 
 #[derive(StructOpt, Debug, Clone)]
 pub enum AddSigner {
-    /// Add a PSBT signer
+    /// Add a PSBT signer.
+    ///
+    /// Whenever a PSBT signer is asked to sign something it will simply write the PSBT out to the
+    /// path and wait for you to sign it.
     Psbt {
         /// The path the signer will write PSBTs to so they can be signed.
         path: PathBuf,
