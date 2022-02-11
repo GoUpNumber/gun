@@ -557,6 +557,16 @@ pub fn decide_to_broadcast(
     }
 }
 
+fn ensure_not_watch_only(wallet: &GunWallet) -> anyhow::Result<()> {
+    if wallet.is_watch_only() {
+        Err(anyhow!(
+            "You cannot do this command because this wallet is watch-only"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[macro_export]
 macro_rules! item {
     ($($key:literal => $value:expr),+$(,)?) => {{
