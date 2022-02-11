@@ -66,11 +66,6 @@ pub enum InitOpt {
     Descriptor {
         #[structopt(flatten)]
         common_args: CommonArgs,
-        /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
-        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
-        /// If this is left unset the wallet will be watch-only.
-        #[structopt(long, parse(from_os_str))]
-        psbt_signer_dir: Option<PathBuf>,
         /// The external descriptor for the wallet
         #[structopt(name = "external-descriptor")]
         external: String,
@@ -87,11 +82,6 @@ pub enum InitOpt {
     XPub {
         #[structopt(flatten)]
         common_args: CommonArgs,
-        /// Save unsigned PSBTs to this directory. PSBTs will be saved as `<txid>.psbt`.
-        /// You then sign and save the transaction into this directory as <txid>-signed.psbt.
-        /// If this is left unset the wallet will be watch-only.
-        #[structopt(long, parse(from_os_str))]
-        psbt_signer_dir: Option<PathBuf>,
         /// the xpub descriptor
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
@@ -247,7 +237,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
         }
         InitOpt::Descriptor {
             common_args,
-            psbt_signer_dir,
             external,
             internal,
         } => {
@@ -259,42 +248,21 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 MemoryDatabase::default(),
             )?;
 
-            let signers = match psbt_signer_dir {
-                Some(path) => {
-                    vec![GunSigner::PsbtDir { path }]
-                }
-                None => {
-                    vec![]
-                }
-            };
-
             (
-                Config {
-                    signers,
-                    ..Config::default_config(common_args.network)
-                },
+                Config::default_config(common_args.network),
                 None,
                 (external, internal),
             )
         }
         InitOpt::XPub {
             common_args,
-            psbt_signer_dir,
             ref xpub,
         } => {
             let external = set_network(&format!("wpkh({}/0/*)", xpub), common_args.network)?;
             let internal = set_network(&format!("wpkh({}/1/*)", xpub), common_args.network)?;
 
-            let signers = match psbt_signer_dir {
-                Some(path) => vec![GunSigner::PsbtDir { path }],
-                None => vec![],
-            };
-
             (
-                Config {
-                    signers,
-                    ..Config::default_config(common_args.network)
-                },
+                Config::default_config(common_args.network),
                 None,
                 (external, Some(internal)),
             )
@@ -360,22 +328,6 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             )
             .into_wallet_descriptor(&secp, common_args.network)?;
 
-            // let external = set_network(
-            //     &format!(
-            //         "wpkh([{}/84'/0'/0']{}/0/*)",
-            //         &wallet_export.xfp, &wallet_export.bip84.xpub
-            //     ),
-            //     common_args.network,
-            // )
-            //     .context("generating external descriptor")?;
-            // let internal = set_network(
-            //     &format!(
-            //         "wpkh([{}/84'/0'/0']{}/1/*)",
-            //         &wallet_export.xfp, &wallet_export.bip84.xpub
-            //     ),
-            //     common_args.network,
-            // )
-            //     .context("generating internal descriptor")?;
             let signers = vec![GunSigner::PsbtDir {
                 path: coldcard_sd_dir,
             }];
