@@ -45,8 +45,8 @@ pub struct CommonArgs {
 }
 
 #[derive(Clone, Debug, StructOpt)]
-pub enum InitOpt {
-    /// Initialize a wallet using a seedphrase
+pub enum SetupOpt {
+    /// Setup using a seedphrase
     Seed {
         #[structopt(flatten)]
         common_args: CommonArgs,
@@ -60,7 +60,7 @@ pub enum InitOpt {
         #[structopt(long)]
         use_passphrase: bool,
     },
-    /// Initialize using a output descriptor
+    /// Setup using a output descriptor
     ///
     /// This option is intended for people who know what they are doing!
     Descriptor {
@@ -73,11 +73,11 @@ pub enum InitOpt {
         #[structopt(name = "internal-descriptor")]
         internal: Option<String>,
     },
-    /// Initialize using an extended public key descriptor.
+    /// Setup using an extended public key descriptor.
     ///
     /// The descriptor must be in [masterfingerprint/hardened'/derivation'/path']xpub format e.g.
     ///
-    /// $ gun init xpub "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
+    /// $ gun setup xpub "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
     #[structopt(name = "xpub")]
     XPub {
         #[structopt(flatten)]
@@ -86,7 +86,7 @@ pub enum InitOpt {
         #[structopt(name = "xpub-descriptor")]
         xpub: String,
     },
-    /// Initialize using a Coldcard SD card path.
+    /// Setup with a ColdCard via SD card
     ///
     /// Requires a `coldcard-export.json` in this directory.
     /// On Coldcard: Advanced -> MicroSD Card -> Export Wallet -> Generic JSON
@@ -118,7 +118,7 @@ struct BIP84Export {
     xpub: ExtendedPubKey,
 }
 
-pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<CmdOutput> {
     if wallet_dir.exists() {
         return Err(anyhow!(
             "wallet directory {} already exists -- delete it to create a new wallet",
@@ -128,7 +128,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
     let secp = Secp256k1::<bdk::bitcoin::secp256k1::All>::new();
 
     let (config, protocol_secret, (external, internal), seed_words_file) = match cmd {
-        InitOpt::Seed {
+        SetupOpt::Seed {
             common_args,
             from_existing,
             n_words,
@@ -232,7 +232,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 Some((sw_file, mnemonic.word_iter().collect::<Vec<_>>().join(" "))),
             )
         }
-        InitOpt::Descriptor {
+        SetupOpt::Descriptor {
             common_args,
             external,
             internal,
@@ -252,7 +252,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 None,
             )
         }
-        InitOpt::XPub {
+        SetupOpt::XPub {
             common_args,
             ref xpub,
         } => {
@@ -266,7 +266,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 None,
             )
         }
-        InitOpt::Coldcard {
+        SetupOpt::Coldcard {
             common_args,
             coldcard_sd_dir,
             import_entropy,
