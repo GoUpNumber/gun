@@ -56,7 +56,7 @@ pub enum InitOpt {
         #[structopt(long, default_value = "12", name = "[12|24]")]
         /// The number of BIP39 seed words to use
         n_words: usize,
-        /// Wallet has BIP39 passphrase
+        /// Password protect your coins
         #[structopt(long)]
         use_passphrase: bool,
     },
@@ -127,18 +127,14 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
     }
     let secp = Secp256k1::<bdk::bitcoin::secp256k1::All>::new();
 
-    std::fs::create_dir(&wallet_dir)?;
-
-    let config_file = wallet_dir.join("config.json");
-
-    let (config, protocol_secret, (external, internal)) = match cmd {
+    let (config, protocol_secret, (external, internal), seed_words_file) = match cmd {
         InitOpt::Seed {
             common_args,
             from_existing,
             n_words,
             use_passphrase,
         } => {
-            let (sw_file, seed_words) = match from_existing {
+            let mnemonic = match from_existing {
                 Some(existing_words_file) => {
                     let seed_words = match existing_words_file.as_str() {
                         "-" => {
@@ -156,10 +152,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                             ))?
                         }
                     };
-                    Mnemonic::parse(&seed_words).context("parsing existing seedwords")?;
-                    let sw_file = cmd::get_seed_words_file(wallet_dir);
-                    fs::write(sw_file.clone(), seed_words.clone())?;
-                    (sw_file, seed_words)
+                    Mnemonic::parse(&seed_words).context("parsing existing seedwords")?
                 }
                 None => {
                     let seed_words: GeneratedKey<_, Segwitv0> = Mnemonic::generate((
@@ -170,32 +163,19 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                         },
                         Language::English,
                     ))
-                    .context("generating seed phrase failed")?;
-                    let seed_words: String = seed_words.word_iter().collect::<Vec<_>>().join(" ");
-                    let sw_file = cmd::get_seed_words_file(wallet_dir);
-                    fs::write(sw_file.clone(), seed_words.clone())?;
-                    eprintln!("Wrote seeds words to {}", sw_file.display());
-                    (sw_file, seed_words)
+                    .expect("cannot fail");
+                    seed_words.into_key()
                 }
             };
 
-            let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
-                anyhow!(
-                    "parsing seed phrase in '{}' failed: {}",
-                    sw_file.as_path().display(),
-                    e
-                )
-            })?;
-
             let passphrase = if use_passphrase {
-                eprintln!("Warning: by using a passphrase you are mutating the secret derived from your seed words. \
-                           If you lose or forget your seedphrase, you will lose access to your funds.");
+                eprintln!("WARNING: If you lose or forget your passphrase, you will lose access to your funds.");
+                eprintln!("WARNING: You MUST store your passphrase with your seed words in order to make a complete backup.");
                 loop {
                     let passphrase =
-                        rpassword::prompt_password_stderr("Please enter your wallet passphrase: ")?;
-                    let passphrase_confirmation = rpassword::prompt_password_stderr(
-                        "Please confirm your wallet passphrase: ",
-                    )?;
+                        rpassword::prompt_password_stderr("Enter your wallet passphrase:")?;
+                    let passphrase_confirmation =
+                        rpassword::prompt_password_stderr("Enter your wallet passphrase again:")?;
                     if !passphrase.eq(&passphrase_confirmation) {
                         eprintln!("Mismatching passphrases. Try again.\n")
                     } else {
@@ -206,6 +186,22 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 "".to_string()
             };
 
+            let sw_file = wallet_dir.join("seed.txt");
+            if cmd::read_yn("Do you want gun to print out your seed words now to make a backup?") {
+                let printed = mnemonic
+                    .word_iter()
+                    .enumerate()
+                    .map(|(i, word)| format!("{}: {}", i + 1, word))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                println!("{printed}");
+            } else {
+                eprintln!(
+                    "Err okay then...make sure you backup {} after this.",
+                    sw_file.display()
+                );
+            }
+
             let seed_bytes = mnemonic.to_seed(passphrase);
             let xpriv = ExtendedPrivKey::new_master(common_args.network, &seed_bytes).unwrap();
 
@@ -214,7 +210,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
             let master_fingerprint = xpriv.fingerprint(&secp);
 
             let signers = vec![GunSigner::SeedWordsFile {
-                file_path: sw_file,
+                file_path: sw_file.clone(),
                 passphrase_fingerprint: if use_passphrase {
                     Some(master_fingerprint)
                 } else {
@@ -233,6 +229,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 },
                 Some(bip85_bytes),
                 (external.to_string(), Some(internal.to_string())),
+                Some((sw_file, mnemonic.word_iter().collect::<Vec<_>>().join(" "))),
             )
         }
         InitOpt::Descriptor {
@@ -252,6 +249,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 Config::default_config(common_args.network),
                 None,
                 (external, internal),
+                None,
             )
         }
         InitOpt::XPub {
@@ -265,6 +263,7 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 Config::default_config(common_args.network),
                 None,
                 (external, Some(internal)),
+                None,
             )
         }
         InitOpt::Coldcard {
@@ -339,9 +338,14 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
                 },
                 bip85_bytes,
                 (external.to_string(), Some(internal.to_string())),
+                None,
             )
         }
     };
+
+    std::fs::create_dir(&wallet_dir)?;
+
+    let config_file = wallet_dir.join("config.json");
 
     let gun_db = GunDatabase::new(
         sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
@@ -363,6 +367,11 @@ pub fn run_init(wallet_dir: &std::path::Path, cmd: InitOpt) -> anyhow::Result<Cm
 
     cmd::write_config(&config_file, config)?;
 
+    if let Some((path, content)) = seed_words_file {
+        std::fs::write(path, content)?;
+    }
+
+    eprintln!("gun initialized successfully to {}", wallet_dir.display());
     Ok(CmdOutput::None)
 }
 
