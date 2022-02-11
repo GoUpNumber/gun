@@ -211,6 +211,7 @@ pub fn run_bet_cmd(
     cmd: BetOpt,
     sync: bool,
 ) -> anyhow::Result<cmd::CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     // For now just always do this but we may want to do something more fine grained later.
     if sync {
         wallet.sync()?;

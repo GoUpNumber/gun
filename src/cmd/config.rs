@@ -1,13 +1,14 @@
 use crate::{
     cmd,
     cmd::Cell,
+    config::GunSigner,
     database::{ProtocolKind, StringDescriptor},
     eitem,
     keychain::ProtocolSecret,
     wallet::GunWallet,
 };
 use bdk::{blockchain::AnyBlockchainConfig, KeychainKind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
 use super::CmdOutput;
@@ -77,8 +78,29 @@ pub enum ConfigOpt {
     Blockchain(BlockchainSettings),
     /// Protocol specific configuration options.
     Protocol(Protocol),
-    /// The wallet's descriptors
+    /// The wallet's descriptors.
     Descriptor(Descriptors),
+    /// The wallet's signers.
+    Signer(SignerActions),
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub enum SignerActions {
+    /// Add a signer
+    Add(AddSigner),
+    /// Remove a Signer
+    Remove { index: usize },
+    /// List existing signers
+    List,
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub enum AddSigner {
+    /// Add a PSBT signer
+    Psbt {
+        /// The path the signer will write PSBTs to so they can be signed.
+        path: PathBuf,
+    },
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -108,7 +130,6 @@ macro_rules! setgetunset {
         match $setget {
             SetGetUnset::Set { value } => {
                 $config_sub.$prop = Some(value);
-                cmd::write_config($config_path, $config)?;
                 Ok(CmdOutput::None)
             }
             SetGetUnset::Get => Ok(CmdOutput::EmphasisedItem {
@@ -120,7 +141,6 @@ macro_rules! setgetunset {
             }),
             SetGetUnset::Unset => {
                 $config_sub.$prop = None;
-                cmd::write_config($config_path, $config)?;
                 Ok(CmdOutput::None)
             }
         }
@@ -132,7 +152,6 @@ macro_rules! setget {
         match $setget {
             SetGet::Set { value } => {
                 $config_sub.$prop = value;
-                cmd::write_config($config_path, $config)?;
                 Ok(CmdOutput::None)
             }
             SetGet::Get => Ok(CmdOutput::EmphasisedItem {
@@ -149,7 +168,7 @@ pub fn run_config_cmd(
     opt: ConfigOpt,
 ) -> anyhow::Result<CmdOutput> {
     let mut config = cmd::load_config(config_path)?;
-    match opt {
+    let output = match opt {
         ConfigOpt::Blockchain(prop) => {
             let AnyBlockchainConfig::Esplora(esplora_config) = &mut config.blockchain;
             use BlockchainSettings::*;
@@ -193,5 +212,33 @@ pub fn run_config_cmd(
                 }
             })
         }
-    }
+        ConfigOpt::Signer(action) => Ok(match action {
+            SignerActions::Add(signer) => {
+                match signer {
+                    AddSigner::Psbt { path } => config.signers.push(GunSigner::PsbtDir { path }),
+                }
+                CmdOutput::None
+            }
+            SignerActions::Remove { index } => {
+                config.signers.remove(index);
+                CmdOutput::None
+            }
+            SignerActions::List => {
+                let rows = config
+                    .signers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, signer)| {
+                        vec![
+                            Cell::string(i),
+                            Cell::string(serde_json::to_string(&signer).unwrap()),
+                        ]
+                    })
+                    .collect();
+                CmdOutput::table(vec!["index", "signer"], rows)
+            }
+        }),
+    };
+    cmd::write_config(config_path, config)?;
+    output
 }

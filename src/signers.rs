@@ -87,6 +87,8 @@ pub struct PwSeedSigner {
     pub master_fingerprint: Fingerprint,
 }
 
+pub const PSBT_SIGNER_ID: u64 = 3735928559;
+
 impl Signer for PwSeedSigner {
     fn sign(
         &self,
@@ -226,7 +228,7 @@ impl Signer for PsbtDirSigner {
 
     fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
         // Fingerprint/PubKey is not used in anything important that we need just yet
-        SignerId::Dummy(3735928559)
+        SignerId::Dummy(PSBT_SIGNER_ID)
     }
 
     fn sign_whole_tx(&self) -> bool {
