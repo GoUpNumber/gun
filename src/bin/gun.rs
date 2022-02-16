@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
             Commands::Utxo(opt) => cmd::run_utxo_cmd(&wallet, opt),
             Commands::Split(opt) => cmd::run_split_cmd(&wallet, opt),
             Commands::Config(opt) => {
-                cmd::run_config_cmd(&wallet, &wallet_dir.join("config.json"), opt)
+                cmd::run_config_cmd(&wallet_dir, &wallet, &wallet_dir.join("config.json"), opt)
             }
         }
     };
