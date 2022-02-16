@@ -4,6 +4,10 @@
 
 - Add support for signet
 - Add support for coldcard bip84
+- Add support for BIP39 passphrases
+- Add `--internal` flag to `gun address list`
+- Add `txos` column to `gun address list`
+- Fix split creating too many address gaps
 
 ## v0.5.0
 
