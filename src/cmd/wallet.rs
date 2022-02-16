@@ -5,7 +5,7 @@ use bdk::{
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
-    KeychainKind, LocalUtxo, SignOptions, TransactionDetails, TxBuilder,
+    KeychainKind, LocalUtxo, SignOptions, TxBuilder,
 };
 use std::collections::HashMap;
 use structopt::StructOpt;
@@ -94,12 +94,6 @@ pub enum AddressOpt {
         /// Show only internal addresses
         #[structopt(long, short)]
         internal: bool,
-        /// Hide addresses with zero balance
-        #[structopt(long)]
-        hide_zeros: bool,
-        /// Show unused addresses
-        #[structopt(long)]
-        unused: bool,
     },
     /// Show details of an address
     Show { address: Address },
@@ -108,21 +102,19 @@ pub enum AddressOpt {
 fn list_keychain_addresses(
     wallet: &GunWallet,
     keychain_kind: KeychainKind,
-    hide_zeros: bool,
-    unused: bool,
 ) -> anyhow::Result<Vec<Vec<Cell>>> {
-    let wallet_db = wallet.bdk_wallet().database();
-    let scripts = wallet_db.iter_script_pubkeys(Some(keychain_kind))?;
-    let index = wallet_db.get_last_index(keychain_kind)?;
-    let map = index_utxos(&*wallet_db)?;
-    let txn_map = index_script_txns(&wallet_db.iter_txs(true)?)?;
+    let bdk_db = wallet.bdk_wallet().database();
+    let scripts = bdk_db.iter_script_pubkeys(Some(keychain_kind))?;
+    let index = bdk_db.get_last_index(keychain_kind)?;
+    let utxo_map = index_utxos(&bdk_db.iter_utxos()?);
+    let txn_map = index_txos(&bdk_db.iter_raw_txs()?);
     let rows = match index {
         Some(index) => scripts
             .iter()
             .take(index as usize + 1)
             .filter_map(|script| {
                 let address = Address::from_script(script, wallet.bdk_wallet().network()).unwrap();
-                let value = map
+                let value = utxo_map
                     .get(script)
                     .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                     .unwrap_or(Amount::ZERO);
@@ -131,14 +123,7 @@ fn list_keychain_addresses(
                     None => 0,
                 };
 
-                if unused && txn_count != 0 {
-                    return None;
-                }
-                if hide_zeros && (value == Amount::ZERO) {
-                    return None;
-                }
-
-                let count = map.get(script).map(Vec::len).unwrap_or(0);
+                let count = utxo_map.get(script).map(Vec::len).unwrap_or(0);
                 let keychain_name = match keychain_kind {
                     KeychainKind::External => "external",
                     KeychainKind::Internal => "internal",
@@ -176,12 +161,7 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
                 other: vec![],
             })
         }
-        AddressOpt::List {
-            internal,
-            hide_zeros,
-            all,
-            unused,
-        } => {
+        AddressOpt::List { internal, all } => {
             let mut rows: Vec<Vec<Cell>> = Vec::new();
             let header = vec!["address", "value", "utxos", "txos", "keychain"];
 
@@ -192,9 +172,8 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
             };
 
             for keychain in keychains {
-                let mut internal_rows =
-                    list_keychain_addresses(wallet, keychain, hide_zeros, unused)
-                        .expect("fetching addresses from wallet_db");
+                let mut internal_rows = list_keychain_addresses(wallet, keychain)
+                    .expect("fetching addresses from wallet_db");
                 rows.append(&mut internal_rows);
             }
 
@@ -217,17 +196,22 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
                     })
                 })
                 .unwrap_or(Cell::Empty);
-            let map = index_utxos(bdk_db)?;
-            let value = map
+            let utxo_map = index_utxos(&bdk_db.iter_utxos()?);
+            let value = utxo_map
                 .get(&script_pubkey)
                 .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                 .unwrap_or(Amount::ZERO);
 
-            let count = map.get(&script_pubkey).map(Vec::len).unwrap_or(0);
+            let utxo_count = utxo_map.get(&script_pubkey).map(Vec::len).unwrap_or(0);
+            let txo_count = index_txos(&bdk_db.iter_raw_txs()?)
+                .get(&script_pubkey)
+                .map(Vec::len)
+                .unwrap_or(0);
 
             Ok(item! {
                 "value" => Cell::Amount(value),
-                "n-utxos" => Cell::Int(count as u64),
+                "utxos" => Cell::Int(utxo_count as u64),
+                "txos" => Cell::Int(txo_count as u64),
                 "script-pubkey" => Cell::string(address.script_pubkey().asm()),
                 "output-descriptor" => output_descriptor,
                 "keychain" => keychain,
@@ -236,26 +220,20 @@ pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<C
     }
 }
 
-fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script, Vec<LocalUtxo>>> {
-    let mut map: HashMap<Script, Vec<LocalUtxo>> = HashMap::new();
-    for local_utxo in wallet_db.iter_utxos()?.iter() {
+fn index_utxos(utxos: &[LocalUtxo]) -> HashMap<Script, Vec<LocalUtxo>> {
+    let mut map = HashMap::<_, Vec<_>>::new();
+    for local_utxo in utxos {
         map.entry(local_utxo.txout.script_pubkey.clone())
             .and_modify(|v| v.push(local_utxo.clone()))
             .or_insert(vec![local_utxo.clone()]);
     }
 
-    Ok(map)
+    map
 }
 
-fn index_script_txns(
-    wallet_db: &[TransactionDetails],
-) -> anyhow::Result<HashMap<Script, Vec<Transaction>>> {
-    let mut map: HashMap<Script, Vec<Transaction>> = HashMap::new();
-    for txn in wallet_db
-        // .iter_txs(true)?
-        .iter()
-        .flat_map(|tx_details| tx_details.transaction.as_ref())
-    {
+fn index_txos(transactions: &[Transaction]) -> HashMap<Script, Vec<Transaction>> {
+    let mut map: HashMap<_, Vec<_>> = HashMap::new();
+    for txn in transactions {
         for out in &txn.output {
             map.entry(out.script_pubkey.clone())
                 .and_modify(|v| v.push(txn.clone()))
@@ -263,7 +241,7 @@ fn index_script_txns(
         }
     }
 
-    Ok(map)
+    map
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -390,8 +368,13 @@ pub fn run_send(wallet: &GunWallet, send_opt: SendOpt) -> anyhow::Result<CmdOutp
 
 #[derive(StructOpt, Debug, Clone)]
 pub enum TransactionOpt {
+    /// List transactions related to this gun wallet.
     List,
-    Show { txid: Txid },
+    /// Show details about a particular wallet transaction.
+    Show {
+        /// Transaction id of the transaction you want to inspect.
+        txid: Txid,
+    },
 }
 
 pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::Result<CmdOutput> {
@@ -430,7 +413,7 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                 .collect();
 
             Ok(CmdOutput::table(
-                vec!["txid", "height", "seen", "sent", "received"],
+                vec!["txid", "height", "conf-time", "sent", "received"],
                 rows,
             ))
         }
