@@ -60,9 +60,10 @@ pub enum SetupOpt {
         #[structopt(long)]
         use_passphrase: bool,
     },
-    /// Setup using a output descriptor
+    /// Setup using a output descriptors
     ///
     /// This option is intended for people who know what they are doing!
+    /// Keep in mind that descriptors with private keys in them will be stored in the database as plaintext.
     Descriptor {
         #[structopt(flatten)]
         common_args: CommonArgs,
@@ -75,16 +76,19 @@ pub enum SetupOpt {
     },
     /// Setup using an extended public key descriptor.
     ///
-    /// The descriptor must be in [masterfingerprint/hardened'/derivation'/path']xpub format e.g.
+    /// The descriptor must be in [masterfingerprint/hardened'/derivation'/path']xkey format e.g.
     ///
-    /// $ gun setup xpub "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
-    #[structopt(name = "xpub")]
-    XPub {
+    /// $ gun setup xkey "[E83E2DB9/84'/0'/0']xpub66...mSXJj"
+    ///
+    /// The key can be an xpriv or or an xpub.
+    /// If you use an xpriv, keep in mind that gun will store the descriptor in the database in plaintext.
+    #[structopt(name = "xkey")]
+    XKey {
         #[structopt(flatten)]
         common_args: CommonArgs,
-        /// the xpub descriptor
-        #[structopt(name = "xpub-descriptor")]
-        xpub: String,
+        /// the extended key descriptor
+        #[structopt(name = "xkey-descriptor")]
+        xkey: String,
     },
     /// Setup with a ColdCard via SD card
     ///
@@ -252,13 +256,12 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 None,
             )
         }
-        SetupOpt::XPub {
+        SetupOpt::XKey {
             common_args,
-            ref xpub,
+            ref xkey,
         } => {
-            let external = set_network(&format!("wpkh({}/0/*)", xpub), common_args.network)?;
-            let internal = set_network(&format!("wpkh({}/1/*)", xpub), common_args.network)?;
-
+            let external = set_network(&format!("wpkh({}/0/*)", xkey), common_args.network)?;
+            let internal = set_network(&format!("wpkh({}/1/*)", xkey), common_args.network)?;
             (
                 Config::default_config(common_args.network),
                 None,
