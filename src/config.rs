@@ -20,7 +20,6 @@ pub enum WalletKeyOld {
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum GunSigner {
     SeedWordsFile {
-        file_path: PathBuf,
         #[serde(skip_serializing_if = "Option::is_none")]
         passphrase_fingerprint: Option<Fingerprint>,
     },

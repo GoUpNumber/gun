@@ -210,7 +210,6 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             let master_fingerprint = xpriv.fingerprint(&secp);
 
             let signers = vec![GunSigner::SeedWordsFile {
-                file_path: sw_file.clone(),
                 passphrase_fingerprint: if use_passphrase {
                     Some(master_fingerprint)
                 } else {
