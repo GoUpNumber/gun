@@ -174,15 +174,14 @@ pub fn load_wallet(
                 config.network,
             )),
             GunSigner::SeedWordsFile {
-                file_path,
                 passphrase_fingerprint,
             } => {
-                let seed_words =
-                    fs::read_to_string(file_path.clone()).context("loading seed words")?;
+                let file_path = wallet_dir.join("seed.txt");
+                let seed_words = fs::read_to_string(&file_path).context("loading seed words")?;
                 let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
                     anyhow!(
                         "parsing seed phrase in '{}' failed: {}",
-                        file_path.as_path().display(),
+                        file_path.display(),
                         e
                     )
                 })?;
