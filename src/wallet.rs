@@ -291,9 +291,9 @@ impl GunWallet {
             .expect("extracting policy should not have error")
             .expect("policy for external wallet exists");
 
-        match policy.contribution {
-            Satisfaction::Complete { .. } | Satisfaction::PartialComplete { .. } => false,
-            _ => true,
-        }
+        !matches!(
+            policy.contribution,
+            Satisfaction::Complete { .. } | Satisfaction::PartialComplete { .. }
+        )
     }
 }

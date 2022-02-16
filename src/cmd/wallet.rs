@@ -112,7 +112,7 @@ fn list_keychain_addresses(
         Some(index) => scripts
             .iter()
             .take(index as usize + 1)
-            .filter_map(|script| {
+            .map(|script| {
                 let address = Address::from_script(script, wallet.bdk_wallet().network()).unwrap();
                 let value = utxo_map
                     .get(script)
@@ -129,13 +129,13 @@ fn list_keychain_addresses(
                     KeychainKind::Internal => "internal",
                 }
                 .to_string();
-                Some(vec![
+                vec![
                     Cell::String(address.to_string()),
                     Cell::Amount(value),
                     Cell::Int(count as u64),
                     Cell::Int(txn_count),
                     Cell::String(keychain_name),
-                ])
+                ]
             })
             // newest should go first
             .rev()
@@ -555,7 +555,7 @@ pub struct SplitOpt {
     #[structopt(parse(try_from_str = FromCliStr::from_cli_str))]
     output_size: Amount,
     /// Number of outputs to create. If omitted it will use the maximum possible.
-    n: Option<usize>,
+    n: usize,
     #[structopt(flatten)]
     spend_opt: SpendOpt,
 }
@@ -577,32 +577,39 @@ pub fn run_split_cmd(wallet: &GunWallet, opt: SplitOpt) -> anyhow::Result<CmdOut
 
     builder.unspendable(already_correct.map(|utxo| utxo.outpoint).collect());
 
-    match n {
-        Some(n) => {
-            for _ in 0..n {
-                builder.add_recipient(
-                    bdk_wallet
-                        .get_change_address(AddressIndex::New)?
-                        .address
-                        .script_pubkey(),
-                    output_size.as_sat(),
-                );
-            }
+    let txo_map = index_txos(&bdk_wallet.database().iter_raw_txs()?);
+
+    let last_unused_index = bdk_wallet
+        .get_change_address(AddressIndex::LastUnused)?
+        .index;
+    let mut added_recipients = 0;
+    // Check for unused change addresses up to most recent
+    for check_used_index in 0..(last_unused_index + 1) {
+        let check_script_pk = bdk_wallet
+            .get_change_address(AddressIndex::Peek(check_used_index as u32))?
+            .address
+            .script_pubkey();
+
+        let used = txo_map.get(&check_script_pk).is_some();
+        // Keep adding unused recipients until we have n
+        if !used {
+            builder.add_recipient(check_script_pk, output_size.as_sat());
+            added_recipients += 1;
+            if added_recipients == n {
+                break;
+            };
         }
-        None => {
-            builder
-                .drain_wallet()
-                // add one recipient so we at least get one split utxo of the correct size.
-                .add_recipient(
-                    bdk_wallet
-                        .get_change_address(AddressIndex::New)?
-                        .address
-                        .script_pubkey(),
-                    output_size.as_sat(),
-                )
-                .split_change(output_size.as_sat(), usize::MAX);
-        }
-    };
+    }
+    // If we don't have enough unused addresses, fill remaining n-added with new
+    for _ in 0..(n - added_recipients) {
+        builder.add_recipient(
+            bdk_wallet
+                .get_change_address(AddressIndex::New)?
+                .address
+                .script_pubkey(),
+            output_size.as_sat(),
+        );
+    }
 
     spend_opt.spend_coins(wallet, builder)
 }
