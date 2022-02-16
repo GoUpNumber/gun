@@ -112,7 +112,7 @@ fn list_keychain_addresses(
         Some(index) => scripts
             .iter()
             .take(index as usize + 1)
-            .filter_map(|script| {
+            .map(|script| {
                 let address = Address::from_script(script, wallet.bdk_wallet().network()).unwrap();
                 let value = utxo_map
                     .get(script)
@@ -129,13 +129,13 @@ fn list_keychain_addresses(
                     KeychainKind::Internal => "internal",
                 }
                 .to_string();
-                Some(vec![
+                vec![
                     Cell::String(address.to_string()),
                     Cell::Amount(value),
                     Cell::Int(count as u64),
                     Cell::Int(txn_count),
                     Cell::String(keychain_name),
-                ])
+                ]
             })
             // newest should go first
             .rev()
