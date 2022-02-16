@@ -82,6 +82,10 @@ pub enum ConfigOpt {
     Descriptor(Descriptors),
     /// The wallet's signers.
     Signer(SignerActions),
+    /// Get the gun directory currently being used.
+    ///
+    /// This can be changed by setting the $GUN_DIR environment variable.
+    Dir(Get),
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -166,6 +170,7 @@ macro_rules! setget {
 }
 
 pub fn run_config_cmd(
+    wallet_dir: &Path,
     wallet: &GunWallet,
     config_path: &Path,
     opt: ConfigOpt,
@@ -189,9 +194,11 @@ pub fn run_config_cmd(
                 BetSettings::ProtocolSecret(setget) => {
                     let db = wallet.gun_db();
                     match setget {
-                        SetGet::Get => Ok(
-                            eitem!( "protocol_secret" => Cell::maybe_string(db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?)),
-                        ),
+                        SetGet::Get => {
+                            return Ok(
+                                eitem!( "protocol_secret" => Cell::maybe_string(db.get_entity::<ProtocolSecret>(ProtocolKind::Bet)?)),
+                            )
+                        }
                         SetGet::Set { value } => {
                             db.safely_set_bet_protocol_secret(value)?;
                             Ok(CmdOutput::None)
@@ -202,7 +209,7 @@ pub fn run_config_cmd(
         },
         ConfigOpt::Descriptor(desc) => {
             let db = wallet.gun_db();
-            Ok(match desc {
+            return Ok(match desc {
                 Descriptors::External(Get::Get) => {
                     eitem! {
                         "external" => Cell::maybe_string(db.get_entity::<StringDescriptor>(KeychainKind::External)?.map(|x| x.0)),
@@ -213,7 +220,7 @@ pub fn run_config_cmd(
                         "internal" =>  Cell::maybe_string(db.get_entity::<StringDescriptor>(KeychainKind::Internal)?.map(|x| x.0))
                     }
                 }
-            })
+            });
         }
         ConfigOpt::Signer(action) => Ok(match action {
             SignerActions::Add(signer) => {
@@ -238,9 +245,12 @@ pub fn run_config_cmd(
                         ]
                     })
                     .collect();
-                CmdOutput::table(vec!["index", "signer"], rows)
+                return Ok(CmdOutput::table(vec!["index", "signer"], rows));
             }
         }),
+        ConfigOpt::Dir(Get::Get) => {
+            return Ok(eitem!( "GUN_DIR" => Cell::string(wallet_dir.display())))
+        }
     };
     cmd::write_config(config_path, config)?;
     output
