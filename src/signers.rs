@@ -93,11 +93,11 @@ impl Signer for PwSeedSigner {
     fn sign(
         &self,
         psbt: &mut PartiallySignedTransaction,
-        input_index: Option<usize>,
+        _input_index: Option<usize>,
         secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
         let master_xkey = loop {
-            let p = rpassword::prompt_password_stderr("Please enter your wallet passphrase: ");
+            let p = rpassword::prompt_password_stderr("Enter your wallet passphrase: ");
             let passphrase = match p {
                 Ok(passphrase) => passphrase,
                 Err(e) => {
@@ -117,11 +117,15 @@ impl Signer for PwSeedSigner {
         };
 
         let signer = XKeySigner { master_xkey };
-        signer.sign(psbt, input_index, secp)
+        for i in 0..psbt.inputs.len() {
+            signer.sign(psbt, Some(i), secp)?;
+        }
+        Ok(())
     }
 
     fn sign_whole_tx(&self) -> bool {
-        false
+        // we want to "sign whole tx" because we only want to be called once.
+        true
     }
 
     fn id(&self, _secp: &Secp256k1<All>) -> SignerId {

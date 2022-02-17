@@ -373,7 +373,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         std::fs::write(path, content)?;
     }
 
-    eprintln!("gun initialized successfully to {}", wallet_dir.display());
+    eprintln!("Successfully created walled at {}", wallet_dir.display());
     Ok(CmdOutput::None)
 }
 
