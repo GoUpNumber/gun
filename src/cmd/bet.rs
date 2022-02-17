@@ -234,7 +234,7 @@ pub fn run_bet_cmd(
 
             let mut question = format!(
                 "You are proposing a bet on the {}.",
-                olivia_describe::event_id_short(&oracle_event.event.id)
+                olivia_describe::event_short(&oracle_event.event.id)
             );
             if let Some(expected_outcome_time) = oracle_event.event.expected_outcome_time {
                 if expected_outcome_time <= now {
