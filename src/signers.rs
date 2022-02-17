@@ -69,7 +69,7 @@ impl Signer for XKeySigner {
     }
 
     fn sign_whole_tx(&self) -> bool {
-        false
+        true
     }
 
     fn id(&self, secp: &Secp256k1<All>) -> SignerId {
