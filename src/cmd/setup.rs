@@ -314,8 +314,8 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                     ))
                 }
             };
-            let wallet_export = serde_json::from_str::<WalletExport>(&wallet_export_str)?;
-
+            let mut wallet_export = serde_json::from_str::<WalletExport>(&wallet_export_str)?;
+            wallet_export.bip84.xpub.network = common_args.network;
             let (external, _) = Bip84Public(
                 wallet_export.bip84.xpub,
                 wallet_export.xfp,
