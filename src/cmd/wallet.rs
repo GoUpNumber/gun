@@ -389,7 +389,7 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                     x.confirmation_time
                         .as_ref()
                         .map(|x| x.timestamp)
-                        .unwrap_or(0),
+                        .unwrap_or(u64::MAX),
                 )
             });
 
