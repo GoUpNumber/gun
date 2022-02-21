@@ -396,6 +396,7 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
             let rows: Vec<Vec<Cell>> = txns
                 .into_iter()
                 .map(|tx| {
+                    let bal = tx.received as i64 - tx.sent as i64;
                     vec![
                         Cell::String(tx.txid.to_string()),
                         tx.confirmation_time
@@ -406,14 +407,14 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                             .as_ref()
                             .map(|x| Cell::DateTime(x.timestamp))
                             .unwrap_or(Cell::Empty),
-                        Cell::Amount(Amount::from_sat(tx.sent)),
-                        Cell::Amount(Amount::from_sat(tx.received)),
+                        Cell::SignedAmount(SignedAmount::from_sat(bal)),
+                        Cell::maybe_string(tx.fee),
                     ]
                 })
                 .collect();
 
             Ok(CmdOutput::table(
-                vec!["txid", "height", "conftime", "sent", "received"],
+                vec!["txid", "height", "conftime", "value", "fee"],
                 rows,
             ))
         }
@@ -429,6 +430,7 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                 "txid" => Cell::String(tx.txid.to_string()),
                 "sent" => Cell::Amount(Amount::from_sat(tx.sent)),
                 "received" => Cell::Amount(Amount::from_sat(tx.received)),
+                "value" => Cell::SignedAmount(SignedAmount::from_sat(tx.received as i64 - tx.sent as i64)),
                 "conftime" => tx.confirmation_time.as_ref()
                             .map(|x| Cell::DateTime(x.timestamp))
                             .unwrap_or(Cell::Empty),

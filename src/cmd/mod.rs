@@ -23,7 +23,7 @@ use bdk::{
         util::{
             address::Payload, bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction as Psbt,
         },
-        Address, Amount, Network, Txid,
+        Address, Amount, Network, SignedAmount, Txid,
     },
     blockchain::{ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
@@ -233,6 +233,7 @@ pub struct TableData {
 pub enum Cell {
     String(String),
     Amount(#[serde(with = "bdk::bitcoin::util::amount::serde::as_sat")] Amount),
+    SignedAmount(#[serde(with = "bdk::bitcoin::util::amount::serde::as_sat")] SignedAmount),
     Int(u64),
     Empty,
     DateTime(u64),
@@ -253,6 +254,22 @@ pub fn format_amount(amount: Amount) -> String {
         string.insert(string.len() - 7, ' ');
         string.insert(string.len() - 11, ' ');
         string.trim_end_matches(" BTC").to_string()
+    }
+}
+
+pub fn format_signed_amount(amount: SignedAmount) -> String {
+    if amount == SignedAmount::ZERO {
+        "0".to_string()
+    } else {
+        let mut string = amount.to_string();
+        string.insert(string.len() - 7, ' ');
+        string.insert(string.len() - 11, ' ');
+        let string = string.trim_end_matches(" BTC").trim_start_matches("-");
+        if amount.is_negative() {
+            format!("-{}", string)
+        } else {
+            format!("+{}", string)
+        }
     }
 }
 
@@ -281,6 +298,7 @@ impl Cell {
         match self {
             String(string) => string,
             Amount(amount) => format_amount(amount),
+            SignedAmount(amount) => format_signed_amount(amount),
             Int(integer) => integer.to_string(),
             Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
@@ -299,6 +317,7 @@ impl Cell {
         match self {
             String(string) => string,
             Amount(amount) => amount.as_sat().to_string(),
+            SignedAmount(amount) => amount.as_sat().to_string(),
             Int(integer) => integer.to_string(),
             Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
@@ -316,6 +335,7 @@ impl Cell {
         use Cell::*;
         match self {
             String(string) => serde_json::Value::String(string),
+            SignedAmount(amount) => serde_json::Value::Number(amount.as_sat().into()),
             Amount(amount) => serde_json::Value::Number(amount.as_sat().into()),
             Int(integer) => serde_json::Value::Number(integer.into()),
             DateTime(timestamp) => serde_json::Value::Number(timestamp.into()),
@@ -367,7 +387,7 @@ impl CmdOutput {
             Item(item) => {
                 let mut table = term_table::Table::new();
                 for (key, value) in item {
-                    if matches!(value, Cell::Amount(_)) {
+                    if matches!(value, Cell::Amount(_) | Cell::SignedAmount(_)) {
                         table.add_row(Row::new(vec![format!("{} (BTC)", key), value.render()]))
                     } else {
                         table.add_row(Row::new(vec![key.to_string(), value.render()]))
