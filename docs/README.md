@@ -4,13 +4,14 @@
 [actions_url]: https://github.com/llfourn/gun/actions?query=workflow%3ATests
 
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
+
 Its distinguishing feature is the ability to do [peer-to-peer betting](https://gun.fun/bet/betting.html).
 
 See [gun.fun](https://gun.fun) for full documentation.
 
 **⚠ WARNING EXPERIMENTAL**
 
-The wallet is alpha quality.
+The wallet is beta quality.
 It is buggy and is missing features.
 The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](https://bitcoindevkit.org) but the betting functionality is freshly engineered.
 Only put into it what you are willing to lose.

@@ -3,11 +3,11 @@
 ## v0.6.0
 
 - Add support for signet
-- Add support for coldcard bip84
+- Add support for coldcard bip84 🎉
 - Add support for BIP39 passphrases
-- Add `--internal` flag to `gun address list`
+- Add `--internal` and `--all` flags to `gun address list`
 - Add `txos` column to `gun address list`
-- Fix split creating too many address gaps
+- Fix `gun split` creating too many address gaps
 
 ## v0.5.0
 
