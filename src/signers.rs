@@ -96,6 +96,13 @@ impl Signer for PwSeedSigner {
         _input_index: Option<usize>,
         secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
+        if !read_yn(&format!(
+            "This is the transaction you're about to sign.\n{}Ok",
+            display_psbt(self.network, psbt)
+        )) {
+            return Err(SignerError::UserCanceled);
+        }
+
         let master_xkey = loop {
             let p = rpassword::prompt_password_stderr("Enter your wallet passphrase: ");
             let passphrase = match p {
