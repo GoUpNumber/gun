@@ -27,6 +27,6 @@ cargo -Z avoid-dev-deps install --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
 
-The *minimum supported rust version* for `gun` is `1.58.0`.
+The *minimum supported rust version* for `gun` is `1.56.0`.
 
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki

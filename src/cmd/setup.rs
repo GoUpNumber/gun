@@ -198,7 +198,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                     .map(|(i, word)| format!("{}: {}", i + 1, word))
                     .collect::<Vec<_>>()
                     .join("\n");
-                println!("{printed}");
+                println!("{}", printed);
             } else {
                 eprintln!(
                     "Err okay then...make sure you backup {} after this.",
