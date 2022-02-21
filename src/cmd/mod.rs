@@ -1,39 +1,51 @@
-mod init;
+mod bet;
+mod config;
 mod oracle;
+mod setup;
 mod wallet;
+pub use bet::*;
+pub use config::*;
+pub use oracle::*;
+pub use setup::*;
+pub use wallet::*;
+
+use crate::{
+    config::GunSigner,
+    database::{ProtocolKind, StringDescriptor},
+    keychain::ProtocolSecret,
+    signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
+    wallet::GunWallet,
+};
 use anyhow::Context;
 use bdk::{
     bitcoin::{
         consensus::encode,
-        util::{address::Payload, psbt::PartiallySignedTransaction as Psbt},
-        Address, Amount, Network, Txid,
+        util::{
+            address::Payload, bip32::ExtendedPrivKey, psbt::PartiallySignedTransaction as Psbt,
+        },
+        Address, Amount, Network, SignedAmount, Txid,
     },
-    blockchain::{AnyBlockchain, ConfigurableBlockchain, EsploraBlockchain},
+    blockchain::{ConfigurableBlockchain, EsploraBlockchain},
     database::BatchDatabase,
-    sled, Wallet,
+    signer::Signer,
+    sled,
+    wallet::signer::SignerOrdering,
+    KeychainKind, Wallet,
 };
+use std::sync::Arc;
 
-pub use init::*;
-pub mod bet;
-pub use bet::*;
-pub use oracle::*;
 use term_table::{row::Row, Table};
-pub use wallet::*;
 
 use crate::{
-    betting::{BetDatabase, Party},
     chrono::NaiveDateTime,
-    config::Config,
+    config::{Config, VersionedConfig},
+    database::GunDatabase,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     FeeSpec, ValueChoice,
 };
 use anyhow::anyhow;
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs};
 
 #[derive(Clone, Debug, structopt::StructOpt)]
 pub struct FeeArgs {
@@ -52,22 +64,27 @@ pub enum FeeChoice {
     Speed(u32),
 }
 
-pub fn load_config(wallet_dir: &std::path::Path) -> anyhow::Result<Config> {
-    let mut config_file = wallet_dir.to_path_buf();
-    config_file.push("config.json");
-
+pub fn load_config(config_file: &std::path::Path) -> anyhow::Result<Config> {
     match config_file.exists() {
         true => {
-            let json_config = fs::read_to_string(config_file.clone())?;
-            Ok(serde_json::from_str::<Config>(&json_config)?)
+            let json_config = fs::read_to_string(config_file)?;
+            Ok(serde_json::from_str::<VersionedConfig>(&json_config)
+                .context("Perhaps you are trying to load an old config?")?
+                .into())
         }
-        false => {
-            return Err(anyhow!(
-                "missing config file at {}",
-                config_file.as_path().display()
-            ))
-        }
+        false => return Err(anyhow!("missing config file at {}", config_file.display())),
     }
+}
+
+pub fn write_config(config_file: &std::path::Path, config: Config) -> anyhow::Result<()> {
+    fs::write(
+        config_file,
+        serde_json::to_string_pretty(&config.into_versioned())
+            .unwrap()
+            .as_bytes(),
+    )
+    .context("writing config file")?;
+    Ok(())
 }
 
 pub fn read_yn(question: &str) -> bool {
@@ -108,37 +125,10 @@ pub fn read_input<V>(
     std::process::exit(2)
 }
 
-pub fn get_seed_words_file(wallet_dir: &Path) -> PathBuf {
-    let mut seed_words_file = wallet_dir.to_path_buf();
-    seed_words_file.push("seed.txt");
-    seed_words_file
-}
-
-pub fn load_bet_db(wallet_dir: &Path) -> anyhow::Result<BetDatabase> {
-    let mut db_file = wallet_dir.to_path_buf();
-    db_file.push("database.sled");
-    let database = sled::open(db_file.to_str().unwrap())?;
-    let bet_db = BetDatabase::new(database.open_tree("bets")?);
-    Ok(bet_db)
-}
-
-pub fn load_party(
-    wallet_dir: &Path,
-) -> anyhow::Result<Party<bdk::blockchain::EsploraBlockchain, impl bdk::database::BatchDatabase>> {
-    let (wallet, bet_db, keychain, config) = load_wallet(wallet_dir).context("loading wallet")?;
-    let party = Party::new(wallet, bet_db, keychain, config.blockchain);
-    Ok(party)
-}
-
 pub fn load_wallet(
     wallet_dir: &std::path::Path,
-) -> anyhow::Result<(
-    Wallet<EsploraBlockchain, impl BatchDatabase>,
-    BetDatabase,
-    Keychain,
-    Config,
-)> {
-    use bdk::keys::bip39::{Language, Mnemonic, Seed};
+) -> anyhow::Result<(GunWallet, Option<Keychain>, Config)> {
+    use bdk::keys::bip39::Mnemonic;
 
     if !wallet_dir.exists() {
         return Err(anyhow!(
@@ -147,76 +137,89 @@ pub fn load_wallet(
         ));
     }
 
-    let config = load_config(wallet_dir).context("loading configuration")?;
-    let keychain = match config.keys {
-        crate::config::WalletKeys::SeedWordsFile => {
-            let sw_file = get_seed_words_file(wallet_dir);
-            let seed_words = fs::read_to_string(sw_file.clone()).context("loading seed words")?;
-            let mnemonic = Mnemonic::from_phrase(&seed_words, Language::English).map_err(|e| {
-                anyhow!(
-                    "parsing seed phrase in '{}' failed: {}",
-                    sw_file.as_path().display(),
-                    e
-                )
-            })?;
-            let mut seed_bytes = [0u8; 64];
-            let seed = Seed::new(&mnemonic, "");
-            seed_bytes.copy_from_slice(seed.as_bytes());
-            Keychain::new(seed_bytes)
-        }
-    };
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
+    let config = load_config(&wallet_dir.join("config.json")).context("loading configuration")?;
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
 
-    let wallet = {
-        let wallet_db = database
-            .open_tree("wallet")
-            .context("opening wallet tree")?;
+    let wallet_db = database
+        .open_tree("wallet")
+        .context("opening wallet tree")?;
 
-        let (external_descriptor, internal_descriptor) = match config.kind {
-            crate::config::WalletKind::P2wpkh => (
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::External,
-                ),
-                bdk::template::Bip84(
-                    keychain.main_wallet_xprv(config.network),
-                    bdk::KeychainKind::Internal,
-                ),
-            ),
+    let esplora = EsploraBlockchain::from_config(config.blockchain_config())?;
+
+    let gun_db = GunDatabase::new(database.open_tree("gun").context("opening gun db tree")?);
+
+    let external = gun_db
+        .get_entity::<StringDescriptor>(KeychainKind::External)?
+        .ok_or(anyhow!(
+            "external descriptor couldn't be retrieved from database"
+        ))?;
+    let internal = gun_db.get_entity::<StringDescriptor>(KeychainKind::Internal)?;
+
+    let mut wallet = Wallet::new(
+        &external.0,
+        internal.as_ref().map(|x| &x.0),
+        config.network,
+        wallet_db,
+        esplora,
+    )
+    .context("Initializing wallet from descriptors")?;
+
+    for (i, signer) in config.signers.iter().enumerate() {
+        let signer: Arc<dyn Signer> = match signer {
+            GunSigner::PsbtDir {
+                path: psbt_signer_dir,
+            } => Arc::new(PsbtDirSigner::create(
+                psbt_signer_dir.to_owned(),
+                config.network,
+            )),
+            GunSigner::SeedWordsFile {
+                passphrase_fingerprint,
+            } => {
+                let file_path = wallet_dir.join("seed.txt");
+                let seed_words = fs::read_to_string(&file_path).context("loading seed words")?;
+                let mnemonic = Mnemonic::parse(&seed_words).map_err(|e| {
+                    anyhow!(
+                        "parsing seed phrase in '{}' failed: {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
+
+                match passphrase_fingerprint {
+                    Some(fingerprint) => Arc::new(PwSeedSigner {
+                        mnemonic,
+                        network: config.network,
+                        master_fingerprint: *fingerprint,
+                    }),
+                    None => Arc::new(XKeySigner {
+                        master_xkey: ExtendedPrivKey::new_master(
+                            config.network,
+                            &mnemonic.to_seed(""),
+                        )
+                        .unwrap(),
+                    }),
+                }
+            }
         };
+        wallet.add_signer(
+            KeychainKind::External, //NOTE: will sign internal inputs as well!
+            SignerOrdering(i),
+            signer,
+        );
+    }
 
-        let esplora = match AnyBlockchain::from_config(&config.blockchain)? {
-            AnyBlockchain::Esplora(esplora) => esplora,
-            #[allow(unreachable_patterns)]
-            _ => return Err(anyhow!("A the moment only esplora is supported")),
-        };
+    let keychain = gun_db
+        .get_entity::<ProtocolSecret>(ProtocolKind::Bet)?
+        .map(Keychain::from);
+    let gun_wallet = GunWallet::new(wallet, gun_db);
 
-        Wallet::new(
-            external_descriptor,
-            Some(internal_descriptor),
-            config.network,
-            wallet_db,
-            esplora,
-        )
-        .context("Initializing wallet failed")?
-    };
-
-    let bet_db = BetDatabase::new(database.open_tree("bets").context("opening bets tree")?);
-
-    Ok((wallet, bet_db, keychain, config))
+    Ok((gun_wallet, keychain, config))
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
-    let database = {
-        let mut db_file = wallet_dir.to_path_buf();
-        db_file.push("database.sled");
-        sled::open(db_file.to_str().unwrap()).context("opening database.sled")?
-    };
-
+    let database = sled::open(wallet_dir.join("database.sled").to_str().unwrap())
+        .context("opening database.sled")?;
     database.open_tree("wallet").context("opening wallet tree")
 }
 
@@ -230,6 +233,7 @@ pub struct TableData {
 pub enum Cell {
     String(String),
     Amount(#[serde(with = "bdk::bitcoin::util::amount::serde::as_sat")] Amount),
+    SignedAmount(#[serde(with = "bdk::bitcoin::util::amount::serde::as_sat")] SignedAmount),
     Int(u64),
     Empty,
     DateTime(u64),
@@ -253,6 +257,22 @@ pub fn format_amount(amount: Amount) -> String {
     }
 }
 
+pub fn format_signed_amount(amount: SignedAmount) -> String {
+    if amount == SignedAmount::ZERO {
+        "0".to_string()
+    } else {
+        let mut string = amount.to_string();
+        string.insert(string.len() - 7, ' ');
+        string.insert(string.len() - 11, ' ');
+        let string = string.trim_end_matches(" BTC").trim_start_matches("-");
+        if amount.is_negative() {
+            format!("-{}", string)
+        } else {
+            format!("+{}", string)
+        }
+    }
+}
+
 pub fn sanitize_str(string: &mut String) {
     string.retain(|c| !c.is_control());
 }
@@ -265,6 +285,10 @@ impl Cell {
         Self::String(string)
     }
 
+    pub fn maybe_string<T: core::fmt::Display>(t: Option<T>) -> Self {
+        t.map(Self::string).unwrap_or(Cell::Empty)
+    }
+
     pub fn datetime(dt: NaiveDateTime) -> Self {
         Self::DateTime(dt.timestamp() as u64)
     }
@@ -274,8 +298,9 @@ impl Cell {
         match self {
             String(string) => string,
             Amount(amount) => format_amount(amount),
+            SignedAmount(amount) => format_signed_amount(amount),
             Int(integer) => integer.to_string(),
-            Empty => "-".into(),
+            Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string(),
@@ -292,6 +317,7 @@ impl Cell {
         match self {
             String(string) => string,
             Amount(amount) => amount.as_sat().to_string(),
+            SignedAmount(amount) => amount.as_sat().to_string(),
             Int(integer) => integer.to_string(),
             Empty => "".into(),
             DateTime(timestamp) => NaiveDateTime::from_timestamp(timestamp as i64, 0)
@@ -309,6 +335,7 @@ impl Cell {
         use Cell::*;
         match self {
             String(string) => serde_json::Value::String(string),
+            SignedAmount(amount) => serde_json::Value::Number(amount.as_sat().into()),
             Amount(amount) => serde_json::Value::Number(amount.as_sat().into()),
             Int(integer) => serde_json::Value::Number(integer.into()),
             DateTime(timestamp) => serde_json::Value::Number(timestamp.into()),
@@ -360,7 +387,7 @@ impl CmdOutput {
             Item(item) => {
                 let mut table = term_table::Table::new();
                 for (key, value) in item {
-                    if matches!(value, Cell::Amount(_)) {
+                    if matches!(value, Cell::Amount(_) | Cell::SignedAmount(_)) {
                         table.add_row(Row::new(vec![format!("{} (BTC)", key), value.render()]))
                     } else {
                         table.add_row(Row::new(vec![key.to_string(), value.render()]))
@@ -452,7 +479,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut input_total = Amount::ZERO;
     for (i, psbt_input) in psbt.inputs.iter().enumerate() {
         let txout = psbt_input.witness_utxo.as_ref().unwrap();
-        let input = &psbt.global.unsigned_tx.input[i];
+        let input = &psbt.unsigned_tx.input[i];
         let _address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
@@ -473,7 +500,7 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
     let mut output_total = Amount::ZERO;
     let mut header = Some("out".to_string());
     for (i, _) in psbt.outputs.iter().enumerate() {
-        let txout = &psbt.global.unsigned_tx.output[i];
+        let txout = &psbt.unsigned_tx.output[i];
         let address = Payload::from_script(&txout.script_pubkey)
             .map(|payload| Address { payload, network }.to_string())
             .unwrap_or(txout.script_pubkey.to_string());
@@ -491,11 +518,12 @@ pub fn display_psbt(network: Network, psbt: &Psbt) -> String {
         "total".into(),
         format_amount(output_total),
     ]));
-    let (fee, feerate) = psbt.fee();
+    let (fee, feerate, feerate_estimated) = psbt.fee();
 
+    let est = if feerate_estimated { "(est.)" } else { "" };
     table.add_row(Row::new(vec![
         "fee",
-        &format!("{:.3} sats/vb", feerate.as_sat_vb()),
+        &format!("{:.3} sats/vb {}", feerate.as_sat_vb(), est),
         &format_amount(fee),
     ]));
 
@@ -520,7 +548,13 @@ pub fn decide_to_broadcast(
 
         if print_tx {
             Ok((
-                item! { "tx" => Cell::String(crate::hex::encode(&encode::serialize(&tx))) },
+                CmdOutput::EmphasisedItem {
+                    main: (
+                        "tx",
+                        Cell::String(crate::hex::encode(&encode::serialize(&tx))),
+                    ),
+                    other: vec![],
+                },
                 Some(tx.txid()),
             ))
         } else {
@@ -534,13 +568,35 @@ pub fn decide_to_broadcast(
     }
 }
 
+fn ensure_not_watch_only(wallet: &GunWallet) -> anyhow::Result<()> {
+    if wallet.is_watch_only() {
+        Err(anyhow!(
+            "You cannot do this command because this wallet is watch-only"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[macro_export]
 macro_rules! item {
-    ($($key:literal => $value:expr),*$(,)?) => {{
+    ($($key:literal => $value:expr),+$(,)?) => {{
         let mut list = vec![];
         $(
             list.push(($key, $value));
         )*
         $crate::cmd::CmdOutput::Item(list)
+    }}
+}
+
+#[macro_export]
+macro_rules! eitem {
+    ($main_key:literal => $main_value:expr $(,$key:literal => $value:expr)*$(,)?) => {{
+        #[allow(unused_mut)]
+        let mut list = vec![];
+        $(
+            list.push(($key, $value));
+        )*
+        $crate::cmd::CmdOutput::EmphasisedItem { main: ($main_key, $main_value), other: list }
     }}
 }

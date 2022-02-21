@@ -1,7 +1,8 @@
 use bdk::{
-    bitcoin::Network,
+    bitcoin::{util::bip32::Fingerprint, Network},
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
 };
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -11,9 +12,41 @@ pub enum WalletKeys {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WalletKind {
+pub enum WalletKeyOld {
     #[serde(rename = "p2wpkh")]
     P2wpkh,
+}
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum GunSigner {
+    SeedWordsFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        passphrase_fingerprint: Option<Fingerprint>,
+    },
+    PsbtDir {
+        path: PathBuf,
+    },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DerivationBip {
+    Bip84,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "version")]
+pub enum VersionedConfig {
+    #[serde(rename = "1")]
+    V1(Config),
+}
+
+impl From<VersionedConfig> for Config {
+    fn from(from: VersionedConfig) -> Self {
+        match from {
+            VersionedConfig::V1(config) => config,
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -21,8 +54,7 @@ pub enum WalletKind {
 pub struct Config {
     pub network: Network,
     pub blockchain: AnyBlockchainConfig,
-    pub kind: WalletKind,
-    pub keys: WalletKeys,
+    pub signers: Vec<GunSigner>,
 }
 
 impl Config {
@@ -30,22 +62,29 @@ impl Config {
         use Network::*;
         let url = match network {
             Bitcoin => "https://mempool.space/api",
-            Testnet => "https://blockstream.info/testnet/api",
+            Testnet => "https://mempool.space/testnet/api",
             Regtest => "http://localhost:3000",
-            Signet => unimplemented!("signet not supported yet!"),
+            Signet => "https://mempool.space/signet/api",
         };
 
         let blockchain = AnyBlockchainConfig::Esplora(EsploraBlockchainConfig {
             concurrency: Some(10),
-            stop_gap: 10,
-            ..EsploraBlockchainConfig::new(url.into())
+            ..EsploraBlockchainConfig::new(url.into(), 10)
         });
 
         Config {
             network,
             blockchain,
-            kind: WalletKind::P2wpkh,
-            keys: WalletKeys::SeedWordsFile,
+            signers: vec![],
+        }
+    }
+    pub fn into_versioned(self) -> VersionedConfig {
+        VersionedConfig::V1(self)
+    }
+
+    pub fn blockchain_config(&self) -> &EsploraBlockchainConfig {
+        match &self.blockchain {
+            AnyBlockchainConfig::Esplora(config) => config,
         }
     }
 }

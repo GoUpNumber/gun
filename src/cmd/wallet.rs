@@ -1,7 +1,7 @@
 use super::*;
 use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
 use bdk::{
-    bitcoin::{Address, OutPoint, Script, Txid},
+    bitcoin::{Address, OutPoint, Script, Transaction, Txid},
     blockchain::EsploraBlockchain,
     database::Database,
     wallet::{coin_selection::CoinSelectionAlgorithm, tx_builder::TxBuilderContext, AddressIndex},
@@ -10,11 +10,9 @@ use bdk::{
 use std::collections::HashMap;
 use structopt::StructOpt;
 
-pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput> {
-    let party = load_party(&wallet_dir)?;
-
-    let (in_bet, unclaimed) = party
-        .bet_db()
+pub fn run_balance(wallet: &GunWallet, sync: bool) -> anyhow::Result<CmdOutput> {
+    let (in_bet, unclaimed) = wallet
+        .gun_db()
         .list_entities_print_error::<BetState>()
         .filter_map(|(_, bet_state)| match bet_state {
             BetState::Included { bet, .. } => Some((bet.local_value, Amount::ZERO)),
@@ -28,14 +26,14 @@ pub fn run_balance(wallet_dir: PathBuf, sync: bool) -> anyhow::Result<CmdOutput>
             )
         });
 
-    let tx_list = party
-        .wallet()
+    let tx_list = wallet
+        .bdk_wallet()
         .list_transactions(false)?
         .into_iter()
         .map(|tx_details| (tx_details.txid, tx_details.confirmation_time.is_some()))
         .collect::<Vec<_>>();
-    let unspent = party.wallet().list_unspent()?;
-    let currently_used = party.bet_db().currently_used_utxos(&[])?;
+    let unspent = wallet.bdk_wallet().list_unspent()?;
+    let currently_used = wallet.gun_db().currently_used_utxos(&[])?;
 
     let (confirmed, unconfirmed, in_use) = unspent.into_iter().fold(
         (Amount::ZERO, Amount::ZERO, Amount::ZERO),
@@ -89,76 +87,108 @@ pub enum AddressOpt {
     /// First one that hasn't been used.
     LastUnused,
     /// List addresses
-    List,
+    List {
+        /// Show all addresses (internal & external)
+        #[structopt(long, short)]
+        all: bool,
+        /// Show only internal addresses
+        #[structopt(long, short)]
+        internal: bool,
+    },
     /// Show details of an address
     Show { address: Address },
 }
 
-pub fn get_address(
-    wallet_dir: &std::path::Path,
-    addr_opt: AddressOpt,
-) -> anyhow::Result<CmdOutput> {
+fn list_keychain_addresses(
+    wallet: &GunWallet,
+    keychain_kind: KeychainKind,
+) -> anyhow::Result<Vec<Vec<Cell>>> {
+    let bdk_db = wallet.bdk_wallet().database();
+    let scripts = bdk_db.iter_script_pubkeys(Some(keychain_kind))?;
+    let index = bdk_db.get_last_index(keychain_kind)?;
+    let utxo_map = index_utxos(&bdk_db.iter_utxos()?);
+    let txn_map = index_txos(&bdk_db.iter_raw_txs()?);
+    let rows = match index {
+        Some(index) => scripts
+            .iter()
+            .take(index as usize + 1)
+            .map(|script| {
+                let address = Address::from_script(script, wallet.bdk_wallet().network()).unwrap();
+                let value = utxo_map
+                    .get(script)
+                    .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
+                    .unwrap_or(Amount::ZERO);
+                let txn_count = match txn_map.get(script) {
+                    Some(txn_vec) => txn_vec.len() as u64,
+                    None => 0,
+                };
+
+                let count = utxo_map.get(script).map(Vec::len).unwrap_or(0);
+                let keychain_name = match keychain_kind {
+                    KeychainKind::External => "external",
+                    KeychainKind::Internal => "internal",
+                }
+                .to_string();
+                vec![
+                    Cell::String(address.to_string()),
+                    Cell::Amount(value),
+                    Cell::Int(count as u64),
+                    Cell::Int(txn_count),
+                    Cell::String(keychain_name),
+                ]
+            })
+            // newest should go first
+            .rev()
+            .collect(),
+        None => vec![],
+    };
+    Ok(rows)
+}
+
+pub fn get_address(wallet: &GunWallet, addr_opt: AddressOpt) -> anyhow::Result<CmdOutput> {
     match addr_opt {
         AddressOpt::New => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
-            let address = wallet.get_address(AddressIndex::New)?;
+            let address = wallet.bdk_wallet().get_address(AddressIndex::New)?;
             Ok(CmdOutput::EmphasisedItem {
                 main: ("address", Cell::string(address)),
                 other: vec![],
             })
         }
         AddressOpt::LastUnused => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
-            let address = wallet.get_address(AddressIndex::LastUnused)?;
+            let address = wallet.bdk_wallet().get_address(AddressIndex::LastUnused)?;
             Ok(CmdOutput::EmphasisedItem {
                 main: ("address", Cell::string(address)),
                 other: vec![],
             })
         }
-        AddressOpt::List => {
-            let wallet_db = load_wallet_db(wallet_dir).context("loading wallet db")?;
-            let scripts = wallet_db.iter_script_pubkeys(Some(KeychainKind::External))?;
-            let config = load_config(wallet_dir).context("loading config")?;
-            let index = wallet_db.get_last_index(KeychainKind::External)?;
-            let map = index_utxos(&wallet_db)?;
-            let rows = match index {
-                Some(index) => scripts
-                    .iter()
-                    .take(index as usize + 1)
-                    .map(|script| {
-                        let address = Address::from_script(script, config.network).unwrap();
-                        let value = map
-                            .get(script)
-                            .map(|utxos| {
-                                Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum())
-                            })
-                            .unwrap_or(Amount::ZERO);
+        AddressOpt::List { internal, all } => {
+            let mut rows: Vec<Vec<Cell>> = Vec::new();
+            let header = vec!["address", "value", "utxos", "txos", "keychain"];
 
-                        let count = map.get(script).map(Vec::len).unwrap_or(0);
-
-                        vec![
-                            Cell::String(address.to_string()),
-                            Cell::Amount(value),
-                            Cell::Int(count as u64),
-                        ]
-                    })
-                    // newest should go first
-                    .rev()
-                    .collect(),
-                None => vec![],
+            let keychains = match (internal, all) {
+                (_, true) => vec![KeychainKind::External, KeychainKind::Internal],
+                (true, false) => vec![KeychainKind::Internal],
+                _ => vec![KeychainKind::External],
             };
 
-            Ok(CmdOutput::table(vec!["address", "value", "utxos"], rows))
+            for keychain in keychains {
+                let mut internal_rows = list_keychain_addresses(wallet, keychain)
+                    .expect("fetching addresses from wallet_db");
+                rows.append(&mut internal_rows);
+            }
+
+            Ok(CmdOutput::table(header, rows))
         }
         AddressOpt::Show { address } => {
-            let (wallet, _, _, _) = load_wallet(wallet_dir)?;
+            let bdk_db = &*wallet.bdk_wallet().database();
             let script_pubkey = address.script_pubkey();
             let output_descriptor = wallet
+                .bdk_wallet()
                 .get_descriptor_for_script_pubkey(&address.script_pubkey())?
                 .map(|desc| Cell::String(desc.to_string()))
                 .unwrap_or(Cell::Empty);
-            let keychain = wallet
-                .query_db(|db| db.get_path_from_script_pubkey(&script_pubkey))?
+            let keychain = bdk_db
+                .get_path_from_script_pubkey(&script_pubkey)?
                 .map(|(keychain, _)| {
                     Cell::string(match keychain {
                         KeychainKind::External => "external",
@@ -166,17 +196,22 @@ pub fn get_address(
                     })
                 })
                 .unwrap_or(Cell::Empty);
-            let map = wallet.query_db(|db| index_utxos(db))?;
-            let value = map
+            let utxo_map = index_utxos(&bdk_db.iter_utxos()?);
+            let value = utxo_map
                 .get(&script_pubkey)
                 .map(|utxos| Amount::from_sat(utxos.iter().map(|utxo| utxo.txout.value).sum()))
                 .unwrap_or(Amount::ZERO);
 
-            let count = map.get(&script_pubkey).map(Vec::len).unwrap_or(0);
+            let utxo_count = utxo_map.get(&script_pubkey).map(Vec::len).unwrap_or(0);
+            let txo_count = index_txos(&bdk_db.iter_raw_txs()?)
+                .get(&script_pubkey)
+                .map(Vec::len)
+                .unwrap_or(0);
 
             Ok(item! {
                 "value" => Cell::Amount(value),
-                "n-utxos" => Cell::Int(count as u64),
+                "utxos" => Cell::Int(utxo_count as u64),
+                "txos" => Cell::Int(txo_count as u64),
                 "script-pubkey" => Cell::string(address.script_pubkey().asm()),
                 "output-descriptor" => output_descriptor,
                 "keychain" => keychain,
@@ -185,15 +220,28 @@ pub fn get_address(
     }
 }
 
-fn index_utxos(wallet_db: &impl BatchDatabase) -> anyhow::Result<HashMap<Script, Vec<LocalUtxo>>> {
-    let mut map: HashMap<Script, Vec<LocalUtxo>> = HashMap::new();
-    for local_utxo in wallet_db.iter_utxos()?.iter() {
+fn index_utxos(utxos: &[LocalUtxo]) -> HashMap<Script, Vec<LocalUtxo>> {
+    let mut map = HashMap::<_, Vec<_>>::new();
+    for local_utxo in utxos {
         map.entry(local_utxo.txout.script_pubkey.clone())
             .and_modify(|v| v.push(local_utxo.clone()))
             .or_insert(vec![local_utxo.clone()]);
     }
 
-    Ok(map)
+    map
+}
+
+fn index_txos(transactions: &[Transaction]) -> HashMap<Script, Vec<Transaction>> {
+    let mut map: HashMap<_, Vec<_>> = HashMap::new();
+    for txn in transactions {
+        for out in &txn.output {
+            map.entry(out.script_pubkey.clone())
+                .and_modify(|v| v.push(txn.clone()))
+                .or_insert(vec![txn.clone()]);
+        }
+    }
+
+    map
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -231,7 +279,7 @@ pub struct SpendOpt {
 impl SpendOpt {
     pub fn spend_coins<D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>(
         self,
-        party: &Party<EsploraBlockchain, D>,
+        wallet: &GunWallet,
         mut builder: TxBuilder<'_, EsploraBlockchain, D, Cs, Ctx>,
     ) -> anyhow::Result<CmdOutput> {
         let SpendOpt {
@@ -247,7 +295,7 @@ impl SpendOpt {
             .enable_rbf()
             .ordering(bdk::wallet::tx_builder::TxOrdering::Bip69Lexicographic);
 
-        let in_use = party.bet_db().currently_used_utxos(&[])?;
+        let in_use = wallet.gun_db().currently_used_utxos(&[])?;
 
         if !spend_in_use && !in_use.is_empty() {
             eprintln!(
@@ -259,10 +307,10 @@ impl SpendOpt {
 
         fee_args
             .fee
-            .apply_to_builder(party.wallet().client(), &mut builder)?;
+            .apply_to_builder(wallet.bdk_wallet().client(), &mut builder)?;
 
         let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
-            party
+            wallet
                 .spend_won_bets(builder, bump_claiming)?
                 .expect("Won't be None since builder we pass in is not manually_selected_only")
         } else {
@@ -270,17 +318,15 @@ impl SpendOpt {
             (psbt, vec![])
         };
 
-        party.wallet().sign(&mut psbt, SignOptions::default())?;
-
-        let finalized = party
-            .wallet()
-            .finalize_psbt(&mut psbt, SignOptions::default())?;
+        let finalized = wallet
+            .bdk_wallet()
+            .sign(&mut psbt, SignOptions::default())?;
 
         assert!(finalized, "transaction must be finalized at this point");
 
         let (output, txid) = cmd::decide_to_broadcast(
-            party.wallet().network(),
-            party.wallet().client(),
+            wallet.bdk_wallet().network(),
+            wallet.bdk_wallet().client(),
             psbt,
             yes,
             print_tx,
@@ -289,7 +335,7 @@ impl SpendOpt {
         if let Some(txid) = txid {
             if !print_tx {
                 for bet_id in claiming_bet_ids {
-                    if let Err(e) = party.take_next_action(bet_id, false) {
+                    if let Err(e) = wallet.take_next_action(bet_id, false) {
                         eprintln!(
                             "error updating state of bet {} after broadcasting claim tx {}: {}",
                             bet_id, txid, e
@@ -302,52 +348,55 @@ impl SpendOpt {
         Ok(output)
     }
 }
-pub fn run_send(wallet_dir: &std::path::Path, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+
+pub fn run_send(wallet: &GunWallet, send_opt: SendOpt) -> anyhow::Result<CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     let SendOpt {
         to,
         value,
         spend_opt,
     } = send_opt;
-    let party = load_party(wallet_dir)?;
-    let mut builder = party.wallet().build_tx();
+    let mut builder = wallet.bdk_wallet().build_tx();
 
     match value {
         ValueChoice::All => builder.drain_wallet().drain_to(to.script_pubkey()),
         ValueChoice::Amount(amount) => builder.add_recipient(to.script_pubkey(), amount.as_sat()),
     };
 
-    spend_opt.spend_coins(&party, builder)
+    spend_opt.spend_coins(wallet, builder)
 }
 
 #[derive(StructOpt, Debug, Clone)]
 pub enum TransactionOpt {
+    /// List transactions related to this gun wallet.
     List,
-    Show { txid: Txid },
+    /// Show details about a particular wallet transaction.
+    Show {
+        /// Transaction id of the transaction you want to inspect.
+        txid: Txid,
+    },
 }
 
-pub fn run_transaction_cmd(
-    wallet_dir: &std::path::Path,
-    opt: TransactionOpt,
-) -> anyhow::Result<CmdOutput> {
+pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::Result<CmdOutput> {
     use TransactionOpt::*;
-    let (wallet, _, _, _) = load_wallet(wallet_dir)?;
 
     match opt {
         List => {
-            let mut txns = wallet.list_transactions(false)?;
+            let mut txns = wallet.bdk_wallet().list_transactions(false)?;
 
             txns.sort_unstable_by_key(|x| {
                 std::cmp::Reverse(
                     x.confirmation_time
                         .as_ref()
                         .map(|x| x.timestamp)
-                        .unwrap_or(0),
+                        .unwrap_or(u64::MAX),
                 )
             });
 
             let rows: Vec<Vec<Cell>> = txns
                 .into_iter()
                 .map(|tx| {
+                    let bal = tx.received as i64 - tx.sent as i64;
                     vec![
                         Cell::String(tx.txid.to_string()),
                         tx.confirmation_time
@@ -358,19 +407,20 @@ pub fn run_transaction_cmd(
                             .as_ref()
                             .map(|x| Cell::DateTime(x.timestamp))
                             .unwrap_or(Cell::Empty),
-                        Cell::Amount(Amount::from_sat(tx.sent)),
-                        Cell::Amount(Amount::from_sat(tx.received)),
+                        Cell::SignedAmount(SignedAmount::from_sat(bal)),
+                        Cell::maybe_string(tx.fee),
                     ]
                 })
                 .collect();
 
             Ok(CmdOutput::table(
-                vec!["txid", "height", "seen", "sent", "received"],
+                vec!["txid", "height", "conftime", "value", "fee"],
                 rows,
             ))
         }
         Show { txid } => {
             let tx = wallet
+                .bdk_wallet()
                 .list_transactions(false)?
                 .into_iter()
                 .find(|tx| tx.txid == txid)
@@ -380,10 +430,11 @@ pub fn run_transaction_cmd(
                 "txid" => Cell::String(tx.txid.to_string()),
                 "sent" => Cell::Amount(Amount::from_sat(tx.sent)),
                 "received" => Cell::Amount(Amount::from_sat(tx.received)),
-                "seent-at" => tx.confirmation_time.as_ref()
+                "value" => Cell::SignedAmount(SignedAmount::from_sat(tx.received as i64 - tx.sent as i64)),
+                "conftime" => tx.confirmation_time.as_ref()
                             .map(|x| Cell::DateTime(x.timestamp))
                             .unwrap_or(Cell::Empty),
-                "confirmed-at" => tx.confirmation_time.as_ref()
+                "height" => tx.confirmation_time.as_ref()
                             .map(|x| Cell::Int(x.height.into()))
                             .unwrap_or(Cell::Empty),
                 "fee" => tx.fee.map(|x| Cell::Amount(Amount::from_sat(x)))
@@ -402,12 +453,11 @@ pub enum UtxoOpt {
     Show { outpoint: OutPoint },
 }
 
-pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_utxo_cmd(wallet: &GunWallet, opt: UtxoOpt) -> anyhow::Result<CmdOutput> {
     match opt {
         UtxoOpt::List => {
-            let party = load_party(wallet_dir)?;
-            let in_use_utxos = party.bet_db().currently_used_utxos(&[])?;
-            let wallet = party.wallet();
+            let in_use_utxos = wallet.gun_db().currently_used_utxos(&[])?;
+            let wallet = wallet.bdk_wallet();
             let rows = wallet
                 .list_unspent()?
                 .into_iter()
@@ -446,14 +496,15 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
             ))
         }
         UtxoOpt::Show { outpoint } => {
-            let party = load_party(wallet_dir)?;
-            let wallet = party.wallet();
             let utxo = wallet
+                .bdk_wallet()
                 .query_db(|db| db.get_utxo(&outpoint))?
                 .ok_or(anyhow!("UTXO {} not in wallet database", outpoint))?;
             let script_pubkey = utxo.txout.script_pubkey.clone();
 
-            let tx = wallet.query_db(|db| db.get_tx(&utxo.outpoint.txid, false))?;
+            let tx = wallet
+                .bdk_wallet()
+                .query_db(|db| db.get_tx(&utxo.outpoint.txid, false))?;
             let (tx_seen, tx_height) = tx
                 .map(|tx| {
                     (
@@ -470,11 +521,12 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
                 .unwrap_or((Cell::Empty, Cell::Empty));
 
             let output_descriptor = wallet
+                .bdk_wallet()
                 .get_descriptor_for_script_pubkey(&script_pubkey)?
                 .map(|desc| Cell::String(desc.to_string()))
                 .unwrap_or(Cell::Empty);
-            let in_use = party
-                .bet_db()
+            let in_use = wallet
+                .gun_db()
                 .currently_used_utxos(&[])?
                 .contains(&utxo.outpoint);
 
@@ -482,9 +534,9 @@ pub fn run_utxo_cmd(wallet_dir: &std::path::Path, opt: UtxoOpt) -> anyhow::Resul
             Ok(item! {
                 "outpoint" => Cell::String(utxo.outpoint.to_string()),
                 "value" => Cell::Amount(Amount::from_sat(utxo.txout.value)),
-                "tx-seen-at" => tx_seen,
-                "tx-confirmed-at" => tx_height,
-                "address" => Address::from_script(&utxo.txout.script_pubkey, wallet.network())
+                "conftime" => tx_seen,
+                "height" => tx_height,
+                "address" => Address::from_script(&utxo.txout.script_pubkey, wallet.bdk_wallet().network())
                             .map(|address| Cell::String(address.to_string()))
                             .unwrap_or(Cell::Empty),
                 "script-pubkey" => Cell::String(script_pubkey.asm()),
@@ -505,54 +557,61 @@ pub struct SplitOpt {
     #[structopt(parse(try_from_str = FromCliStr::from_cli_str))]
     output_size: Amount,
     /// Number of outputs to create. If omitted it will use the maximum possible.
-    n: Option<usize>,
+    n: usize,
     #[structopt(flatten)]
     spend_opt: SpendOpt,
 }
 
-pub fn run_split_cmd(wallet_dir: &std::path::Path, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+pub fn run_split_cmd(wallet: &GunWallet, opt: SplitOpt) -> anyhow::Result<CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     let SplitOpt {
         output_size,
         n,
         spend_opt,
     } = opt;
-    let party = load_party(wallet_dir)?;
-    let wallet = party.wallet();
-    let mut builder = wallet.build_tx();
+    let bdk_wallet = wallet.bdk_wallet();
+    let mut builder = bdk_wallet.build_tx();
 
-    let already_correct = wallet
+    let already_correct = bdk_wallet
         .list_unspent()?
         .into_iter()
         .filter(|utxo| utxo.txout.value == output_size.as_sat());
 
     builder.unspendable(already_correct.map(|utxo| utxo.outpoint).collect());
 
-    match n {
-        Some(n) => {
-            for _ in 0..n {
-                builder.add_recipient(
-                    wallet
-                        .get_change_address(AddressIndex::New)?
-                        .address
-                        .script_pubkey(),
-                    output_size.as_sat(),
-                );
-            }
-        }
-        None => {
-            builder
-                .drain_wallet()
-                // add one recipient so we at least get one split utxo of the correct size.
-                .add_recipient(
-                    wallet
-                        .get_change_address(AddressIndex::New)?
-                        .address
-                        .script_pubkey(),
-                    output_size.as_sat(),
-                )
-                .split_change(output_size.as_sat(), usize::MAX);
-        }
-    };
+    let txo_map = index_txos(&bdk_wallet.database().iter_raw_txs()?);
 
-    spend_opt.spend_coins(&party, builder)
+    let last_unused_index = bdk_wallet
+        .get_change_address(AddressIndex::LastUnused)?
+        .index;
+    let mut added_recipients = 0;
+    // Check for unused change addresses up to most recent
+    for check_used_index in 0..(last_unused_index + 1) {
+        let check_script_pk = bdk_wallet
+            .get_change_address(AddressIndex::Peek(check_used_index as u32))?
+            .address
+            .script_pubkey();
+
+        let used = txo_map.get(&check_script_pk).is_some();
+        // Keep adding unused recipients until we have n
+        if !used {
+            builder.add_recipient(check_script_pk, output_size.as_sat());
+            added_recipients += 1;
+            if added_recipients == n {
+                break;
+            };
+        }
+    }
+    // If we don't have enough unused addresses, fill remaining n-added with new
+    for _ in 0..(n - added_recipients) {
+        builder.add_recipient(
+            bdk_wallet
+                .get_change_address(AddressIndex::New)?
+                .address
+                .script_pubkey(),
+            output_size.as_sat(),
+        );
+    }
+
+    spend_opt.spend_coins(wallet, builder)
 }

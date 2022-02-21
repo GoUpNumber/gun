@@ -1,26 +1,27 @@
-use super::BetArgs;
-use crate::{betting::*, change::Change, FeeSpec, ValueChoice};
+use crate::{betting::*, change::Change, wallet::GunWallet, ValueChoice};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::Amount,
-    database::BatchDatabase,
     miniscript::DescriptorTrait,
-    wallet::{tx_builder::TxOrdering, IsDust},
+    wallet::{coin_selection::LargestFirstCoinSelection, tx_builder::TxOrdering, IsDust},
     SignOptions,
 };
 use chacha20::cipher::StreamCipher;
 use std::convert::TryInto;
 
-impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
+impl GunWallet {
     pub fn generate_offer_with_oracle_event(
         &self,
-        proposal: Proposal,
-        choose_right: bool,
-        oracle_event: OracleEvent,
-        oracle_info: OracleInfo,
-        args: BetArgs<'_, '_>,
-        fee_spec: FeeSpec,
-    ) -> anyhow::Result<(Bet, Offer, Point<EvenY>, impl StreamCipher)> {
+        OfferArgs {
+            proposal,
+            choose_right,
+            oracle_event,
+            oracle_info,
+            args,
+            fee_spec,
+            keychain,
+        }: OfferArgs,
+    ) -> anyhow::Result<(Bet, Point<EvenY>, impl StreamCipher)> {
         let remote_public_key = &proposal.public_key;
         let event_id = &oracle_event.event.id;
         if event_id.n_outcomes() != 2 {
@@ -37,7 +38,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .try_into()
             .unwrap();
 
-        let local_keypair = self.keychain.keypair_for_offer(&proposal);
+        let local_keypair = keychain.keypair_for_offer(&proposal);
         let (cipher, mut rng) = crate::ecdh::ecdh(&local_keypair, remote_public_key);
 
         let remote_public_key = proposal.public_key;
@@ -51,7 +52,10 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             randomize,
         );
 
-        let mut builder = self.wallet.build_tx();
+        let mut builder = self
+            .bdk_wallet()
+            .build_tx()
+            .coin_selection(LargestFirstCoinSelection);
         builder
             .ordering(TxOrdering::Bip69Lexicographic)
             .enable_rbf();
@@ -68,9 +72,9 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             }
         }
 
-        fee_spec.apply_to_builder(self.wallet.client(), &mut builder)?;
+        fee_spec.apply_to_builder(self.bdk_wallet().client(), &mut builder)?;
 
-        args.apply_args(self.bet_db(), &mut builder)?;
+        args.apply_args(self.gun_db(), &mut builder)?;
 
         let mut input_value = 0;
         for proposal_input in &proposal.inputs {
@@ -101,13 +105,12 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             builder.add_recipient(change_script.clone().into(), proposal_excess);
         }
 
-        let (mut psbt, _tx_details) = builder
+        let (psbt, _tx_details) = builder
             .finish()
             .context("Unable to create offer transaction")?;
 
         // the inputs we own have witnesses
         let my_input_indexes = psbt
-            .global
             .unsigned_tx
             .input
             .iter()
@@ -116,18 +119,7 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
             .map(|(i, _)| i as u32)
             .collect::<Vec<_>>();
 
-        let is_final = self
-            .wallet
-            .sign(&mut psbt, SignOptions::default())
-            .context("Unable to sign offer transaction")?;
-
-        if is_final {
-            // the only reason it would be final is that the wallet is doing a bet with itself
-            return Err(anyhow!("sorry you can't do bets with yourself yet!"));
-        }
-
         let (vout, txout) = psbt
-            .global
             .unsigned_tx
             .output
             .iter()
@@ -138,12 +130,46 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let joint_output_value = Amount::from_sat(txout.value);
         let local_value = joint_output_value - proposal.value;
 
-        let signed_inputs: Vec<SignedInput> = my_input_indexes
+        let bet = Bet {
+            psbt,
+            my_input_indexes,
+            vout: vout as u32,
+            joint_output,
+            oracle_id: oracle_info.id,
+            oracle_event,
+            local_value,
+            joint_output_value,
+            i_chose_right: choose_right,
+            tags: args.tags,
+        };
+
+        Ok((bet, local_keypair.public_key, cipher))
+    }
+
+    pub fn sign_save_and_encrypt_offer(
+        &self,
+        mut bet: Bet,
+        message: Option<String>,
+        local_public_key: Point<EvenY>,
+        cipher: &mut impl StreamCipher,
+    ) -> anyhow::Result<(BetId, Ciphertext, Offer)> {
+        let is_final = self
+            .bdk_wallet()
+            .sign(&mut bet.psbt, SignOptions::default())
+            .context("Unable to sign offer transaction")?;
+
+        if is_final {
+            // the only reason it would be final is that the wallet is doing a bet with itself
+            return Err(anyhow!("sorry you can't do bets with yourself yet!"));
+        }
+
+        let signed_inputs: Vec<SignedInput> = bet
+            .my_input_indexes
             .iter()
             .cloned()
             .map(|i| {
-                let txin = &psbt.global.unsigned_tx.input[i as usize];
-                let psbt_input = &psbt.inputs[i as usize];
+                let txin = &bet.psbt.unsigned_tx.input[i as usize];
+                let psbt_input = &bet.psbt.inputs[i as usize];
                 let witness = psbt_input
                     .final_script_witness
                     .clone()
@@ -159,8 +185,8 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
 
         let mut change = None;
 
-        for output in &psbt.global.unsigned_tx.output {
-            if self.wallet.is_mine(&output.script_pubkey)? {
+        for output in &bet.psbt.unsigned_tx.output {
+            if self.bdk_wallet().is_mine(&output.script_pubkey)? {
                 change = Some(Change::new(output.value, output.script_pubkey.clone()));
             }
         }
@@ -168,42 +194,22 @@ impl<D: BatchDatabase> Party<bdk::blockchain::EsploraBlockchain, D> {
         let offer = Offer {
             change,
             inputs: signed_inputs,
-            choose_right,
-            value: local_value,
-        };
-        let bet = Bet {
-            psbt,
-            my_input_indexes,
-            vout: vout as u32,
-            joint_output,
-            oracle_id: oracle_info.id,
-            oracle_event,
-            local_value,
-            joint_output_value,
-            i_chose_right: choose_right,
-            tags: args.tags,
+            choose_right: bet.i_chose_right,
+            value: bet.local_value,
         };
 
-        Ok((bet, offer, local_keypair.public_key, cipher))
-    }
-
-    pub fn save_and_encrypt_offer(
-        &self,
-        bet: Bet,
-        offer: Offer,
-        message: Option<String>,
-        local_public_key: Point<EvenY>,
-        cipher: &mut impl StreamCipher,
-    ) -> anyhow::Result<(BetId, Ciphertext)> {
         let encrypted_offer = Ciphertext::create(
             local_public_key,
             cipher,
-            Plaintext::Offerv1 { offer, message },
+            Plaintext::Offerv1 {
+                offer: offer.clone(),
+                message,
+            },
         );
-        let bet_id = self.bet_db.insert_bet(BetState::Offered {
+        let bet_id = self.gun_db().insert_bet(BetState::Offered {
             bet: OfferedBet(bet),
             encrypted_offer: encrypted_offer.clone(),
         })?;
-        Ok((bet_id, encrypted_offer))
+        Ok((bet_id, encrypted_offer, offer))
     }
 }

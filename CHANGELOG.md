@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.6.0
+
+- Add support for signet
+- Add support for coldcard bip84 🎉
+- Add support for BIP39 passphrases
+- Add `--internal` and `--all` flags to `gun address list`
+- Add `txos` column to `gun address list`
+- Fix `gun split` creating too many address gaps
+
 ## v0.5.0
 
 - Upgrade to new bdk commit
