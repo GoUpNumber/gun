@@ -36,6 +36,16 @@ impl Bet {
             .collect()
     }
 
+    pub fn their_inputs(&self) -> Vec<OutPoint> {
+        self.tx()
+            .input
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.my_input_indexes.contains(&(*i as u32)))
+            .map(|(_, input)| input.previous_output)
+            .collect()
+    }
+
     pub fn tx(&self) -> Transaction {
         self.psbt.clone().extract_tx()
     }
@@ -127,7 +137,7 @@ pub enum BetState {
         cancel_vin: u32,
         /// Height of cancel tx  None implies cancel tx is in mempool
         height: Option<u32>,
-        /// Whether we intend to cancel the bet.
+        /// Whether the cancel_txid seems to be ours
         i_intend_cancel: bool,
     },
 }

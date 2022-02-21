@@ -566,11 +566,24 @@ pub fn run_bet_cmd(
                     "oracle" => Cell::string(&bet.oracle_id),
                     "outcome-time" => bet.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
                     "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(Cell::string).collect()),
+                    "their-inputs" => Cell::List(bet.their_inputs().into_iter().map(Cell::string).collect()),
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
                     "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
                     "claim-txid" => match bet_state {
                         BetState::Claimed { txid, .. } => Cell::string(txid),
+                        _ => Cell::Empty
+                    },
+                    "cancel-txid" => match bet_state {
+                        BetState::Canceled { cancel_txid, .. } => Cell::string(cancel_txid),
+                        _ => Cell::Empty
+                    },
+                    "cancel-spent" => match bet_state {
+                        BetState::Canceled { bet_spent_vin, .. } => Cell::string(bet.tx().input[bet_spent_vin as usize].previous_output),
+                        _ => Cell::Empty
+                    },
+                    "i-canceled" => match bet_state {
+                        BetState::Canceled { i_intend_cancel, .. } => Cell::string(i_intend_cancel),
                         _ => Cell::Empty
                     },
                     "tags" => Cell::List(bet.tags.iter().map(Cell::string).collect())
