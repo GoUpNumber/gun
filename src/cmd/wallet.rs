@@ -413,7 +413,7 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                 .collect();
 
             Ok(CmdOutput::table(
-                vec!["txid", "height", "conf-time", "sent", "received"],
+                vec!["txid", "height", "conftime", "sent", "received"],
                 rows,
             ))
         }
@@ -429,10 +429,10 @@ pub fn run_transaction_cmd(wallet: &GunWallet, opt: TransactionOpt) -> anyhow::R
                 "txid" => Cell::String(tx.txid.to_string()),
                 "sent" => Cell::Amount(Amount::from_sat(tx.sent)),
                 "received" => Cell::Amount(Amount::from_sat(tx.received)),
-                "seent-at" => tx.confirmation_time.as_ref()
+                "conftime" => tx.confirmation_time.as_ref()
                             .map(|x| Cell::DateTime(x.timestamp))
                             .unwrap_or(Cell::Empty),
-                "confirmed-at" => tx.confirmation_time.as_ref()
+                "height" => tx.confirmation_time.as_ref()
                             .map(|x| Cell::Int(x.height.into()))
                             .unwrap_or(Cell::Empty),
                 "fee" => tx.fee.map(|x| Cell::Amount(Amount::from_sat(x)))
@@ -532,8 +532,8 @@ pub fn run_utxo_cmd(wallet: &GunWallet, opt: UtxoOpt) -> anyhow::Result<CmdOutpu
             Ok(item! {
                 "outpoint" => Cell::String(utxo.outpoint.to_string()),
                 "value" => Cell::Amount(Amount::from_sat(utxo.txout.value)),
-                "tx-seen-at" => tx_seen,
-                "tx-confirmed-at" => tx_height,
+                "conftime" => tx_seen,
+                "height" => tx_height,
                 "address" => Address::from_script(&utxo.txout.script_pubkey, wallet.bdk_wallet().network())
                             .map(|address| Cell::String(address.to_string()))
                             .unwrap_or(Cell::Empty),
