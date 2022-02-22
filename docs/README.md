@@ -30,4 +30,16 @@ cargo -Z avoid-dev-deps install --path .
 
 The *minimum supported rust version* for `gun` is `1.56.0`.
 
+To setup your wallet see [`gun setup --help`](https://gun.fun/setup/setup.html).
+
+
+## Community
+
+<big>
+
+Join us on [Discord](https://discord.gg/Wknb2A6J)
+
+</big>
+
+
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki
