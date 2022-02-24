@@ -36,6 +36,16 @@ impl Bet {
             .collect()
     }
 
+    pub fn their_inputs(&self) -> Vec<OutPoint> {
+        self.tx()
+            .input
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.my_input_indexes.contains(&(*i as u32)))
+            .map(|(_, input)| input.previous_output)
+            .collect()
+    }
+
     pub fn tx(&self) -> Transaction {
         self.psbt.clone().extract_tx()
     }
@@ -49,7 +59,6 @@ impl Bet {
 
     pub fn input_outpoints(&self) -> Vec<OutPoint> {
         self.psbt
-            .global
             .unsigned_tx
             .input
             .iter()
@@ -71,7 +80,9 @@ impl OfferedBet {
             "the transactions must be the same to add_counterparty_sigs"
         );
         for (txin, psbt_input) in tx.input.into_iter().zip(bet.psbt.inputs.iter_mut()) {
-            psbt_input.final_script_witness.get_or_insert(txin.witness);
+            psbt_input
+                .final_script_witness
+                .get_or_insert(txin.witness.to_vec());
         }
 
         bet
@@ -126,7 +137,7 @@ pub enum BetState {
         cancel_vin: u32,
         /// Height of cancel tx  None implies cancel tx is in mempool
         height: Option<u32>,
-        /// Whether we intend to cancel the bet.
+        /// Whether the cancel_txid seems to be ours
         i_intend_cancel: bool,
     },
 }
@@ -247,5 +258,9 @@ impl BetState {
                 ..
             } => &mut bet.tags,
         }
+    }
+
+    pub fn relies_on_protocol_secret(&self) -> bool {
+        matches!(self, BetState::Proposed { .. })
     }
 }

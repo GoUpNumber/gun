@@ -2,16 +2,18 @@ use super::{read_input, run_oralce_cmd, Cell};
 use crate::{
     betting::*,
     cmd::{self, read_yn, sanitize_str, CmdOutput},
+    database::GunDatabase,
     item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
-    Url, ValueChoice,
+    wallet::GunWallet,
+    OracleInfo, Url, ValueChoice,
 };
 use anyhow::{anyhow, Context};
 use bdk::bitcoin::{Address, Amount, Script};
 use chacha20::cipher::StreamCipher;
 use olivia_core::{chrono::Utc, Outcome, OutcomeError};
-use std::{path::Path, str::FromStr};
+use std::str::FromStr;
 use structopt::StructOpt;
 
 #[derive(Clone, Debug, structopt::StructOpt)]
@@ -203,12 +205,17 @@ pub enum TagOpt {
     },
 }
 
-pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result<cmd::CmdOutput> {
+pub fn run_bet_cmd(
+    wallet: &GunWallet,
+    keychain: &Keychain,
+    cmd: BetOpt,
+    sync: bool,
+) -> anyhow::Result<cmd::CmdOutput> {
+    cmd::ensure_not_watch_only(wallet)?;
     // For now just always do this but we may want to do something more fine grained later.
     if sync {
-        let party = cmd::load_party(wallet_dir)?;
-        party.sync()?;
-        party.poke_bets();
+        wallet.sync()?;
+        wallet.poke_bets();
     }
 
     match cmd {
@@ -217,18 +224,17 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             event_url,
             yes,
         } => {
-            let party = cmd::load_party(wallet_dir)?;
             let oracle_id = event_url.host_str().unwrap().to_string();
             let now = Utc::now().naive_utc();
             let (oracle_event, _, is_attested) =
-                get_oracle_event_from_url(party.bet_db(), event_url)?;
+                get_oracle_event_from_url(wallet.gun_db(), event_url)?;
             if is_attested {
                 return Err(anyhow!("{} already attested", oracle_event.event.id));
             }
 
             let mut question = format!(
                 "You are proposing a bet on the {}.",
-                olivia_describe::event_id_short(&oracle_event.event.id)
+                olivia_describe::event_short(&oracle_event.event.id)
             );
             if let Some(expected_outcome_time) = oracle_event.event.expected_outcome_time {
                 if expected_outcome_time <= now {
@@ -247,15 +253,15 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             }
             question += " Ok";
             let args = args.prompt_to_core_bet_args(None);
-            let local_proposal = party.make_proposal(oracle_id, oracle_event, args)?;
+            let local_proposal = wallet.make_proposal(oracle_id, oracle_event, args, keychain)?;
             if let Some(change) = &local_proposal.change {
                 eprintln!("This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  change.value(), local_proposal.proposal.value);
             }
 
             if yes || read_yn(&question) {
                 let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
-                let id = party
-                    .bet_db()
+                let id = wallet
+                    .gun_db()
                     .insert_bet(BetState::Proposed { local_proposal })?;
 
                 eprintln!("post your proposal and let people make offers to it:");
@@ -276,7 +282,6 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             pad,
             message,
         } => {
-            let party = cmd::load_party(wallet_dir)?;
             let proposal: Proposal = proposal.into();
             let event_id = proposal.event_id.clone();
             let now = Utc::now().naive_utc();
@@ -293,7 +298,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                 Url::parse(&format!("https://{}{}", proposal.oracle, proposal.event_id))?;
 
             let (oracle_event, oracle_info, is_attested) =
-                get_oracle_event_from_url(party.bet_db(), event_url)?;
+                get_oracle_event_from_url(wallet.gun_db(), event_url)?;
 
             if is_attested {
                 return Err(anyhow!("{} already attested", oracle_event.event.id));
@@ -355,20 +360,20 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
 
             let args = args.prompt_to_core_bet_args(Some(proposal.value));
 
-            let (bet, offer, local_public_key, mut cipher) = party
-                .generate_offer_with_oracle_event(
+            let (bet, local_public_key, mut cipher) =
+                wallet.generate_offer_with_oracle_event(OfferArgs {
+                    choose_right: outcome.value == 1,
+                    fee_spec: fee_args.fee,
                     proposal,
-                    outcome.value == 1,
                     oracle_event,
                     oracle_info,
                     args,
-                    fee_args.fee,
-                )?;
+                    keychain,
+                })?;
 
             if yes || cmd::read_yn(&bet_prompt(&bet, "offer", true)) {
-                let (id, encrypted_offer) = party.save_and_encrypt_offer(
+                let (id, encrypted_offer, _) = wallet.sign_save_and_encrypt_offer(
                     bet,
-                    offer,
                     message,
                     local_public_key,
                     &mut cipher,
@@ -397,8 +402,8 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             yes,
             print_tx,
         } => {
-            let party = cmd::load_party(wallet_dir)?;
-            let (plaintext, offer_public_key, rng) = party.decrypt_offer(id, encrypted_offer)?;
+            let (plaintext, offer_public_key, rng) =
+                wallet.decrypt_offer(id, encrypted_offer, keychain)?;
             match plaintext {
                 Plaintext::Offerv1 { offer, message } => {
                     if let Some(mut message) = message {
@@ -406,17 +411,19 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                         sanitize_str(&mut message);
                         eprintln!("This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", message);
                     }
-                    let validated_offer = party.validate_offer(id, offer, offer_public_key, rng)?;
+                    let mut validated_offer =
+                        wallet.validate_offer(id, offer, offer_public_key, rng, keychain)?;
                     if yes || cmd::read_yn(&bet_prompt(&validated_offer.bet, "take", false)) {
+                        wallet.sign_validated_offer(&mut validated_offer)?;
                         let (output, txid) = cmd::decide_to_broadcast(
-                            party.wallet().network(),
-                            party.wallet().client(),
+                            wallet.bdk_wallet().network(),
+                            wallet.bdk_wallet().client(),
                             validated_offer.bet.psbt.clone(),
                             yes,
                             print_tx,
                         )?;
                         if txid.is_some() {
-                            party.set_offer_taken(validated_offer)?;
+                            wallet.set_offer_taken(validated_offer)?;
                         }
                         Ok(output)
                     } else {
@@ -435,20 +442,19 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             print_tx,
             yes,
         } => {
-            let party = cmd::load_party(wallet_dir)?;
-            let wallet = party.wallet();
-            match party.claim(fee_args.fee, bump_claiming)? {
+            let bdk_wallet = wallet.bdk_wallet();
+            match wallet.claim(fee_args.fee, bump_claiming)? {
                 Some((ids, claim_psbt)) => {
                     let (output, txid) = cmd::decide_to_broadcast(
-                        wallet.network(),
-                        wallet.client(),
+                        bdk_wallet.network(),
+                        bdk_wallet.client(),
                         claim_psbt,
                         yes,
                         print_tx,
                     )?;
                     if let Some(txid) = txid {
                         for id in ids {
-                            if let Err(e) = party.take_next_action(id, false) {
+                            if let Err(e) = wallet.take_next_action(id, false) {
                                 eprintln!("error updating state of bet {} after broadcasting claim tx {}: {}", id, txid, e);
                             }
                         }
@@ -463,38 +469,34 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             fee_args,
             yes,
             print_tx,
-        } => {
-            let party = cmd::load_party(wallet_dir)?;
-            Ok(match party.generate_cancel_tx(&ids, fee_args.fee)? {
-                Some(psbt) => {
-                    let (output, txid) = cmd::decide_to_broadcast(
-                        party.wallet().network(),
-                        party.wallet().client(),
-                        psbt,
-                        yes,
-                        print_tx,
-                    )?;
+        } => Ok(match wallet.generate_cancel_tx(&ids, fee_args.fee)? {
+            Some(psbt) => {
+                let (output, txid) = cmd::decide_to_broadcast(
+                    wallet.bdk_wallet().network(),
+                    wallet.bdk_wallet().client(),
+                    psbt,
+                    yes,
+                    print_tx,
+                )?;
 
-                    if let Some(txid) = txid {
-                        for id in ids {
-                            if let Err(e) = party.take_next_action(id, true) {
-                                eprintln!("error updating state of bet {} after broadcasting cancel tx: {}: {}", id, txid, e);
-                            }
+                if let Some(txid) = txid {
+                    for id in ids {
+                        if let Err(e) = wallet.take_next_action(id, true) {
+                            eprintln!("error updating state of bet {} after broadcasting cancel tx: {}: {}", id, txid, e);
                         }
                     }
-                    output
                 }
-                None => {
-                    eprintln!("no bets needed canceling");
-                    CmdOutput::None
-                }
-            })
-        }
+                output
+            }
+            None => {
+                eprintln!("no bets needed canceling");
+                CmdOutput::None
+            }
+        }),
         BetOpt::Forget { ids } => {
-            let bet_db = cmd::load_bet_db(wallet_dir)?;
             let mut to_remove = vec![];
             for id in ids {
-                match bet_db.get_entity::<BetState>(id) {
+                match wallet.gun_db().get_entity::<BetState>(id) {
                     Ok(Some(bet_state)) => match bet_state {
                         BetState::Proposed { local_proposal } => {
                             match local_proposal.oracle_event.event.expected_outcome_time {
@@ -519,7 +521,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             }
 
             for id in &to_remove {
-                let _ = bet_db.remove_entity::<BetState>(*id);
+                let _ = wallet.gun_db().remove_entity::<BetState>(*id);
             }
 
             Ok(CmdOutput::List(
@@ -527,9 +529,8 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             ))
         }
         BetOpt::Show { id, raw } => {
-            let party = cmd::load_party(wallet_dir)?;
-            let bet_db = party.bet_db();
-            let bet_state = bet_db
+            let gun_db = wallet.gun_db();
+            let bet_state = gun_db
                 .get_entity::<BetState>(id)?
                 .ok_or(anyhow!("Bet {} doesn't exist", id))?;
 
@@ -547,7 +548,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                     "oracle" => Cell::string(&local_proposal.proposal.oracle),
                     "outcome-time" => local_proposal.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
                     "inputs" => Cell::List(local_proposal.proposal.inputs.clone().into_iter().map(Cell::string).collect()),
-                    "change-addr" => local_proposal.change.as_ref().and_then(|change| Address::from_script(change.script(), party.wallet().network())).map(Cell::string).unwrap_or(Cell::Empty),
+                    "change-addr" => local_proposal.change.as_ref().and_then(|change| Address::from_script(change.script(), wallet.bdk_wallet().network())).map(Cell::string).unwrap_or(Cell::Empty),
                     "change-value" => local_proposal.change.as_ref().map(|change| Cell::Amount(change.value())).unwrap_or(Cell::Empty),
                     "tags" => Cell::List(local_proposal.tags.iter().map(Cell::string).collect()),
                     "string" => Cell::string(local_proposal.proposal.into_versioned()),
@@ -565,6 +566,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                     "oracle" => Cell::string(&bet.oracle_id),
                     "outcome-time" => bet.oracle_event.event.expected_outcome_time.map(Cell::datetime).unwrap_or(Cell::Empty),
                     "my-inputs" => Cell::List(bet.my_inputs().into_iter().map(Cell::string).collect()),
+                    "their-inputs" => Cell::List(bet.their_inputs().into_iter().map(Cell::string).collect()),
                     "bet-outpoint" => Cell::string(bet.outpoint()),
                     "bet-value" => Cell::Amount(bet.joint_output_value),
                     "bet-descriptor" => Cell::string(bet.joint_output.descriptor()),
@@ -572,18 +574,24 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                         BetState::Claimed { txid, .. } => Cell::string(txid),
                         _ => Cell::Empty
                     },
+                    "cancel-txid" => match bet_state {
+                        BetState::Canceled { cancel_txid, .. } => Cell::string(cancel_txid),
+                        _ => Cell::Empty
+                    },
+                    "cancel-spent" => match bet_state {
+                        BetState::Canceled { bet_spent_vin, .. } => Cell::string(bet.tx().input[bet_spent_vin as usize].previous_output),
+                        _ => Cell::Empty
+                    },
+                    "i-canceled" => match bet_state {
+                        BetState::Canceled { i_intend_cancel, .. } => Cell::string(i_intend_cancel),
+                        _ => Cell::Empty
+                    },
                     "tags" => Cell::List(bet.tags.iter().map(Cell::string).collect())
                 },
             })
         }
-        BetOpt::List => {
-            let bet_db = cmd::load_bet_db(wallet_dir)?;
-            Ok(list_bets(&bet_db))
-        }
-        BetOpt::Oracle(oracle_cmd) => {
-            let bet_db = cmd::load_bet_db(wallet_dir)?;
-            run_oralce_cmd(bet_db, oracle_cmd)
-        }
+        BetOpt::List => Ok(list_bets(wallet.gun_db())),
+        BetOpt::Oracle(oracle_cmd) => run_oralce_cmd(wallet.gun_db(), oracle_cmd),
         BetOpt::Inspect(inspect_cmd) => Ok(match inspect_cmd {
             InspectOpt::Proposal {
                 proposal:
@@ -607,27 +615,27 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                 id,
                 encrypted_offer,
             } => {
-                let party = cmd::load_party(wallet_dir)?;
-                let bet_state = party
-                    .bet_db()
+                let bet_state = wallet
+                    .gun_db()
                     .get_entity::<BetState>(id)?
                     .ok_or(anyhow!("unknown bet id {}", id))?;
                 match bet_state {
                     BetState::Proposed { local_proposal } => {
                         let event_id = &local_proposal.oracle_event.event.id;
                         let (plaintext, offer_public_key, rng) =
-                            party.decrypt_offer(id, encrypted_offer)?;
+                            wallet.decrypt_offer(id, encrypted_offer, keychain)?;
 
                         match plaintext {
                             Plaintext::Offerv1 { offer, message } => {
-                                let (fee, feerate, valid) = match party.validate_offer(
+                                let (fee, feerate, valid) = match wallet.validate_offer(
                                     id,
                                     offer.clone(),
                                     offer_public_key,
                                     rng,
+                                    keychain,
                                 ) {
                                     Ok(validated_offer) => {
-                                        let (fee, feerate) = validated_offer.bet.psbt.fee();
+                                        let (fee, feerate, _) = validated_offer.bet.psbt.fee();
                                         (Some(fee), Some(feerate), true)
                                     }
                                     Err(_) => (None, None, false),
@@ -672,17 +680,17 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
             }
         }),
         BetOpt::Tag(tagopt) => {
-            let bet_db = cmd::load_bet_db(wallet_dir)?;
+            let gun_db = wallet.gun_db();
             match tagopt {
                 TagOpt::Add { id, tag } => {
-                    bet_db.update_bets(&[id], |mut bet_state, _, _| {
+                    gun_db.update_bets(&[id], |mut bet_state, _, _| {
                         bet_state.tags_mut().push(tag.clone());
                         Ok(bet_state)
                     })?;
                     Ok(CmdOutput::None)
                 }
                 TagOpt::Remove { id, tag } => {
-                    bet_db.update_bets(&[id], |mut bet_state, _, _| {
+                    gun_db.update_bets(&[id], |mut bet_state, _, _| {
                         bet_state
                             .tags_mut()
                             .retain(|existing_tag| existing_tag != &tag);
@@ -704,8 +712,7 @@ pub fn run_bet_cmd(wallet_dir: &Path, cmd: BetOpt, sync: bool) -> anyhow::Result
                 std::io::stdin().read_to_string(&mut words).unwrap();
                 words
             });
-            let party = cmd::load_party(wallet_dir)?;
-            let (ciphertext, mut cipher) = reply(&party.keychain, proposal, message);
+            let (ciphertext, mut cipher) = reply(keychain, proposal, message);
             let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
             if overflow > 0 && pad != 0 {
                 eprintln!(
@@ -738,10 +745,10 @@ fn reply(
     (ciphertext, cipher)
 }
 
-fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
+fn list_bets(gun_db: &GunDatabase) -> CmdOutput {
     let mut rows = vec![];
 
-    for (id, bet_state) in bet_db.list_entities_print_error::<BetState>() {
+    for (id, bet_state) in gun_db.list_entities_print_error::<BetState>() {
         let name = String::from(bet_state.name());
         match bet_state.into_bet_or_prop() {
             BetOrProp::Proposal(local_proposal) => rows.push(vec![
@@ -815,7 +822,7 @@ fn list_bets(bet_db: &BetDatabase) -> CmdOutput {
 }
 
 fn get_oracle_event_from_url(
-    bet_db: &BetDatabase,
+    gun_db: &GunDatabase,
     url: Url,
 ) -> anyhow::Result<(OracleEvent, OracleInfo, bool)> {
     let oracle_id = url.host_str().ok_or(anyhow!("url {} missing host", url))?;
@@ -831,7 +838,7 @@ fn get_oracle_event_from_url(
             )
         })?;
 
-    let oracle_info = bet_db
+    let oracle_info = gun_db
         .get_entity::<OracleInfo>(oracle_id.to_string())?
         .ok_or(anyhow!(
             "oracle '{}' is not trusted -- run `gun bet oracle add '{}' to trust it",
@@ -866,7 +873,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         value: bet.i_chose_right as u64,
     };
 
-    let (fee, feerate) = bet.psbt.fee();
+    let (fee, feerate, feerate_estimated) = bet.psbt.fee();
 
     let mut table = Table::new();
     table.add_row(Row::new(vec!["event-id".into(), id.to_string()]));
@@ -881,7 +888,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
         ),
     ]));
     table.add_row(Row::new(vec![
-        "fee".into(),
+        if feerate_estimated { "est. fee" } else { "fee" }.into(),
         format!("{} ({:.3} s/vb)", fee, feerate.as_sat_vb()),
     ]));
 
@@ -904,7 +911,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
     } else {
         writeln!(&mut res, "you are NOT paying the fee.").unwrap();
     }
-    writeln!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
+    write!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
     res
 }
 

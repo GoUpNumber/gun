@@ -4,13 +4,14 @@
 [actions_url]: https://github.com/llfourn/gun/actions?query=workflow%3ATests
 
 `gun` is a CLI Bitcoin wallet for plebs, degenerates and revolutionaries.
+
 Its distinguishing feature is the ability to do [peer-to-peer betting](https://gun.fun/bet/betting.html).
 
 See [gun.fun](https://gun.fun) for full documentation.
 
 **⚠ WARNING EXPERIMENTAL**
 
-The wallet is alpha quality.
+The wallet is beta quality.
 It is buggy and is missing features.
 The underlying wallet functionality is built with the awesome [Bitcoin Dev Kit](https://bitcoindevkit.org) but the betting functionality is freshly engineered.
 Only put into it what you are willing to lose.
@@ -27,6 +28,18 @@ cargo -Z avoid-dev-deps install --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
 
-The *minimum supported rust version* for `gun` is `1.54.0`.
+The *minimum supported rust version* for `gun` is `1.56.0`.
+
+To setup your wallet see [`gun setup --help`](https://gun.fun/setup/setup.html).
+
+
+## Community
+
+<big>
+
+Join us on [Discord](https://discord.gg/Wknb2A6J)
+
+</big>
+
 
 [BIP84]: https://github.com/bitcoin/bips/blob/master/bip-0084.mediawiki

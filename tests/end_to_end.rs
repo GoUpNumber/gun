@@ -1,16 +1,14 @@
 use anyhow::Context;
 use bdk::{
-    bitcoin::{Amount, Network},
-    blockchain::{
-        esplora::EsploraBlockchainConfig, noop_progress, AnyBlockchainConfig, Broadcast,
-        EsploraBlockchain,
-    },
-    database::BatchDatabase,
+    bitcoin::{util::bip32::ExtendedPrivKey, Amount, Network},
+    blockchain::{noop_progress, Broadcast, EsploraBlockchain},
     testutils::blockchain_tests::TestClient,
     wallet::AddressIndex,
     FeeRate, Wallet,
 };
-use gun_wallet::{betting::*, keychain::Keychain, FeeSpec, ValueChoice};
+use gun_wallet::{
+    betting::*, database::GunDatabase, keychain::Keychain, wallet::GunWallet, FeeSpec, ValueChoice,
+};
 use olivia_core::{
     announce, attest, AnnouncementSchemes, Attestation, AttestationSchemes, Event, EventId, Group,
     OracleEvent, OracleInfo, OracleKeys,
@@ -19,18 +17,19 @@ use olivia_secp256k1::{fun::Scalar, Secp256k1};
 use rand::Rng;
 use std::{str::FromStr, time::Duration};
 
-fn create_party(
-    test_client: &mut TestClient,
-    id: u8,
-) -> anyhow::Result<Party<EsploraBlockchain, impl BatchDatabase>> {
+fn create_party(test_client: &mut TestClient, id: u8) -> anyhow::Result<(GunWallet, Keychain)> {
     let mut r = [0u8; 64];
     rand::thread_rng().fill(&mut r);
     let keychain = Keychain::new(r);
-    let descriptor = bdk::template::Bip84(
-        keychain.main_wallet_xprv(Network::Regtest),
-        bdk::KeychainKind::External,
-    );
-    let db = bdk::database::MemoryDatabase::new();
+    let xprv = ExtendedPrivKey::new_master(Network::Regtest, &r).unwrap();
+    let descriptor = bdk::template::Bip84(xprv, bdk::KeychainKind::External);
+    let db = bdk::sled::Config::new()
+        .temporary(true)
+        .flush_every_ms(None)
+        .open()
+        .unwrap()
+        .open_tree("test")
+        .unwrap();
     let esplora_url = format!(
         "http://{}",
         test_client.electrsd.esplora_url.as_ref().unwrap()
@@ -43,7 +42,7 @@ fn create_party(
         .sync(noop_progress(), None)
         .context("syncing wallet failed")?;
 
-    let bet_db = BetDatabase::test_new();
+    let gun_db = GunDatabase::test_new();
 
     let funding_address = wallet.get_address(AddressIndex::New).unwrap().address;
 
@@ -56,20 +55,15 @@ fn create_party(
         println!("syncing done on party {} -- checking balance", id);
     }
 
-    let party = Party::new(
-        wallet,
-        bet_db,
-        keychain,
-        AnyBlockchainConfig::Esplora(EsploraBlockchainConfig::new(esplora_url)),
-    );
-    Ok(party)
+    let wallet = GunWallet::new(wallet, gun_db);
+    Ok((wallet, keychain))
 }
 
 macro_rules! setup_test {
     () => {{
         let mut test_client = TestClient::default();
-        let party_1 = create_party(&mut test_client, 1).unwrap();
-        let party_2 = create_party(&mut test_client, 2).unwrap();
+        let (party_1, keychain_1) = create_party(&mut test_client, 1).unwrap();
+        let (party_2, keychain_2) = create_party(&mut test_client, 2).unwrap();
         let nonce_secret_key = Scalar::random(&mut rand::thread_rng());
         let announce_keypair =
             olivia_secp256k1::SCHNORR.new_keypair(Scalar::random(&mut rand::thread_rng()));
@@ -88,8 +82,14 @@ macro_rules! setup_test {
             },
         };
 
-        party_1.trust_oracle(oracle_info.clone()).unwrap();
-        party_2.trust_oracle(oracle_info.clone()).unwrap();
+        party_1
+            .gun_db()
+            .insert_entity(oracle_id.clone(), oracle_info.clone())
+            .unwrap();
+        party_2
+            .gun_db()
+            .insert_entity(oracle_id.clone(), oracle_info.clone())
+            .unwrap();
 
         let oracle_event = OracleEvent {
             event: Event {
@@ -105,8 +105,8 @@ macro_rules! setup_test {
         };
         (
             test_client,
-            party_1,
-            party_2,
+            (party_1, keychain_1),
+            (party_2, keychain_2),
             oracle_info,
             attest_keypair,
             oracle_nonce_keypair,
@@ -122,7 +122,7 @@ macro_rules! wait_for_state {
         let mut cur_state;
         while {
             cur_state = $party
-                .bet_db()
+                .gun_db()
                 .get_entity::<BetState>($bet_id)
                 .unwrap()
                 .unwrap();
@@ -149,8 +149,8 @@ macro_rules! wait_for_state {
 pub fn test_happy_path() {
     let (
         mut test_client,
-        party_1,
-        party_2,
+        (party_1, keychain_1),
+        (party_2, keychain_2),
         oracle_info,
         attest_keypair,
         oracle_nonce_keypair,
@@ -166,51 +166,56 @@ pub fn test_happy_path() {
                 value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
+            &keychain_1,
         )
         .unwrap();
 
     let proposal_string = local_proposal.proposal.clone().into_versioned().to_string();
     let p1_bet_id = party_1
-        .bet_db()
+        .gun_db()
         .insert_bet(BetState::Proposed { local_proposal })
         .unwrap();
 
-    let (p2_bet_id, encrypted_offer) = {
+    let (p2_bet_id, encrypted_offer, _) = {
         let proposal = VersionedProposal::from_str(&proposal_string).unwrap();
-        let (bet, offer, local_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+        let (bet, local_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                choose_right: true,
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, local_public_key, &mut cipher)
             .unwrap()
     };
     wait_for_state!(party_2, p2_bet_id, "offered");
 
-    let (decrypted_offer, offer_public_key, rng) =
-        party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
-    let validated_offer = party_1
+    let (decrypted_offer, offer_public_key, rng) = party_1
+        .decrypt_offer(p1_bet_id, encrypted_offer, &keychain_1)
+        .unwrap();
+    let mut validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             decrypted_offer.into_offer(),
             offer_public_key,
             rng,
+            &keychain_1,
         )
         .unwrap();
+    party_1.sign_validated_offer(&mut validated_offer).unwrap();
 
     Broadcast::broadcast(
-        party_1.wallet().client(),
+        party_1.bdk_wallet().client(),
         validated_offer.bet.psbt.clone().extract_tx(),
     )
     .unwrap();
@@ -226,7 +231,7 @@ pub fn test_happy_path() {
         true => ("blue", 1, &party_2, p2_bet_id, party_1, p1_bet_id),
     };
 
-    let winner_initial_balance = winner.wallet().get_balance().unwrap();
+    let winner_initial_balance = winner.bdk_wallet().get_balance().unwrap();
 
     let attestation = Attestation {
         outcome: outcome.into(),
@@ -263,20 +268,28 @@ pub fn test_happy_path() {
 
     let winner_claim_tx = winner_claim_psbt.extract_tx();
 
-    winner.wallet().broadcast(winner_claim_tx).unwrap();
+    winner.bdk_wallet().broadcast(&winner_claim_tx).unwrap();
     wait_for_state!(winner, winner_id, "claiming");
     test_client.generate(1, None);
     wait_for_state!(winner, winner_id, "claimed");
-    winner.wallet().sync(noop_progress(), None).unwrap();
+    winner.bdk_wallet().sync(noop_progress(), None).unwrap();
 
-    assert!(winner.wallet().get_balance().unwrap() > winner_initial_balance);
+    assert!(winner.bdk_wallet().get_balance().unwrap() > winner_initial_balance);
     wait_for_state!(winner, winner_id, "claimed");
 }
 
 #[test]
 pub fn cancel_proposal() {
-    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
-        setup_test!();
+    let (
+        mut test_client,
+        (party_1, keychain_1),
+        (party_2, keychain_2),
+        oracle_info,
+        _,
+        _,
+        oracle_id,
+        oracle_event,
+    ) = setup_test!();
 
     let local_proposal_1 = party_1
         .make_proposal(
@@ -286,6 +299,7 @@ pub fn cancel_proposal() {
                 value: ValueChoice::Amount(Amount::from_str_with_denomination("0.02 BTC").unwrap()),
                 ..Default::default()
             },
+            &keychain_1,
         )
         .unwrap();
 
@@ -296,7 +310,7 @@ pub fn cancel_proposal() {
         .to_string();
 
     let p1_bet_id = party_1
-        .bet_db()
+        .gun_db()
         .insert_bet(BetState::Proposed {
             local_proposal: local_proposal_1,
         })
@@ -311,35 +325,37 @@ pub fn cancel_proposal() {
                 must_overlap: &[p1_bet_id],
                 ..Default::default()
             },
+            &keychain_2,
         )
         .unwrap();
 
     let bet_id_overlap = party_1
-        .bet_db()
+        .gun_db()
         .insert_bet(BetState::Proposed {
             local_proposal: local_proposal_2,
         })
         .unwrap();
 
-    let (p2_bet_id, _) = {
+    let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_1).unwrap();
-        let (bet, offer, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+        let (bet, offer_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -348,7 +364,7 @@ pub fn cancel_proposal() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    Broadcast::broadcast(party_1.wallet().client(), tx).unwrap();
+    Broadcast::broadcast(party_1.bdk_wallet().client(), tx).unwrap();
     wait_for_state!(party_1, p1_bet_id, "canceling");
     test_client.generate(1, None);
     wait_for_state!(party_1, bet_id_overlap, "canceled");
@@ -358,8 +374,16 @@ pub fn cancel_proposal() {
 
 #[test]
 pub fn test_cancel_offer() {
-    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
-        setup_test!();
+    let (
+        mut test_client,
+        (party_1, keychain_1),
+        (party_2, keychain_2),
+        oracle_info,
+        _,
+        _,
+        oracle_id,
+        oracle_event,
+    ) = setup_test!();
 
     let local_proposal = party_1
         .make_proposal(
@@ -369,30 +393,32 @@ pub fn test_cancel_offer() {
                 value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
+            &keychain_1,
         )
         .unwrap();
 
     let proposal_str = local_proposal.proposal.clone().into_versioned().to_string();
 
-    let (p2_bet_id, _) = {
+    let (p2_bet_id, _, _) = {
         let proposal = VersionedProposal::from_str(&proposal_str).unwrap();
-        let (bet, offer, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.into(),
-                true,
+        let (bet, offer_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.into(),
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
@@ -401,7 +427,7 @@ pub fn test_cancel_offer() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
+    Broadcast::broadcast(party_2.bdk_wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, p2_bet_id, "canceling");
     test_client.generate(1, None);
@@ -410,8 +436,16 @@ pub fn test_cancel_offer() {
 
 #[test]
 pub fn cancel_offer_after_offer_taken() {
-    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
-        setup_test!();
+    let (
+        mut test_client,
+        (party_1, keychain_1),
+        (party_2, keychain_2),
+        oracle_info,
+        _,
+        _,
+        oracle_id,
+        oracle_event,
+    ) = setup_test!();
 
     let local_proposal = party_1
         .make_proposal(
@@ -421,72 +455,79 @@ pub fn cancel_offer_after_offer_taken() {
                 value: ValueChoice::Amount(Amount::from_str_with_denomination("0.01 BTC").unwrap()),
                 ..Default::default()
             },
+            &keychain_1,
         )
         .unwrap();
 
     let proposal_str = local_proposal.proposal.clone().into_versioned().to_string();
     let p1_bet_id = party_1
-        .bet_db()
+        .gun_db()
         .insert_bet(BetState::Proposed { local_proposal })
         .unwrap();
     let proposal = Proposal::from(VersionedProposal::from_str(&proposal_str).unwrap());
 
-    let (first_p2_bet_id, _) = {
-        let (bet, offer, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                proposal.clone(),
-                true,
-                oracle_event.clone(),
-                oracle_info.clone(),
-                BetArgs {
+    let (first_p2_bet_id, _, _) = {
+        let (bet, offer_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: proposal.clone(),
+                choose_right: true,
+                oracle_event: oracle_event.clone(),
+                oracle_info: oracle_info.clone(),
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.02 BTC").unwrap(),
                     ),
                     ..Default::default()
                 },
-                FeeSpec::default(),
-            )
+                fee_spec: FeeSpec::default(),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
-    let (second_p2_bet_id, second_encrypted_offer) = {
-        let (bet, offer, offer_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
+    let (second_p2_bet_id, second_encrypted_offer, _) = {
+        let (bet, offer_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
                 proposal,
-                true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                choose_right: true,
+                args: BetArgs {
                     value: ValueChoice::Amount(
                         Amount::from_str_with_denomination("0.03 BTC").unwrap(),
                     ),
                     must_overlap: &[first_p2_bet_id],
                     ..Default::default()
                 },
-                FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
-            )
+                fee_spec: FeeSpec::Rate(FeeRate::from_sat_per_vb(1.0)),
+                keychain: &keychain_2,
+            })
             .unwrap();
         party_2
-            .save_and_encrypt_offer(bet, offer, None, offer_public_key, &mut cipher)
+            .sign_save_and_encrypt_offer(bet, None, offer_public_key, &mut cipher)
             .unwrap()
     };
 
     let (second_decrypted_offer, second_offer_public_key, rng) = party_1
-        .decrypt_offer(p1_bet_id, second_encrypted_offer)
+        .decrypt_offer(p1_bet_id, second_encrypted_offer, &keychain_1)
         .unwrap();
-    let second_validated_offer = party_1
+    let mut second_validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             second_decrypted_offer.into_offer(),
             second_offer_public_key,
             rng,
+            &keychain_1,
         )
         .unwrap();
+    party_1
+        .sign_validated_offer(&mut second_validated_offer)
+        .unwrap();
 
-    Broadcast::broadcast(party_1.wallet().client(), second_validated_offer.tx()).unwrap();
+    Broadcast::broadcast(party_1.bdk_wallet().client(), second_validated_offer.tx()).unwrap();
     party_1.set_offer_taken(second_validated_offer).unwrap();
 
     wait_for_state!(party_1, p1_bet_id, "unconfirmed");
@@ -498,7 +539,7 @@ pub fn cancel_offer_after_offer_taken() {
         .unwrap()
         .expect("should be able to cancel");
     let tx = psbt.extract_tx();
-    Broadcast::broadcast(party_2.wallet().client(), tx).unwrap();
+    Broadcast::broadcast(party_2.bdk_wallet().client(), tx).unwrap();
 
     wait_for_state!(party_2, second_p2_bet_id, "canceling");
     wait_for_state!(party_2, first_p2_bet_id, "canceling");
@@ -509,10 +550,18 @@ pub fn cancel_offer_after_offer_taken() {
 
 #[test]
 fn create_proposal_with_dust_change() {
-    let (mut test_client, party_1, party_2, oracle_info, _, _, oracle_id, oracle_event) =
-        setup_test!();
+    let (
+        mut test_client,
+        (party_1, keychain_1),
+        (party_2, keychain_2),
+        oracle_info,
+        _,
+        _,
+        oracle_id,
+        oracle_event,
+    ) = setup_test!();
 
-    let balance = party_1.wallet().get_balance().unwrap();
+    let balance = party_1.bdk_wallet().get_balance().unwrap();
     let bet_value = balance - 250;
 
     let local_proposal = party_1
@@ -523,6 +572,7 @@ fn create_proposal_with_dust_change() {
                 value: ValueChoice::Amount(Amount::from_sat(bet_value)),
                 ..Default::default()
             },
+            &keychain_1,
         )
         .unwrap();
 
@@ -530,30 +580,31 @@ fn create_proposal_with_dust_change() {
     assert_eq!(local_proposal.proposal.value.as_sat(), bet_value);
 
     let p1_bet_id = party_1
-        .bet_db()
+        .gun_db()
         .insert_bet(BetState::Proposed {
             local_proposal: local_proposal.clone(),
         })
         .unwrap();
 
     let (p2_bet_id, encrypted_offer) = {
-        let balance = party_2.wallet().get_balance().unwrap();
+        let balance = party_2.bdk_wallet().get_balance().unwrap();
         let bet_value = balance - 250;
 
         assert!(
             matches!(
                 party_2
-                    .generate_offer_with_oracle_event(
-                        local_proposal.proposal.clone(),
-                        true,
-                        oracle_event.clone(),
-                        oracle_info.clone(),
-                        BetArgs {
+                    .generate_offer_with_oracle_event(OfferArgs {
+                        proposal: local_proposal.proposal.clone(),
+                        choose_right: true,
+                        oracle_event: oracle_event.clone(),
+                        oracle_info: oracle_info.clone(),
+                        args: BetArgs {
                             value: ValueChoice::Amount(Amount::from_sat(bet_value)),
                             ..Default::default()
                         },
-                        FeeSpec::Absolute(Amount::from_sat(501)),
-                    )
+                        fee_spec: FeeSpec::Absolute(Amount::from_sat(501)),
+                        keychain: &keychain_2
+                    })
                     .map(|_| ())
                     .unwrap_err()
                     .downcast()
@@ -563,44 +614,50 @@ fn create_proposal_with_dust_change() {
             "we can't afford 501 fee even with extra proposal fee"
         );
 
-        let (bet, offer, local_public_key, mut cipher) = party_2
-            .generate_offer_with_oracle_event(
-                local_proposal.proposal,
-                true,
+        let (bet, local_public_key, mut cipher) = party_2
+            .generate_offer_with_oracle_event(OfferArgs {
+                proposal: local_proposal.proposal,
+                choose_right: true,
                 oracle_event,
                 oracle_info,
-                BetArgs {
+                args: BetArgs {
                     value: ValueChoice::Amount(Amount::from_sat(bet_value)),
                     ..Default::default()
                 },
                 // we can afford 500
-                FeeSpec::Absolute(Amount::from_sat(500)),
-            )
+                fee_spec: FeeSpec::Absolute(Amount::from_sat(500)),
+                keychain: &keychain_2,
+            })
+            .unwrap();
+
+        let (bet_id, encrypted_offer, offer) = party_2
+            .sign_save_and_encrypt_offer(bet, None, local_public_key, &mut cipher)
             .unwrap();
 
         assert_eq!(offer.change, None);
         assert_eq!(offer.value.as_sat(), bet_value);
 
-        party_2
-            .save_and_encrypt_offer(bet, offer, None, local_public_key, &mut cipher)
-            .unwrap()
+        (bet_id, encrypted_offer)
     };
 
     wait_for_state!(party_2, p2_bet_id, "offered");
 
-    let (decrypted_offer, offer_public_key, rng) =
-        party_1.decrypt_offer(p1_bet_id, encrypted_offer).unwrap();
-    let validated_offer = party_1
+    let (decrypted_offer, offer_public_key, rng) = party_1
+        .decrypt_offer(p1_bet_id, encrypted_offer, &keychain_1)
+        .unwrap();
+    let mut validated_offer = party_1
         .validate_offer(
             p1_bet_id,
             decrypted_offer.into_offer(),
             offer_public_key,
             rng,
+            &keychain_1,
         )
         .unwrap();
+    party_1.sign_validated_offer(&mut validated_offer).unwrap();
 
     Broadcast::broadcast(
-        party_1.wallet().client(),
+        party_1.bdk_wallet().client(),
         validated_offer.bet.psbt.clone().extract_tx(),
     )
     .unwrap();

@@ -1,13 +1,39 @@
-use crate::betting::Proposal;
-use bdk::bitcoin::{
-    hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine},
-    util::bip32::ExtendedPrivKey,
-    Network,
-};
+use crate::{betting::Proposal, hex};
+use bdk::bitcoin::hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine};
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ProtocolSecret {
+    Bytes(#[serde(with = "crate::serde_hacks::BigArray")] [u8; 64]),
+}
+
+impl core::str::FromStr for ProtocolSecret {
+    type Err = olivia_secp256k1::hex::HexError;
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        Ok(ProtocolSecret::Bytes(olivia_secp256k1::hex::decode_array(
+            string,
+        )?))
+    }
+}
+
+impl core::fmt::Display for ProtocolSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolSecret::Bytes(bytes) => write!(f, "{}", hex::encode(&bytes[..])),
+        }
+    }
+}
+
+impl From<ProtocolSecret> for Keychain {
+    fn from(protocol_secret: ProtocolSecret) -> Self {
+        match protocol_secret {
+            ProtocolSecret::Bytes(bytes) => Keychain::new(bytes),
+        }
+    }
+}
+
 pub struct Keychain {
-    seed: [u8; 64],
     proposal_hmac: HmacEngine<sha512::Hash>,
     offer_hmac: HmacEngine<sha512::Hash>,
 }
@@ -48,16 +74,13 @@ impl Keychain {
         };
 
         Self {
-            seed,
             proposal_hmac,
             offer_hmac,
         }
     }
 
-    pub fn main_wallet_xprv(&self, network: Network) -> ExtendedPrivKey {
-        ExtendedPrivKey::new_master(network, &self.seed).unwrap()
-    }
-
+    /// TODO: use the versioned proposal here
+    /// DONOTMERGE LIKE THIS
     pub fn get_key_for_proposal(&self, proposal: &Proposal) -> KeyPair {
         let mut proposal = proposal.clone();
         proposal.public_key = crate::placeholder_point();

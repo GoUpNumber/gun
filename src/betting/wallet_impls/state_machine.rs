@@ -1,14 +1,12 @@
-use crate::betting::*;
+use crate::{betting::*, wallet::GunWallet};
 use anyhow::{anyhow, Context};
 use bdk::blockchain::{
     Blockchain, Broadcast, GetInputState, InputState, TransactionState, TxState,
 };
 
-use super::Party;
-
 macro_rules! update_bet {
     ($self:expr, $bet_id:expr, $($tt:tt)+) => {
-        $self.bet_db.update_bets(&[$bet_id], |old_state, _, _| {
+        $self.gun_db().update_bets(&[$bet_id], |old_state, _, _| {
             #[allow(unreachable_patterns)]
             Ok(match old_state {
                 $($tt)+,
@@ -18,20 +16,17 @@ macro_rules! update_bet {
     }
 }
 
-impl<D> Party<bdk::blockchain::EsploraBlockchain, D>
-where
-    D: bdk::database::BatchDatabase,
-{
+impl GunWallet {
     /// Look at current state and see if we can progress it.
     ///
     /// The `try_learn_outcome` exists so during tests it can be turned off so this doesn't try and contact a non-existent oracle.
     /// TODO: fix this with an oracle trait that can be mocked in tests.
     pub fn take_next_action(&self, bet_id: BetId, try_learn_outcome: bool) -> anyhow::Result<()> {
         let bet_state = self
-            .bet_db
+            .gun_db()
             .get_entity(bet_id)?
             .ok_or(anyhow!("Bet {} does not exist", bet_id))?;
-        let blockchain = self.wallet.client();
+        let blockchain = self.bdk_wallet().client();
 
         match bet_state {
             BetState::Canceled {
@@ -237,7 +232,7 @@ where
         let event_id = bet.oracle_event.event.id;
         let event_url = format!("https://{}{}", bet.oracle_id, event_id);
         let event_response = self
-            .client
+            .http_client()
             .get(&event_url)
             .call()
             .with_context(|| format!("trying to outcome for bet {} from {}", bet_id, event_url))?

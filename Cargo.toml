@@ -1,20 +1,21 @@
 [package]
 name = "gun_wallet"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["LLFourn <lloyd.fourn@gmail.com>"]
-edition = "2018"
+edition = "2021"
+rust-version = "1.56"
 license = "0BSD"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 dirs = "3.0"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false  }
-#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "198b0ee597fded5c5be43ff0f960f8bcdb3a0b73", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false  }
+# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false }
 serde_json = "1.0"
-olivia_core = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
-olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
-olivia_describe = { git = "https://github.com/llfourn/olivia", rev = "025cb6ad31b85d3150571b902e3502a16cab88ad" }
+olivia_core = { git = "https://github.com/llfourn/olivia", rev = "15c35aad66c418e05046a57c72cc90ce5f351620" }
+olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "15c35aad66c418e05046a57c72cc90ce5f351620" }
+olivia_describe = { git = "https://github.com/llfourn/olivia", rev = "15c35aad66c418e05046a57c72cc90ce5f351620" }
 sha2 = "0.9"
 base2048 = "2.0.2"
 chacha20 = { version = "0.7", features = ["rng", "cipher"] }
@@ -22,6 +23,8 @@ serde = { version = "1" }
 bincode = "1.3"
 anyhow = "1"
 thiserror = "1.0"
+rand = { version = "0.8", features = ["getrandom"] }
+rpassword = "5"
 structopt = "0.3"
 miniscript = { version = "6", features = ["serde"] }
 term-table = {  version = "1", default-features = false }
@@ -34,5 +37,10 @@ nightly = ["olivia_secp256k1/nightly"]
 
 [dev-dependencies]
 rand = "0.8"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "5108b75b44032f0461bf737cdc78b76023d7433e", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
-#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "198b0ee597fded5c5be43ff0f960f8bcdb3a0b73", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
+# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq","compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
+
+
+[patch.crates-io]
+bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin.git", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1" }
+miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript.git", rev = "f3c38b8cc04fed0a68f4d6074d8c30f6912d958f" }

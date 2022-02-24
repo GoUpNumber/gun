@@ -1,23 +1,29 @@
-use crate::betting::*;
+use crate::{betting::*, keychain::ProtocolSecret, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
-    bitcoin::{OutPoint, Txid},
+    bitcoin::OutPoint,
     sled::{
         self,
         transaction::{ConflictableTransactionError, TransactionalTree},
     },
+    KeychainKind,
 };
 use olivia_core::OracleId;
 
 pub const DB_VERSION: u8 = 0;
-pub type BetId = u32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MapKey {
     BetId,
     OracleInfo(OracleId),
     Bet(BetId),
-    ClaimTx(Txid),
+    ProtocolSecret(ProtocolKind),
+    Descriptor(KeychainKind),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ProtocolKind {
+    Bet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -50,6 +56,8 @@ pub enum KeyKind {
     BetId,
     OracleInfo,
     Bet,
+    ProtocolSecret,
+    Descriptor,
 }
 
 impl KeyKind {
@@ -58,7 +66,7 @@ impl KeyKind {
     }
 }
 
-pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {
+pub trait Entity: serde::de::DeserializeOwned + Clone + 'static + serde::Serialize {
     type Key: Clone;
     fn key_kind() -> KeyKind;
     fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key>;
@@ -68,7 +76,7 @@ pub trait Entity: serde::de::DeserializeOwned + Clone + 'static {
 }
 
 macro_rules! impl_entity {
-    ($key_name:ident, $type:ty, $type_name:ident) => {
+    ($key_name:ty, $type:ty, $type_name:ident) => {
         impl Entity for $type {
             type Key = $key_name;
             fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key> {
@@ -108,8 +116,12 @@ macro_rules! impl_entity {
 
 impl_entity!(OracleId, OracleInfo, OracleInfo);
 impl_entity!(BetId, BetState, Bet);
+impl_entity!(ProtocolKind, ProtocolSecret, ProtocolSecret);
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct StringDescriptor(pub String);
+impl_entity!(KeychainKind, StringDescriptor, Descriptor);
 
-pub struct BetDatabase(sled::Tree);
+pub struct GunDatabase(sled::Tree);
 
 fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyhow::Result<()> {
     tree.insert(
@@ -119,13 +131,12 @@ fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyh
     Ok(())
 }
 
-impl BetDatabase {
+impl GunDatabase {
     pub fn new(tree: sled::Tree) -> Self {
-        BetDatabase(tree)
+        GunDatabase(tree)
     }
 
     pub fn insert_bet(&self, bet: BetState) -> anyhow::Result<BetId> {
-        use std::convert::TryFrom;
         let i = self
             .0
             .update_and_fetch(
@@ -157,9 +168,8 @@ impl BetDatabase {
             .collect())
     }
 
-    pub fn insert_oracle_info(&self, oracle_info: OracleInfo) -> anyhow::Result<()> {
-        let key = MapKey::OracleInfo(oracle_info.id.clone());
-        insert(&self.0, key, oracle_info)
+    pub fn insert_entity<T: Entity>(&self, key: T::Key, entity: T) -> anyhow::Result<()> {
+        insert(&self.0, T::to_map_key(key), entity)
     }
 
     pub fn get_entity<T: Entity>(&self, key: T::Key) -> anyhow::Result<Option<T>> {
@@ -230,15 +240,34 @@ impl BetDatabase {
     }
 
     pub fn test_new() -> Self {
-        BetDatabase::new(
+        GunDatabase::new(
             bdk::sled::Config::new()
                 .temporary(true)
                 .flush_every_ms(None)
                 .open()
                 .unwrap()
-                .open_tree("test")
+                .open_tree("test-gun")
                 .unwrap(),
         )
+    }
+
+    pub fn safely_set_bet_protocol_secret(&self, new_secret: ProtocolSecret) -> anyhow::Result<()> {
+        let in_use: Vec<_> = self
+            .list_entities::<BetState>()
+            .filter_map(|bet| bet.ok())
+            .filter(|(_, state)| state.relies_on_protocol_secret())
+            .collect();
+        if in_use.is_empty() {
+            self.insert_entity(ProtocolKind::Bet, new_secret)?;
+            Ok(())
+        } else {
+            let in_use = in_use
+                .into_iter()
+                .map(|(bet_id, _)| bet_id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(anyhow!("Bets {} are using the protocol secret so you can't change it until they're resolved", in_use))
+        }
     }
 }
 
@@ -260,29 +289,20 @@ mod test {
     use super::*;
     #[test]
     fn insert_and_list_oracles() {
-        let db = BetDatabase::new(
-            sled::Config::new()
-                .temporary(true)
-                .flush_every_ms(None)
-                .open()
-                .unwrap()
-                .open_tree("test")
-                .unwrap(),
-        );
-
+        let db = GunDatabase::test_new();
         let info1 = OracleInfo::test_oracle_info();
         let info2 = {
             let mut info2 = OracleInfo::test_oracle_info();
             info2.id = "oracle2.test".into();
             info2
         };
-        db.insert_oracle_info(info1.clone()).unwrap();
+        db.insert_entity(info1.id.clone(), info1.clone()).unwrap();
         let oracle_list = db
             .list_entities::<OracleInfo>()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(oracle_list, vec![(info1.id.clone(), info1.clone())]);
-        db.insert_oracle_info(info2.clone()).unwrap();
+        db.insert_entity(info2.id.clone(), info2.clone()).unwrap();
         let mut oracle_list = db
             .list_entities::<OracleInfo>()
             .collect::<Result<Vec<_>, _>>()
