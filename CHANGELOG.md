@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.6.1
+
+- Fix missing newlines bug
+- Add `k` and `M` satoshi denominations and allow `_` in values
+
 ## v0.6.0
 
 - Add support for signet

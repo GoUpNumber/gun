@@ -23,15 +23,12 @@ Thanks for testing this for me and thank you in advance for any coins you sacrif
 git clone https://github.com/LLFourn/gun
 cd gun
 cargo install --path .
-# More efficient version if you have nightly toolchain
-cargo -Z avoid-dev-deps install --path .
 # Make sure ~/.cargo/bin is in your $PATH
 ```
 
 The *minimum supported rust version* for `gun` is `1.56.0`.
 
 To setup your wallet see [`gun setup --help`](https://gun.fun/setup/setup.html).
-
 
 ## Community
 
