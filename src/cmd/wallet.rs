@@ -246,7 +246,9 @@ fn index_txos(transactions: &[Transaction]) -> HashMap<Script, Vec<Transaction>>
 
 #[derive(StructOpt, Debug, Clone)]
 pub struct SendOpt {
-    /// The amount to send with denomination e.g. 0.1BTC
+    /// The amount to send with denomination. Either "all" (which sends all the coins in your wallet)
+    /// or specific amount e.g. All the following mean 1 million satoshis: 1000000sat, 1_000_000,
+    /// 0.01btc, 1M, 1_000k, 10_000bit, 10_000uBTC.
     value: ValueChoice,
     /// The address to send the coins to
     to: Address,
@@ -311,10 +313,11 @@ impl SpendOpt {
 
         let (mut psbt, claiming_bet_ids) = if !no_spend_unclaimed {
             wallet
-                .spend_won_bets(builder, bump_claiming)?
+                .spend_won_bets(builder, bump_claiming)
+                .context("couldn't create transaction")?
                 .expect("Won't be None since builder we pass in is not manually_selected_only")
         } else {
-            let (psbt, _) = builder.finish()?;
+            let (psbt, _) = builder.finish().context("couldn't create transaction")?;
             (psbt, vec![])
         };
 
