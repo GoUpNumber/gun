@@ -12,5 +12,6 @@ jobs:
             override: true
       - uses: actions-rs/clippy-check@v1
         with:
+          # https://github.com/actions-rs/clippy-check/issues/2#issuecomment-538671632
+          args: -- -D warnings
           token: ${{ secrets.GITHUB_TOKEN }}
-          # args: --all-features # can't enable all features on stable
