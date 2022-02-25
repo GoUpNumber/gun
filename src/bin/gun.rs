@@ -118,8 +118,9 @@ fn main() -> anyhow::Result<()> {
                 )
             } else if opt.tabs {
                 println!("{}", output.render_simple())
-            } else if let Some(output) = output.render() {
-                print!("{}", output)
+            } else if let Some(mut output) = output.render() {
+                output = output.trim_end().to_string();
+                println!("{}", output)
             }
         }
         Err(e) => {
