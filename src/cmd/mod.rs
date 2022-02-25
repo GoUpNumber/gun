@@ -264,7 +264,7 @@ pub fn format_signed_amount(amount: SignedAmount) -> String {
         let mut string = amount.to_string();
         string.insert(string.len() - 7, ' ');
         string.insert(string.len() - 11, ' ');
-        let string = string.trim_end_matches(" BTC").trim_start_matches("-");
+        let string = string.trim_end_matches(" BTC").trim_start_matches('-');
         if amount.is_negative() {
             format!("-{}", string)
         } else {
