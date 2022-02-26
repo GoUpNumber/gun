@@ -223,12 +223,13 @@ pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl Batch
     database.open_tree("wallet").context("opening wallet tree")
 }
 
+#[derive(Debug, Clone)]
 pub struct TableData {
     col_names: Vec<String>,
     rows: Vec<Vec<Cell>>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum Cell {
     String(String),
@@ -349,6 +350,7 @@ impl Cell {
     }
 }
 
+#[derive(Debug)]
 pub enum CmdOutput {
     Table(TableData),
     Json(serde_json::Value),
