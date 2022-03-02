@@ -738,7 +738,7 @@ pub fn run_bet_cmd(
             if overflow > 0 && pad != 0 {
                 elog!(
                     @warning 
-                    "ciphertext is longer than {} by {} bytes so it will look unusually big",
+                    "Ciphertext is longer than {} by {} bytes so it will look unusually big",
                     pad, overflow
                 );
             }
@@ -931,7 +931,7 @@ fn bet_prompt(bet: &Bet, bet_verb: &str, you_paying_fee: bool) -> String {
     if you_paying_fee {
         writeln!(&mut res, "You are paying the fee.").unwrap();
     } else {
-        writeln!(&mut res, "you are NOT paying the fee.").unwrap();
+        writeln!(&mut res, "You are NOT paying the fee.").unwrap();
     }
     write!(&mut res, "Do you want to {} this bet", bet_verb).unwrap();
     res
