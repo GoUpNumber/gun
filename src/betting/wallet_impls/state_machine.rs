@@ -1,4 +1,4 @@
-use crate::{betting::*, wallet::GunWallet, elog};
+use crate::{betting::*, elog, wallet::GunWallet};
 use anyhow::{anyhow, Context};
 use bdk::blockchain::{
     Blockchain, Broadcast, GetInputState, InputState, TransactionState, TxState,

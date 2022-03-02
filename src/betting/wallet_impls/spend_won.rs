@@ -1,4 +1,4 @@
-use crate::{betting::*, wallet::GunWallet, FeeSpec, elog};
+use crate::{betting::*, elog, wallet::GunWallet, FeeSpec};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},

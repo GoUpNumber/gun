@@ -14,7 +14,10 @@ use bdk::{
 };
 use miniscript::bitcoin::{PrivateKey, PublicKey};
 
-use crate::{cmd::{display_psbt, read_yn}, elog};
+use crate::{
+    cmd::{display_psbt, read_yn},
+    elog,
+};
 
 #[derive(Debug)]
 pub struct XKeySigner {

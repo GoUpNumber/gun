@@ -1,4 +1,6 @@
-use crate::{betting::*, database::GunDatabase, signers::PSBT_SIGNER_ID, FeeSpec, OracleInfo, elog};
+use crate::{
+    betting::*, database::GunDatabase, elog, signers::PSBT_SIGNER_ID, FeeSpec, OracleInfo,
+};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::{
@@ -274,7 +276,7 @@ impl GunWallet {
                 Ok(_updated) => {}
                 Err(e) => {
                     elog!(@explosion "Error trying to take action on bet {}: {:?}", bet_id, e);
-                }           
+                }
             }
         }
     }

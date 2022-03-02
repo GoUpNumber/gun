@@ -1,6 +1,9 @@
 use anyhow::anyhow;
 use bdk::blockchain::esplora::EsploraBlockchainConfig;
-use gun_wallet::{cmd::{self, *}, elog};
+use gun_wallet::{
+    cmd::{self, *},
+    elog,
+};
 use std::path::PathBuf;
 use structopt::StructOpt;
 

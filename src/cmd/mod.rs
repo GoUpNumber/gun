@@ -603,7 +603,6 @@ macro_rules! eitem {
     }}
 }
 
-
 #[macro_export]
 macro_rules! elog {
     (@warning $($tt:tt)*) => { eprint!("\u{26A0} "); eprintln!($($tt)*);};

@@ -3,7 +3,8 @@ use crate::{
     cmd::{self},
     config::{Config, GunSigner},
     database::{GunDatabase, ProtocolKind, StringDescriptor},
-    keychain::ProtocolSecret, elog,
+    elog,
+    keychain::ProtocolSecret,
 };
 use anyhow::{anyhow, Context};
 use bdk::{

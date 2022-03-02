@@ -1,4 +1,4 @@
-use crate::{betting::*, keychain::ProtocolSecret, OracleInfo, elog};
+use crate::{betting::*, elog, keychain::ProtocolSecret, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::OutPoint,

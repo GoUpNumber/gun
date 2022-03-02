@@ -3,11 +3,11 @@ use crate::{
     betting::*,
     cmd::{self, read_yn, sanitize_str, CmdOutput},
     database::GunDatabase,
-    item,
+    elog, item,
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     wallet::GunWallet,
-    OracleInfo, Url, ValueChoice, elog,
+    OracleInfo, Url, ValueChoice,
 };
 use anyhow::{anyhow, Context};
 use bdk::bitcoin::{Address, Amount, Script};
@@ -256,8 +256,8 @@ pub fn run_bet_cmd(
             let local_proposal = wallet.make_proposal(oracle_id, oracle_event, args, keychain)?;
             if let Some(change) = &local_proposal.change {
                 elog!(
-                    @information 
-                    "This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  
+                    @information
+                    "This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",
                     change.value(), local_proposal.proposal.value
                 );
             }
@@ -388,7 +388,7 @@ pub fn run_bet_cmd(
                     encrypted_offer.to_string_padded(pad, &mut cipher);
                 if overflow > 0 && pad != 0 {
                     elog!(
-                        @warning 
+                        @warning
                         "ciphertext is longer than {} by {} bytes so it will look unusually big",
                         pad, overflow
                     );
@@ -415,8 +415,8 @@ pub fn run_bet_cmd(
                         // remove control characters to prevent tricks.
                         sanitize_str(&mut message);
                         elog!(
-                            @information 
-                            "This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", 
+                            @information
+                            "This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####",
                             message
                         );
                     }
@@ -466,9 +466,9 @@ pub fn run_bet_cmd(
                             if let Err(e) = wallet.take_next_action(id, false) {
                                 elog!(
                                     @explosion
-                                    "Error updating state of bet {} after broadcasting claim tx {}: {}", 
+                                    "Error updating state of bet {} after broadcasting claim tx {}: {}",
                                     id, txid, e
-                                );                            
+                                );
                             }
                         }
                     }
@@ -497,9 +497,9 @@ pub fn run_bet_cmd(
                         if let Err(e) = wallet.take_next_action(id, true) {
                             elog!(
                                 @explosion
-                                "Error updating state of bet {} after broadcasting cancel tx: {}: {}", 
+                                "Error updating state of bet {} after broadcasting cancel tx: {}: {}",
                                 id, txid, e
-                            );                        
+                            );
                         }
                     }
                 }
@@ -729,7 +729,7 @@ pub fn run_bet_cmd(
             let message = message.unwrap_or_else(|| {
                 use std::io::Read;
                 let mut words = String::new();
-                elog!(@suggestion "Type your reply and use CTRL-D to finish it.");                
+                elog!(@suggestion "Type your reply and use CTRL-D to finish it.");
                 std::io::stdin().read_to_string(&mut words).unwrap();
                 words
             });
@@ -737,7 +737,7 @@ pub fn run_bet_cmd(
             let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
             if overflow > 0 && pad != 0 {
                 elog!(
-                    @warning 
+                    @warning
                     "Ciphertext is longer than {} by {} bytes so it will look unusually big",
                     pad, overflow
                 );
