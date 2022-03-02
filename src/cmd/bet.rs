@@ -7,7 +7,7 @@ use crate::{
     keychain::Keychain,
     psbt_ext::PsbtFeeRate,
     wallet::GunWallet,
-    OracleInfo, Url, ValueChoice,
+    OracleInfo, Url, ValueChoice, elog,
 };
 use anyhow::{anyhow, Context};
 use bdk::bitcoin::{Address, Amount, Script};
@@ -255,7 +255,11 @@ pub fn run_bet_cmd(
             let args = args.prompt_to_core_bet_args(None);
             let local_proposal = wallet.make_proposal(oracle_id, oracle_event, args, keychain)?;
             if let Some(change) = &local_proposal.change {
-                eprintln!("This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  change.value(), local_proposal.proposal.value);
+                elog!(
+                    @information 
+                    "This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",  
+                    change.value(), local_proposal.proposal.value
+                );
             }
 
             if yes || read_yn(&question) {
@@ -264,7 +268,7 @@ pub fn run_bet_cmd(
                     .gun_db()
                     .insert_bet(BetState::Proposed { local_proposal })?;
 
-                eprintln!("post your proposal and let people make offers to it:");
+                elog!(@suggestion "Post your proposal and let people make offers to it: ");
                 Ok(CmdOutput::EmphasisedItem {
                     main: ("proposal", Cell::string(proposal_string)),
                     other: vec![("id", Cell::string(id))],
@@ -338,7 +342,7 @@ pub fn run_bet_cmd(
                 }
                 None => read_input(
                     &format!(
-                        "The outcomes for this bet are\n{}\nWhat outcome do you want to bet on",
+                        "The outcomes for this bet are\n{}\nWhich outcome would you like to to bet on?",
                         possible_outcomes
                             .iter()
                             .map(|o| format!(
@@ -379,12 +383,13 @@ pub fn run_bet_cmd(
                     &mut cipher,
                 )?;
 
-                eprintln!("Post this offer in reponse to the proposal");
+                elog!(@suggestion "Post this offer in reponse to the proposal");
                 let (padded_encrypted_offer, overflow) =
                     encrypted_offer.to_string_padded(pad, &mut cipher);
                 if overflow > 0 && pad != 0 {
-                    eprintln!(
-                        "WARNING: ciphertext is longer than {} by {} bytes so it will look unusually big",
+                    elog!(
+                        @warning 
+                        "ciphertext is longer than {} by {} bytes so it will look unusually big",
                         pad, overflow
                     );
                 }
@@ -407,9 +412,13 @@ pub fn run_bet_cmd(
             match plaintext {
                 Plaintext::Offerv1 { offer, message } => {
                     if let Some(mut message) = message {
-                        // remove ocntrol characters to prevent tricks.
+                        // remove control characters to prevent tricks.
                         sanitize_str(&mut message);
-                        eprintln!("This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", message);
+                        elog!(
+                            @information 
+                            "This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####", 
+                            message
+                        );
                     }
                     let mut validated_offer =
                         wallet.validate_offer(id, offer, offer_public_key, rng, keychain)?;
@@ -431,7 +440,7 @@ pub fn run_bet_cmd(
                     }
                 }
                 Plaintext::Messagev1(message) => {
-                    eprintln!("The ciphertext contained a secret message:");
+                    elog!(@information "The ciphertext contained a secret message: ");
                     Ok(item! { "message" => Cell::string(message) })
                 }
             }
@@ -455,7 +464,11 @@ pub fn run_bet_cmd(
                     if let Some(txid) = txid {
                         for id in ids {
                             if let Err(e) = wallet.take_next_action(id, false) {
-                                eprintln!("error updating state of bet {} after broadcasting claim tx {}: {}", id, txid, e);
+                                elog!(
+                                    @explosion
+                                    "error updating state of bet {} after broadcasting claim tx {}: {}", 
+                                    id, txid, e
+                                );                            
                             }
                         }
                     }
@@ -482,14 +495,18 @@ pub fn run_bet_cmd(
                 if let Some(txid) = txid {
                     for id in ids {
                         if let Err(e) = wallet.take_next_action(id, true) {
-                            eprintln!("error updating state of bet {} after broadcasting cancel tx: {}: {}", id, txid, e);
+                            elog!(
+                                @explosion
+                                "error updating state of bet {} after broadcasting cancel tx: {}: {}", 
+                                id, txid, e
+                            );                        
                         }
                     }
                 }
                 output
             }
             None => {
-                eprintln!("no bets needed canceling");
+                elog!(@information "No bets needed canceling");
                 CmdOutput::None
             }
         }),
@@ -514,7 +531,11 @@ pub fn run_bet_cmd(
                     },
                     Ok(None) => return Err(anyhow!("Bet {} doesn't exist", id)),
                     Err(_) => {
-                        eprintln!("Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", id);
+                        elog!(
+                            @information 
+                            "Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", 
+                            id)
+                        ;
                         to_remove.push(id);
                     }
                 }
@@ -666,7 +687,7 @@ pub fn run_bet_cmd(
                                 }
                             }
                             Plaintext::Messagev1(message) => {
-                                eprintln!("This ciphertext contained a secret message:");
+                                elog!(@information "This ciphertext contained a secret message:");
                                 item! { "message" => Cell::string(message) }
                             }
                         }
@@ -708,15 +729,16 @@ pub fn run_bet_cmd(
             let message = message.unwrap_or_else(|| {
                 use std::io::Read;
                 let mut words = String::new();
-                eprintln!("Type your reply and use CTRL-D to finish it.");
+                elog!(@suggestion "Type your reply and use CTRL-D to finish it.");                
                 std::io::stdin().read_to_string(&mut words).unwrap();
                 words
             });
             let (ciphertext, mut cipher) = reply(keychain, proposal, message);
             let (ciphertext_str, overflow) = ciphertext.to_string_padded(pad, &mut cipher);
             if overflow > 0 && pad != 0 {
-                eprintln!(
-                    "WARNING: ciphertext is longer than {} by {} bytes so it will look unusually big",
+                elog!(
+                    @warning 
+                    "ciphertext is longer than {} by {} bytes so it will look unusually big",
                     pad, overflow
                 );
             }

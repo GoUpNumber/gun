@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use bdk::blockchain::esplora::EsploraBlockchainConfig;
-use gun_wallet::cmd::{self, *};
+use gun_wallet::{cmd::{self, *}, elog};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -69,7 +69,8 @@ fn main() -> anyhow::Result<()> {
                     concurrency,
                     ..
                 } = config.blockchain_config();
-                eprintln!(
+                elog!(
+                    @information
                     "syncing wallet with {} (stop_gap: {}, parallel_connections: {})",
                     base_url,
                     stop_gap,

@@ -1,4 +1,4 @@
-use crate::{betting::*, keychain::ProtocolSecret, OracleInfo};
+use crate::{betting::*, keychain::ProtocolSecret, OracleInfo, elog};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::OutPoint,
@@ -233,7 +233,7 @@ impl GunDatabase {
         self.list_entities().filter_map(|entity| match entity {
             Ok(entity) => Some(entity),
             Err(e) => {
-                eprintln!("Error retreiving an {}: {}", T::name(), e);
+                elog!(@explosion "Error retreiving an {}: {}", T::name(), e);
                 None
             }
         })

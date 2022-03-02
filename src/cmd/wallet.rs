@@ -1,5 +1,5 @@
 use super::*;
-use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item};
+use crate::{amount_ext::FromCliStr, betting::BetState, cmd, item, elog};
 use bdk::{
     bitcoin::{Address, OutPoint, Script, Transaction, Txid},
     blockchain::EsploraBlockchain,
@@ -67,7 +67,7 @@ pub fn run_balance(wallet: &GunWallet, sync: bool) -> anyhow::Result<CmdOutput> 
     );
 
     if !sync && (confirmed + unconfirmed + unclaimed + in_bet + in_use == Amount::ZERO) {
-        eprintln!("Remember to sync gun with -s or --sync to ensure balances are up to date. i.e. run `gun -s balance` ");
+        elog!(@suggestion "Remember to sync gun with -s or --sync to ensure balances are up to date. i.e. run `gun -s balance` ");
     }
 
     Ok(item! {
@@ -339,8 +339,9 @@ impl SpendOpt {
             if !print_tx {
                 for bet_id in claiming_bet_ids {
                     if let Err(e) = wallet.take_next_action(bet_id, false) {
-                        eprintln!(
-                            "error updating state of bet {} after broadcasting claim tx {}: {}",
+                        elog!(
+                            @explosion
+                            "Error updating state of bet {} after broadcasting claim tx {}: {}",
                             bet_id, txid, e
                         );
                     }

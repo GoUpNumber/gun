@@ -1,4 +1,4 @@
-use crate::{betting::*, wallet::GunWallet, FeeSpec};
+use crate::{betting::*, wallet::GunWallet, FeeSpec, elog};
 use bdk::{
     bitcoin::{
         util::psbt::{self, PartiallySignedTransaction as Psbt},
@@ -62,7 +62,7 @@ impl GunWallet {
             .filter_map(|result| match result {
                 Ok(ok) => Some(ok),
                 Err(e) => {
-                    eprintln!("Eror with entry in database: {}", e);
+                    elog!(@explosion "Error with entry in database: {}", e);
                     None
                 }
             })

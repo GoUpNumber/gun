@@ -14,7 +14,7 @@ use bdk::{
 };
 use miniscript::bitcoin::{PrivateKey, PublicKey};
 
-use crate::cmd::{display_psbt, read_yn};
+use crate::{cmd::{display_psbt, read_yn}, elog};
 
 #[derive(Debug)]
 pub struct XKeySigner {
@@ -108,7 +108,7 @@ impl Signer for PwSeedSigner {
             let passphrase = match p {
                 Ok(passphrase) => passphrase,
                 Err(e) => {
-                    eprintln!("Failed to read in password: {}", e);
+                    elog!(@explosion "Failed to read in password: {}", e);
                     return Err(SignerError::InvalidKey);
                 }
             };
@@ -117,7 +117,7 @@ impl Signer for PwSeedSigner {
             let master_xkey = xkey.into_xprv(self.network).unwrap();
 
             if master_xkey.fingerprint(secp) != self.master_fingerprint {
-                eprintln!("Invalid passphrase, derived fingerprint does not match. Try again.\n");
+                elog!(@explosion "Invalid passphrase, derived fingerprint does not match. Try again.");
             } else {
                 break master_xkey;
             }
@@ -173,13 +173,15 @@ impl Signer for PsbtDirSigner {
         let psbt_file = self.path.as_path().join(format!("{}.psbt", txid));
         loop {
             if !self.path.exists() {
-                eprintln!(
+                elog!(
+                    @suggestion
                     "PSBT directory '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
                     self.path.display()
                 );
                 let _ = std::io::stdin().read_line(&mut String::new());
             } else if let Err(e) = std::fs::write(&psbt_file, psbt.to_string()) {
-                eprintln!(
+                elog!(
+                    @explosion
                     "Was unable to write PSBT {}: {}\nPress enter to try again.",
                     psbt_file.display(),
                     e
@@ -190,17 +192,17 @@ impl Signer for PsbtDirSigner {
             }
         }
 
-        eprintln!("Wrote PSBT to {}", psbt_file.display());
+        elog!(@celebration "Wrote PSBT to {}", psbt_file.display());
 
         let file_locations = [
             self.path.as_path().join(format!("{}-signed.psbt", txid)),
             self.path.as_path().join(format!("{}-part.psbt", txid)),
         ];
-        eprintln!("gun will look for the signed psbt files at:",);
+        elog!(@information "gun will look for the signed psbt files at:",);
         for location in &file_locations {
-            eprintln!("- {}", location.display());
+            elog!(@information "{}", location.display());
         }
-        eprintln!("Press enter once signed.");
+        elog!(@suggestion "Press enter once signed.");
         let (signed_psbt_path, contents) = loop {
             let _ = std::io::stdin().read_line(&mut String::new());
             let mut file_contents = file_locations
@@ -214,18 +216,21 @@ impl Signer for PsbtDirSigner {
                 Some((signed_psbt_path, contents)) => {
                     break (signed_psbt_path.clone(), contents.as_ref().unwrap().clone())
                 }
-                None => eprintln!(
-                    "Couldn't read any of the files: {}\nPress enter to try again.",
-                    file_contents.remove(0).1.unwrap_err()
-                ),
+                None => {
+                    elog!(
+                        @explosion
+                        "Couldn't read any of the files: {}\n",
+                        file_contents.remove(0).1.unwrap_err()
+                    );
+                }
             }
         };
         let psbt_result = PartiallySignedTransaction::from_str(contents.trim());
 
         match psbt_result {
             Err(e) => {
-                eprintln!("Failed to parse PSBT file {}", signed_psbt_path.display());
-                eprintln!("{}", e);
+                elog!(@explosion "Failed to parse PSBT file {}", signed_psbt_path.display());
+                elog!(@explosion "{}", e);
                 Err(SignerError::UserCanceled)
             }
             Ok(read_psbt) => {
