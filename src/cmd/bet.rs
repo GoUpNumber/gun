@@ -342,7 +342,7 @@ pub fn run_bet_cmd(
                 }
                 None => read_input(
                     &format!(
-                        "The outcomes for this bet are\n{}\nWhich outcome would you like to to bet on?",
+                        "The outcomes for this bet are\n{}\nWhich outcome would you like to bet on?",
                         possible_outcomes
                             .iter()
                             .map(|o| format!(
@@ -466,7 +466,7 @@ pub fn run_bet_cmd(
                             if let Err(e) = wallet.take_next_action(id, false) {
                                 elog!(
                                     @explosion
-                                    "error updating state of bet {} after broadcasting claim tx {}: {}", 
+                                    "Error updating state of bet {} after broadcasting claim tx {}: {}", 
                                     id, txid, e
                                 );                            
                             }
@@ -497,7 +497,7 @@ pub fn run_bet_cmd(
                         if let Err(e) = wallet.take_next_action(id, true) {
                             elog!(
                                 @explosion
-                                "error updating state of bet {} after broadcasting cancel tx: {}: {}", 
+                                "Error updating state of bet {} after broadcasting cancel tx: {}: {}", 
                                 id, txid, e
                             );                        
                         }
