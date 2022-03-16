@@ -608,6 +608,6 @@ macro_rules! elog {
     (@warning $($tt:tt)*) => { eprint!("\u{26A0} "); eprintln!($($tt)*);};
     (@info $($tt:tt)*) => { eprint!("\u{2139} "); eprintln!($($tt)*);};
     (@celebration $($tt:tt)*) => { eprint!("\u{1F389} "); eprintln!($($tt)*);};
-    (@suggest $($tt:tt)*) => { eprint!("\u{1F449} "); eprintln!($($tt)*);};
+    (@user_action $($tt:tt)*) => { eprint!("\u{1F449} "); eprintln!($($tt)*);};
     (@explosion $($tt:tt)*) => { eprint!("\u{1F4A5} "); eprintln!($($tt)*);};
 }
