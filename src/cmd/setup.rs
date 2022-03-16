@@ -375,7 +375,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         std::fs::write(path, content)?;
     }
 
-    elog!(@celebration "Successfully created walled at {}", wallet_dir.display());
+    elog!(@celebration "Successfully created wallet at {}", wallet_dir.display());
     Ok(CmdOutput::None)
 }
 
