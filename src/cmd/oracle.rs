@@ -42,7 +42,7 @@ pub fn run_oralce_cmd(gun_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
                 .to_string();
             match gun_db.get_entity::<OracleInfo>(oracle_id.clone())? {
                 Some(_) => {
-                    elog!(@information "Oracle {} is already trusted", oracle_id);
+                    elog!(@info "Oracle {} is already trusted", oracle_id);
                 }
                 None => {
                     let root_response = ureq::get(url.as_str())

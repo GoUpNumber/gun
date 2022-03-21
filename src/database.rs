@@ -233,7 +233,7 @@ impl GunDatabase {
         self.list_entities().filter_map(|entity| match entity {
             Ok(entity) => Some(entity),
             Err(e) => {
-                elog!(@explosion "Error retreiving an {}: {}", T::name(), e);
+                elog!(@recoverable_error "Error retreiving an {}: {}", T::name(), e);
                 None
             }
         })

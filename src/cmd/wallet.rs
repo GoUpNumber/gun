@@ -340,7 +340,7 @@ impl SpendOpt {
                 for bet_id in claiming_bet_ids {
                     if let Err(e) = wallet.take_next_action(bet_id, false) {
                         elog!(
-                            @explosion
+                            @recoverable_error
                             "Error updating state of bet {} after broadcasting claim tx {}: {}",
                             bet_id, txid, e
                         );

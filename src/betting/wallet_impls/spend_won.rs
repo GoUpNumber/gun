@@ -62,7 +62,7 @@ impl GunWallet {
             .filter_map(|result| match result {
                 Ok(ok) => Some(ok),
                 Err(e) => {
-                    elog!(@explosion "Error with entry in database: {}", e);
+                    elog!(@recoverable_error "Error with entry in database: {}", e);
                     None
                 }
             })

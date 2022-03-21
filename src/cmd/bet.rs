@@ -256,7 +256,7 @@ pub fn run_bet_cmd(
             let local_proposal = wallet.make_proposal(oracle_id, oracle_event, args, keychain)?;
             if let Some(change) = &local_proposal.change {
                 elog!(
-                    @information
+                    @info
                     "This proposal will put {} “in-use” unnecessarily because the bet value {} does not match a sum of available utxos.\nYou can get a utxo with the exact amount using `gun split` first.\n--",
                     change.value(), local_proposal.proposal.value
                 );
@@ -415,7 +415,7 @@ pub fn run_bet_cmd(
                         // remove control characters to prevent tricks.
                         sanitize_str(&mut message);
                         elog!(
-                            @information
+                            @info
                             "This message was attached to the offer:\n#### START MESSAGE ####\n{}\n#### END MESSAGE ####",
                             message
                         );
@@ -440,7 +440,7 @@ pub fn run_bet_cmd(
                     }
                 }
                 Plaintext::Messagev1(message) => {
-                    elog!(@information "The ciphertext contained a secret message: ");
+                    elog!(@info "The ciphertext contained a secret message: ");
                     Ok(item! { "message" => Cell::string(message) })
                 }
             }
@@ -465,7 +465,7 @@ pub fn run_bet_cmd(
                         for id in ids {
                             if let Err(e) = wallet.take_next_action(id, false) {
                                 elog!(
-                                    @explosion
+                                    @recoverable_error
                                     "Error updating state of bet {} after broadcasting claim tx {}: {}",
                                     id, txid, e
                                 );
@@ -496,7 +496,7 @@ pub fn run_bet_cmd(
                     for id in ids {
                         if let Err(e) = wallet.take_next_action(id, true) {
                             elog!(
-                                @explosion
+                                @recoverable_error
                                 "Error updating state of bet {} after broadcasting cancel tx: {}: {}",
                                 id, txid, e
                             );
@@ -506,7 +506,7 @@ pub fn run_bet_cmd(
                 output
             }
             None => {
-                elog!(@information "No bets needed canceling");
+                elog!(@info "No bets needed canceling");
                 CmdOutput::None
             }
         }),
@@ -532,7 +532,7 @@ pub fn run_bet_cmd(
                     Ok(None) => return Err(anyhow!("Bet {} doesn't exist", id)),
                     Err(_) => {
                         elog!(
-                            @information 
+                            @info
                             "Was unable to retrieve bet {} from the database. Assuming you know what you are doing and forgetting it.", 
                             id)
                         ;
@@ -687,7 +687,7 @@ pub fn run_bet_cmd(
                                 }
                             }
                             Plaintext::Messagev1(message) => {
-                                elog!(@information "This ciphertext contained a secret message:");
+                                elog!(@info "This ciphertext contained a secret message:");
                                 item! { "message" => Cell::string(message) }
                             }
                         }

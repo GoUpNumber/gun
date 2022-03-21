@@ -187,7 +187,7 @@ impl GunWallet {
                     },
                     TxState::NotFound => {
                         elog!(
-                            @information
+                            @info
                             "The bet tx for {} has fallen out of mempool -- rebroadcasting it!",
                             bet_id
                         );

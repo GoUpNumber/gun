@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
                     ..
                 } = config.blockchain_config();
                 elog!(
-                    @information
+                    @info
                     "syncing wallet with {} (stop_gap: {}, parallel_connections: {})",
                     base_url,
                     stop_gap,

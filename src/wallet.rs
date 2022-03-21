@@ -275,7 +275,7 @@ impl GunWallet {
             match self.take_next_action(bet_id, true) {
                 Ok(_updated) => {}
                 Err(e) => {
-                    elog!(@explosion "Error trying to take action on bet {}: {:?}", bet_id, e);
+                    elog!(@recoverable_error "Error trying to take action on bet {}: {:?}", bet_id, e);
                 }
             }
         }

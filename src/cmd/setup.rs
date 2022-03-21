@@ -182,7 +182,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                     let passphrase_confirmation =
                         rpassword::prompt_password_stderr("Enter your wallet passphrase again:")?;
                     if !passphrase.eq(&passphrase_confirmation) {
-                        elog!(@explosion "Mismatching passphrases. Try again.\n");
+                        elog!(@user_error "Mismatching passphrases. Try again.\n");
                     } else {
                         break passphrase;
                     }

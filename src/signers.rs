@@ -111,7 +111,7 @@ impl Signer for PwSeedSigner {
             let passphrase = match p {
                 Ok(passphrase) => passphrase,
                 Err(e) => {
-                    elog!(@explosion "Failed to read in password: {}", e);
+                    elog!(@recoverable_error "Failed to read in password: {}", e);
                     return Err(SignerError::InvalidKey);
                 }
             };
@@ -120,7 +120,7 @@ impl Signer for PwSeedSigner {
             let master_xkey = xkey.into_xprv(self.network).unwrap();
 
             if master_xkey.fingerprint(secp) != self.master_fingerprint {
-                elog!(@explosion "Invalid passphrase, derived fingerprint does not match. Try again.");
+                elog!(@recoverable_error "Invalid passphrase, derived fingerprint does not match. Try again.");
             } else {
                 break master_xkey;
             }
@@ -184,7 +184,7 @@ impl Signer for PsbtDirSigner {
                 let _ = std::io::stdin().read_line(&mut String::new());
             } else if let Err(e) = std::fs::write(&psbt_file, psbt.to_string()) {
                 elog!(
-                    @explosion
+                    @recoverable_error
                     "Was unable to write PSBT {}: {}\nPress enter to try again.",
                     psbt_file.display(),
                     e
@@ -201,9 +201,9 @@ impl Signer for PsbtDirSigner {
             self.path.as_path().join(format!("{}-signed.psbt", txid)),
             self.path.as_path().join(format!("{}-part.psbt", txid)),
         ];
-        elog!(@information "gun will look for the signed psbt files at:",);
+        elog!(@info "gun will look for the signed psbt files at:",);
         for location in &file_locations {
-            elog!(@information "{}", location.display());
+            elog!(@info "{}", location.display());
         }
         elog!(@suggestion "Press enter once signed.");
         let (signed_psbt_path, contents) = loop {
@@ -221,7 +221,7 @@ impl Signer for PsbtDirSigner {
                 }
                 None => {
                     elog!(
-                        @explosion
+                        @recoverable_error
                         "Couldn't read any of the files: {}\n",
                         file_contents.remove(0).1.unwrap_err()
                     );
@@ -232,8 +232,8 @@ impl Signer for PsbtDirSigner {
 
         match psbt_result {
             Err(e) => {
-                elog!(@explosion "Failed to parse PSBT file {}", signed_psbt_path.display());
-                elog!(@explosion "{}", e);
+                elog!(@recoverable_error "Failed to parse PSBT file {}", signed_psbt_path.display());
+                elog!(@recoverable_error "{}", e);
                 Err(SignerError::UserCanceled)
             }
             Ok(read_psbt) => {
