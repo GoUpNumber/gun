@@ -21,7 +21,7 @@ use bdk::{
     },
     miniscript::Segwitv0,
     sled,
-    template::{Bip84, Bip84Public},
+    template::{Bip84, Bip84Public, Bip86},
     KeychainKind, Wallet,
 };
 use miniscript::{Descriptor, DescriptorPublicKey, TranslatePk1};
@@ -45,6 +45,33 @@ pub struct CommonArgs {
     network: Network,
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+pub enum AddressKind {
+    Wpkh,
+    Tr,
+}
+
+impl FromStr for AddressKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "wpkh" => AddressKind::Wpkh,
+            "tr" => AddressKind::Tr,
+            _ => return Err(anyhow!("invalid address kind. Must be p2wpkh or p2tr")),
+        })
+    }
+}
+
+impl std::fmt::Display for AddressKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressKind::Wpkh => write!(f, "wpkh"),
+            AddressKind::Tr => write!(f, "tr"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, StructOpt)]
 pub enum SetupOpt {
     /// Setup using a seedphrase
@@ -60,6 +87,8 @@ pub enum SetupOpt {
         /// Password protect your coins
         #[structopt(long)]
         use_passphrase: bool,
+        #[structopt(long, default_value = "tr", name = "wpkh|tr")]
+        address_kind: AddressKind,
     },
     /// Setup using a output descriptors
     ///
@@ -90,6 +119,8 @@ pub enum SetupOpt {
         /// the extended key descriptor
         #[structopt(name = "xkey-descriptor")]
         xkey: String,
+        #[structopt(long, default_value = "tr", name = "wpkh|tr")]
+        address_kind: AddressKind,
     },
     /// Setup with a ColdCard via SD card
     ///
@@ -138,6 +169,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             from_existing,
             n_words,
             use_passphrase,
+            address_kind,
         } => {
             let mnemonic = match from_existing {
                 Some(existing_words_file) => {
@@ -223,10 +255,22 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 },
             }];
 
-            let (external, _) = Bip84(xpriv, KeychainKind::External)
-                .into_wallet_descriptor(&secp, common_args.network)?;
-            let (internal, _) = Bip84(xpriv, KeychainKind::Internal)
-                .into_wallet_descriptor(&secp, common_args.network)?;
+            let (external, internal) = match address_kind {
+                AddressKind::Tr => {
+                    let (external, _) = Bip86(xpriv, KeychainKind::External)
+                        .into_wallet_descriptor(&secp, common_args.network)?;
+                    let (internal, _) = Bip86(xpriv, KeychainKind::Internal)
+                        .into_wallet_descriptor(&secp, common_args.network)?;
+                    (external, internal)
+                }
+                AddressKind::Wpkh => {
+                    let (external, _) = Bip84(xpriv, KeychainKind::External)
+                        .into_wallet_descriptor(&secp, common_args.network)?;
+                    let (internal, _) = Bip84(xpriv, KeychainKind::Internal)
+                        .into_wallet_descriptor(&secp, common_args.network)?;
+                    (external, internal)
+                }
+            };
             (
                 Config {
                     signers,
@@ -260,9 +304,16 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         SetupOpt::XKey {
             common_args,
             ref xkey,
+            address_kind,
         } => {
-            let external = set_network(&format!("wpkh({}/0/*)", xkey), common_args.network)?;
-            let internal = set_network(&format!("wpkh({}/1/*)", xkey), common_args.network)?;
+            let external = set_network(
+                &format!("{}({}/0/*)", address_kind, xkey),
+                common_args.network,
+            )?;
+            let internal = set_network(
+                &format!("{}({}/1/*)", address_kind, xkey),
+                common_args.network,
+            )?;
             (
                 Config::default_config(common_args.network),
                 None,

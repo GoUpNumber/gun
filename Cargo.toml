@@ -10,8 +10,10 @@ license = "0BSD"
 
 [dependencies]
 dirs = "3.0"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "198b0ee597fded5c5be43ff0f960f8bcdb3a0b73", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false  }
-# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false }
+#bdk = { git = "https://github.com/llfourn/bdk", rev = "ed281f3f5702e4a68f37637962713dfa6665e1ce", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false  }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "9e6150717d392538ea8b514de7c6af9c3ea69e1f", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false  }
+#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq", "compiler", "keys-bip39"], default-features = false }
+bitcoin = {git = "https://github.com/rust-bitcoin/rust-bitcoin", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1"}
 serde_json = "1.0"
 olivia_core = { git = "https://github.com/llfourn/olivia", rev = "15c35aad66c418e05046a57c72cc90ce5f351620" }
 olivia_secp256k1 = { git = "https://github.com/llfourn/olivia", features = ["libsecp_compat"], rev = "15c35aad66c418e05046a57c72cc90ce5f351620" }
@@ -37,10 +39,11 @@ nightly = ["olivia_secp256k1/nightly"]
 
 [dev-dependencies]
 rand = "0.8"
-bdk = { git = "https://github.com/llfourn/bdk", rev = "198b0ee597fded5c5be43ff0f960f8bcdb3a0b73", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
-# bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq","compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
+bdk = { git = "https://github.com/llfourn/bdk", rev = "9e6150717d392538ea8b514de7c6af9c3ea69e1f", features = ["key-value-db", "use-esplora-ureq", "compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false  }
+#bdk = { path = "../bdk", features = ["key-value-db", "esplora", "use-esplora-ureq","compiler", "keys-bip39", "test-esplora", "test-blockchains"], default-features = false }
 
 
 [patch.crates-io]
-bitcoin = { git = "https://github.com/rust-bitcoin/rust-bitcoin.git", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1" }
-miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript.git", rev = "f3c38b8cc04fed0a68f4d6074d8c30f6912d958f" }
+bitcoin = {git = "https://github.com/rust-bitcoin/rust-bitcoin", rev = "0e2e55971275da64ceb62e8991a0a5fa962cb8b1"}
+miniscript = { git = "https://github.com/rust-bitcoin/rust-miniscript", rev = "6a89bd0d1aa2a4b2e78d624276471727bf61b753" }
+

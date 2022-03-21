@@ -29,12 +29,6 @@ pub enum GunSigner {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DerivationBip {
-    Bip84,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "version")]
 pub enum VersionedConfig {
     #[serde(rename = "1")]
