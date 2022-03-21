@@ -99,7 +99,7 @@ dependencies = [
 [[package]]
 name = "bdk"
 version = "0.14.1-dev"
-source = "git+https://github.com/nickfarrow/bdk?rev=3cb90020457e5ae0fb3cd2ae8df6548d8526cf25#3cb90020457e5ae0fb3cd2ae8df6548d8526cf25"
+source = "git+https://github.com/llfourn/bdk?rev=9e6150717d392538ea8b514de7c6af9c3ea69e1f#9e6150717d392538ea8b514de7c6af9c3ea69e1f"
 dependencies = [
  "async-trait",
  "bdk-macros",
