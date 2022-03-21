@@ -12,6 +12,7 @@ pub use wallet::*;
 use crate::{
     config::GunSigner,
     database::{ProtocolKind, StringDescriptor},
+    elog,
     keychain::ProtocolSecret,
     signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
     wallet::GunWallet,
@@ -91,14 +92,14 @@ pub fn read_yn(question: &str) -> bool {
     use std::io::{self, BufRead};
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-    eprint!("> {} [y/n]? ", question.replace('\n', "\n> "));
+    elog!(@question "{} [y/n]? ", question.replace('\n', "\n> "));
     lines
         .find_map(
             |line| match line.unwrap().trim_end().to_lowercase().as_str() {
                 "y" => Some(true),
                 "n" => Some(false),
                 _ => {
-                    eprint!("[y/n]? ");
+                    eprint!("> [y/n]? ");
                     None
                 }
             },
@@ -602,3 +603,14 @@ macro_rules! eitem {
         $crate::cmd::CmdOutput::EmphasisedItem { main: ($main_key, $main_value), other: list }
     }}
 }
+
+#[macro_export]
+macro_rules! elog {
+    (@warning $($tt:tt)*) => { eprint!("\u{26A0} "); eprintln!($($tt)*);};
+    (@info $($tt:tt)*) => { eprint!("\u{2139} "); eprintln!($($tt)*);};
+    (@celebration $($tt:tt)*) => { eprint!("\u{1F389} "); eprintln!($($tt)*);};
+    (@user_action $($tt:tt)*) => { eprint!("\u{1F449} "); eprintln!($($tt)*);};
+    (@recoverable_error $($tt:tt)*) => { eprint!("\u{1F4A5} "); eprintln!($($tt)*);};
+    (@user_error $($tt:tt)*) => { eprint!("\u{274C}"); eprintln!($($tt)*);};
+    (@question $($tt:tt)*) => { eprint!("\u{2753}"); eprintln!($($tt)*); };
+    (@suggestion $($tt:tt)*) => { eprint!("\u{1F4A1}"); eprintln!($($tt)*); };}

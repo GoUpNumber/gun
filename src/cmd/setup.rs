@@ -3,6 +3,7 @@ use crate::{
     cmd::{self},
     config::{Config, GunSigner},
     database::{GunDatabase, ProtocolKind, StringDescriptor},
+    elog,
     keychain::ProtocolSecret,
 };
 use anyhow::{anyhow, Context};
@@ -173,15 +174,15 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             };
 
             let passphrase = if use_passphrase {
-                eprintln!("WARNING: If you lose or forget your passphrase, you will lose access to your funds.");
-                eprintln!("WARNING: You MUST store your passphrase with your seed words in order to make a complete backup.");
+                elog!(@warning "If you lose or forget your passphrase, you will lose access to your funds.");
+                elog!(@warning "You MUST store your passphrase with your seed words in order to make a complete backup.");
                 loop {
                     let passphrase =
                         rpassword::prompt_password_stderr("Enter your wallet passphrase:")?;
                     let passphrase_confirmation =
                         rpassword::prompt_password_stderr("Enter your wallet passphrase again:")?;
                     if !passphrase.eq(&passphrase_confirmation) {
-                        eprintln!("Mismatching passphrases. Try again.\n")
+                        elog!(@user_error "Mismatching passphrases. Try again.\n");
                     } else {
                         break passphrase;
                     }
@@ -200,7 +201,8 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                     .join("\n");
                 println!("{}", printed);
             } else {
-                eprintln!(
+                elog!(
+                    @suggestion
                     "Err okay then...make sure you backup {} after this.",
                     sw_file.display()
                 );
@@ -373,7 +375,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         std::fs::write(path, content)?;
     }
 
-    eprintln!("Successfully created walled at {}", wallet_dir.display());
+    elog!(@celebration "Successfully created wallet at {}", wallet_dir.display());
     Ok(CmdOutput::None)
 }
 

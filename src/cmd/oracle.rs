@@ -1,4 +1,4 @@
-use crate::{cmd, database::GunDatabase, item, OracleInfo, Url};
+use crate::{cmd, database::GunDatabase, elog, item, OracleInfo, Url};
 use anyhow::anyhow;
 use olivia_core::{http::RootResponse, OracleId};
 use olivia_secp256k1::Secp256k1;
@@ -38,10 +38,12 @@ pub fn run_oralce_cmd(gun_db: &GunDatabase, cmd: OracleOpt) -> anyhow::Result<Cm
                 Url::from_str(&url).or_else(|_| Url::from_str(&format!("https://{}", url)))?;
             let oracle_id = url
                 .host()
-                .ok_or(anyhow!("orcale url missing host"))?
+                .ok_or(anyhow!("Oracle url missing host"))?
                 .to_string();
             match gun_db.get_entity::<OracleInfo>(oracle_id.clone())? {
-                Some(_) => eprintln!("oracle {} is already trusted", oracle_id),
+                Some(_) => {
+                    elog!(@info "Oracle {} is already trusted", oracle_id);
+                }
                 None => {
                     let root_response = ureq::get(url.as_str())
                         .call()?

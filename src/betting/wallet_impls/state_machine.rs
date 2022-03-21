@@ -1,4 +1,4 @@
-use crate::{betting::*, wallet::GunWallet};
+use crate::{betting::*, elog, wallet::GunWallet};
 use anyhow::{anyhow, Context};
 use bdk::blockchain::{
     Blockchain, Broadcast, GetInputState, InputState, TransactionState, TxState,
@@ -186,7 +186,8 @@ impl GunWallet {
                         BetState::Included { bet,..} => BetState::Included { bet, height }
                     },
                     TxState::NotFound => {
-                        eprintln!(
+                        elog!(
+                            @info
                             "The bet tx for {} has fallen out of mempool -- rebroadcasting it!",
                             bet_id
                         );
