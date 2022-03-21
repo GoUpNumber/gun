@@ -146,7 +146,7 @@ impl JointOutput {
             .translate_pk(&mut |pk: &bitcoin::PublicKey| -> Result<_, Infallible> {
                 Ok(DescriptorPublicKey::SinglePub(DescriptorSinglePub {
                     origin: None,
-                    key: *pk,
+                    key: miniscript::descriptor::SinglePubKey::FullKey(*pk),
                 }))
             })
             .unwrap()

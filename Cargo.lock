@@ -28,9 +28,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.55"
+version = "1.0.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
+checksum = "4361135be9122e0870de935d7c439aef945b9f9ddd4199a553b5270b49c82a27"
 
 [[package]]
 name = "async-trait"
@@ -99,7 +99,7 @@ dependencies = [
 [[package]]
 name = "bdk"
 version = "0.14.1-dev"
-source = "git+https://github.com/llfourn/bdk?rev=198b0ee597fded5c5be43ff0f960f8bcdb3a0b73#198b0ee597fded5c5be43ff0f960f8bcdb3a0b73"
+source = "git+https://github.com/llfourn/bdk?rev=9e6150717d392538ea8b514de7c6af9c3ea69e1f#9e6150717d392538ea8b514de7c6af9c3ea69e1f"
 dependencies = [
  "async-trait",
  "bdk-macros",
@@ -161,7 +161,7 @@ dependencies = [
 [[package]]
 name = "bitcoin"
 version = "0.27.0"
-source = "git+https://github.com/rust-bitcoin/rust-bitcoin.git?rev=0e2e55971275da64ceb62e8991a0a5fa962cb8b1#0e2e55971275da64ceb62e8991a0a5fa962cb8b1"
+source = "git+https://github.com/rust-bitcoin/rust-bitcoin?rev=0e2e55971275da64ceb62e8991a0a5fa962cb8b1#0e2e55971275da64ceb62e8991a0a5fa962cb8b1"
 dependencies = [
  "base64-compat",
  "bech32",
@@ -609,6 +609,7 @@ dependencies = [
  "base2048",
  "bdk",
  "bincode",
+ "bitcoin",
  "chacha20",
  "dirs",
  "miniscript",
@@ -761,7 +762,7 @@ dependencies = [
 [[package]]
 name = "miniscript"
 version = "6.0.1"
-source = "git+https://github.com/rust-bitcoin/rust-miniscript.git?rev=f3c38b8cc04fed0a68f4d6074d8c30f6912d958f#f3c38b8cc04fed0a68f4d6074d8c30f6912d958f"
+source = "git+https://github.com/rust-bitcoin/rust-miniscript?rev=6a89bd0d1aa2a4b2e78d624276471727bf61b753#6a89bd0d1aa2a4b2e78d624276471727bf61b753"
 dependencies = [
  "bitcoin",
  "serde",
@@ -844,9 +845,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da32515d9f6e6e489d7bc9d84c71b060db7247dc035bbe44eac88cf87486d8d5"
+checksum = "87f3e037eac156d1775da914196f0f37741a274155e34a0b7e427c35d2a2ecb9"
 
 [[package]]
 name = "opaque-debug"
@@ -1052,9 +1053,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8383f39639269cde97d255a32bdb68c047337295414940c68bdd30c2e13203ff"
+checksum = "8380fe0152551244f0747b1bf41737e0f8a74f97a14ccefd1148187271634f3c"
 dependencies = [
  "bitflags",
 ]
