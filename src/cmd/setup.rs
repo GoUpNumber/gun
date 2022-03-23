@@ -77,6 +77,33 @@ impl std::fmt::Display for AddressKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+pub enum AddressKind {
+    Wpkh,
+    Tr,
+}
+
+impl FromStr for AddressKind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "wpkh" => AddressKind::Wpkh,
+            "tr" => AddressKind::Tr,
+            _ => return Err(anyhow!("invalid address kind. Must be p2wpkh or p2tr")),
+        })
+    }
+}
+
+impl std::fmt::Display for AddressKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressKind::Wpkh => write!(f, "wpkh"),
+            AddressKind::Tr => write!(f, "tr"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, StructOpt)]
 pub enum SetupOpt {
     /// Setup using a seedphrase
