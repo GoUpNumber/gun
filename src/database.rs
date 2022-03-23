@@ -19,6 +19,8 @@ pub enum MapKey {
     Bet(BetId),
     ProtocolSecret(ProtocolKind),
     Descriptor(KeychainKind),
+    FrostRemoteNonce(usize),
+    FrostLocalCounter
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -58,6 +60,8 @@ pub enum KeyKind {
     Bet,
     ProtocolSecret,
     Descriptor,
+    FrostRemoteNonce,
+    FrostLocalCounter
 }
 
 impl KeyKind {
@@ -76,27 +80,27 @@ pub trait Entity: serde::de::DeserializeOwned + Clone + 'static + serde::Seriali
 }
 
 macro_rules! impl_entity {
-    ($key_name:ty, $type:ty, $type_name:ident) => {
+    ($key_type:ty, $type:ty, $key_kind:ident) => {
         impl Entity for $type {
-            type Key = $key_name;
+            type Key = $key_type;
             fn deserialize_key(bytes: &[u8]) -> anyhow::Result<Self::Key> {
                 let versioned_key = $crate::encode::deserialize::<VersionedKey>(bytes)?;
-                if let MapKey::$type_name(inner) = versioned_key.key {
+                if let MapKey::$key_kind(inner) = versioned_key.key {
                     Ok(inner)
                 } else {
                     Err(anyhow::anyhow!(
                         "Could not deserialize key {}",
-                        stringify!($type_name)
+                        stringify!($key_kind)
                     ))
                 }
             }
 
             fn key_kind() -> KeyKind {
-                KeyKind::$type_name
+                KeyKind::$key_kind
             }
 
             fn extract_key(key: MapKey) -> Option<Self::Key> {
-                if let MapKey::$type_name(key) = key {
+                if let MapKey::$key_kind(key) = key {
                     Some(key)
                 } else {
                     None
@@ -104,11 +108,11 @@ macro_rules! impl_entity {
             }
 
             fn to_map_key(key: Self::Key) -> MapKey {
-                MapKey::$type_name(key)
+                MapKey::$key_kind(key)
             }
 
             fn name() -> &'static str {
-                stringify!($type_name)
+                stringify!($key_kind)
             }
         }
     };
@@ -121,6 +125,16 @@ impl_entity!(ProtocolKind, ProtocolSecret, ProtocolSecret);
 pub struct StringDescriptor(pub String);
 impl_entity!(KeychainKind, StringDescriptor, Descriptor);
 
+use schnorr_fun::musig::Nonce;
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct RemoteNonces(pub Vec<Nonce>);
+impl_entity!(usize, RemoteNonces, FrostRemoteNonce);
+// pub struct FrostLocalCounter(pub usize);
+// impl_entity!((), FrostLocalCounter, FrostLocalCounter);
+
+
+
+#[derive(Debug, Clone)]
 pub struct GunDatabase(sled::Tree);
 
 fn insert<O: serde::Serialize>(tree: &sled::Tree, key: MapKey, value: O) -> anyhow::Result<()> {

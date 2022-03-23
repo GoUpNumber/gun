@@ -1,6 +1,7 @@
 use crate::{betting::Proposal, hex};
 use bdk::bitcoin::hashes::{sha512, Hash, HashEngine, Hmac, HmacEngine};
 use olivia_secp256k1::schnorr_fun::fun::{marker::*, Point, Scalar, G};
+use rand::{CryptoRng, RngCore};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolSecret {
@@ -46,14 +47,22 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn from_slice(bytes: &[u8]) -> Option<Self> {
-        let mut secret_key = Scalar::from_slice_mod_order(&bytes[..32])
+        let secret_key = Scalar::from_slice_mod_order(&bytes[..32])
             .expect("is 32 bytes long")
             .mark::<NonZero>()?;
+        Some(Self::from_secret_key(secret_key))
+    }
+
+    pub fn from_secret_key(mut secret_key: Scalar) -> Self {
         let public_key = Point::<EvenY>::from_scalar_mul(G, &mut secret_key);
-        Some(KeyPair {
+        KeyPair {
             public_key,
             secret_key,
-        })
+        }
+    }
+
+    pub fn random(rng: &mut (impl RngCore + CryptoRng)) -> Self {
+        Self::from_secret_key(Scalar::random(rng))
     }
 }
 

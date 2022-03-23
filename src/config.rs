@@ -2,6 +2,7 @@ use bdk::{
     bitcoin::{util::bip32::Fingerprint, Network},
     blockchain::{esplora::EsploraBlockchainConfig, AnyBlockchainConfig},
 };
+use schnorr_fun::frost::JointKey;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -25,6 +26,11 @@ pub enum GunSigner {
     },
     PsbtDir {
         path: PathBuf,
+    },
+    Frost {
+        joint_key: JointKey,
+        my_index: usize,
+        working_dir: PathBuf,
     },
 }
 

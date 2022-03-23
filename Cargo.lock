@@ -461,7 +461,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "185bf4f825fc1f21899caee065e1e83b5258201b84923ed503254598e608bf6a"
 dependencies = [
- "secp256kfun",
+ "secp256kfun 0.7.0",
  "serde",
 ]
 
@@ -618,6 +618,7 @@ dependencies = [
  "olivia_secp256k1",
  "rand 0.8.5",
  "rpassword",
+ "schnorr_fun 0.7.1-pre.0",
  "serde",
  "serde_json",
  "sha2",
@@ -838,7 +839,7 @@ dependencies = [
  "ecdsa_fun",
  "lazy_static",
  "olivia_core",
- "schnorr_fun",
+ "schnorr_fun 0.7.0",
  "serde",
  "sha2",
 ]
@@ -1168,7 +1169,15 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56d5233dbbce524495ee58f72da40d078efbded2d2ef5b68dce186774fdf4c3b"
 dependencies = [
- "secp256kfun",
+ "secp256kfun 0.7.0",
+ "serde",
+]
+
+[[package]]
+name = "schnorr_fun"
+version = "0.7.1-pre.0"
+dependencies = [
+ "secp256kfun 0.7.1-pre.0",
  "serde",
 ]
 
@@ -1212,6 +1221,18 @@ name = "secp256kfun"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b456d5d74840f07fe43396a29ac144cfdf32acf980f399d30b38d5b170c8239b"
+dependencies = [
+ "digest",
+ "rand_core 0.6.3",
+ "secp256k1",
+ "secp256kfun_k256_backend",
+ "serde",
+ "subtle-ng",
+]
+
+[[package]]
+name = "secp256kfun"
+version = "0.7.1-pre.0"
 dependencies = [
  "digest",
  "rand_core 0.6.3",

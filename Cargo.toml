@@ -32,6 +32,7 @@ miniscript = { version = "6", features = ["serde"] }
 term-table = {  version = "1", default-features = false }
 ureq = { version = "2", features = ["json"] }
 url = "2"
+schnorr_fun = { path = "../secp256kfun/schnorr_fun", features = ["serde", "libsecp_compat"] }
 
 [features]
 nightly = ["olivia_secp256k1/nightly"]

@@ -27,7 +27,12 @@ use bdk::{
 use miniscript::{Descriptor, DescriptorPublicKey, TranslatePk1};
 use olivia_secp256k1::fun::hex;
 use serde::Deserialize;
-use std::{fs, io, path::PathBuf, str::FromStr};
+use std::{
+    fs::{self},
+    io,
+    path::PathBuf,
+    str::FromStr,
+};
 use structopt::StructOpt;
 
 use super::CmdOutput;
@@ -42,7 +47,7 @@ pub struct CommonArgs {
         default_value = "bitcoin",
         name = "bitcoin|regtest|testnet|signet"
     )]
-    network: Network,
+    pub network: Network,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
@@ -141,12 +146,31 @@ pub enum SetupOpt {
         #[structopt(long)]
         import_entropy: bool,
     },
+    /// Initialize a Schnorr threshold multisig wallet
+    Frost(FrostSetup),
 }
 
 #[derive(Deserialize)]
 struct WalletExport {
     xfp: Fingerprint,
     bip84: BIP84Export,
+}
+
+#[derive(Clone, Debug, StructOpt)]
+pub enum FrostSetup {
+    Start {
+        /// The working directory where we will collect the other participants data
+        #[structopt(parse(from_os_str))]
+        working_dir: PathBuf,
+        /// Number of signers needed to complete a signature
+        threshold: usize,
+        #[structopt(flatten)]
+        common_args: CommonArgs,
+    },
+    Add {
+        /// The working directory where we will collect the other participants data
+        working_dir: PathBuf,
+    },
 }
 
 #[derive(Deserialize)]
@@ -204,7 +228,6 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                     seed_words.into_key()
                 }
             };
-
             let passphrase = if use_passphrase {
                 elog!(@warning "If you lose or forget your passphrase, you will lose access to your funds.");
                 elog!(@warning "You MUST store your passphrase with your seed words in order to make a complete backup.");
@@ -393,6 +416,39 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 },
                 bip85_bytes,
                 (external.to_string(), Some(internal.to_string())),
+                None,
+            )
+        }
+        SetupOpt::Frost(frost_setup) => {
+            use crate::cmd::frost;
+            let (FrostSetup::Start { working_dir, .. } | FrostSetup::Add { working_dir }) =
+                &frost_setup;
+            let working_dir = working_dir.clone();
+            let setup_file = working_dir.join("frost-setup.json");
+            let ((my_index, secret_share), joint_key, network) =
+                frost::run_frost_setup(&wallet_dir, &setup_file, frost_setup)?;
+            let secret_share_file = wallet_dir.join("share.hex");
+            std::fs::write(secret_share_file, secret_share.to_string())?;
+            // let xpub = ExtendedPubKey {
+            //     network,
+            //     depth: 0,
+            //     parent_fingerprint: Fingerprint::from([0u8;4]),
+            //     child_number: ChildNumber::from(0),
+            //     public_key: joint_key.public_key(),
+            //     chain_code: ChainCode::from(transcript.poly_digest()),
+            // };
+            let external = format!("tr({})", joint_key.public_key());
+            (
+                Config {
+                    signers: vec![GunSigner::Frost {
+                        joint_key,
+                        my_index,
+                        working_dir,
+                    }],
+                    ..Config::default_config(network)
+                },
+                None,
+                (external, None),
                 None,
             )
         }

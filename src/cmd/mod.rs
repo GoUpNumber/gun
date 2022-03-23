@@ -1,11 +1,13 @@
 mod bet;
 mod config;
+mod frost;
 mod oracle;
 mod setup;
 mod wallet;
 pub use bet::*;
 pub use config::*;
 pub use oracle::*;
+use schnorr_fun::fun::Scalar;
 pub use setup::*;
 pub use wallet::*;
 
@@ -33,7 +35,7 @@ use bdk::{
     wallet::signer::SignerOrdering,
     KeychainKind, Wallet,
 };
-use std::sync::Arc;
+use std::{sync::Arc, str::FromStr};
 
 use term_table::{row::Row, Table};
 
@@ -202,6 +204,17 @@ pub fn load_wallet(
                     }),
                 }
             }
+            GunSigner::Frost { joint_key, my_index, working_dir } => {
+                let file_path = wallet_dir.join("share.hex");
+                let secret_share = Scalar::from_str(&fs::read_to_string(file_path)?)?;
+                Arc::new(crate::cmd::frost::FrostSigner {
+                    joint_key: joint_key.clone(),
+                    my_index: *my_index,
+                    secret_share,
+                    working_dir: working_dir.clone(),
+                    db: gun_db.clone()
+                })
+            },
         };
         wallet.add_signer(
             KeychainKind::External, //NOTE: will sign internal inputs as well!
@@ -611,6 +624,6 @@ macro_rules! elog {
     (@celebration $($tt:tt)*) => { eprint!("\u{1F389} "); eprintln!($($tt)*);};
     (@user_action $($tt:tt)*) => { eprint!("\u{1F449} "); eprintln!($($tt)*);};
     (@recoverable_error $($tt:tt)*) => { eprint!("\u{1F4A5} "); eprintln!($($tt)*);};
-    (@user_error $($tt:tt)*) => { eprint!("\u{274C}"); eprintln!($($tt)*);};
+    (@user_error $($tt:tt)*) => {{ eprint!("\u{274C}"); eprintln!($($tt)*); }};
     (@question $($tt:tt)*) => { eprint!("\u{2753}"); eprintln!($($tt)*); };
     (@suggestion $($tt:tt)*) => { eprint!("\u{1F4A1}"); eprintln!($($tt)*); };}

@@ -177,7 +177,7 @@ impl Signer for PsbtDirSigner {
         loop {
             if !self.path.exists() {
                 elog!(
-                    @suggestion
+                    @user_error
                     "PSBT directory '{}' does not exist (maybe you need to insert your SD card?).\nPress enter to try again.",
                     self.path.display()
                 );
