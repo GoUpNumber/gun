@@ -413,7 +413,7 @@ pub struct FrostSigner {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NonceSpec {
     pub nonce_hint: usize,
-    pub signer_nonce: NonceKeyPair,
+    pub signer_nonce: Nonce,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -470,12 +470,12 @@ impl FrostTranscript {
         joint_key: &JointKey,
         input_index: usize,
     ) -> anyhow::Result<SignSession> {
-        let public_nonces_for_input = self.signer_set.get(&input_index).expect("should exist");
+        let input_public_nonces = self.signer_set.get(&input_index).expect("should exist");
         let tx_digest = message_from_psbt(&self.psbt, input_index)?;
         let message = Message::<Public>::raw(&tx_digest);
-        let public_nonces = public_nonces_for_input
+        let public_nonces = input_public_nonces
             .iter()
-            .map(|(signer_index, nonce)| (*signer_index, nonce.signer_nonce.public()))
+            .map(|(index, nonce)| (*index, nonce.signer_nonce))
             .collect::<Vec<_>>();
         Ok(frost.start_sign_session(joint_key, &public_nonces[..], message))
     }
@@ -522,12 +522,18 @@ impl FrostTranscript {
             //     return Err(anyhow!("Nonce didn't match initiator's nonce"));
             // }
 
+            //
+            let nonce_keypair = NonceKeyPair {
+                public: todo!(),
+                secret: todo!(),
+            };
+
             *my_sig_share = frost.sign(
                 &joint_key,
                 &session,
                 my_signer_index,
                 secret_share,
-                nonce.clone(),
+                nonce_keypair,
             );
         }
 
