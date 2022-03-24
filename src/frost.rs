@@ -1,33 +1,37 @@
-use crate::cmd;
-use crate::cmd::FrostSetup;
-use crate::database::{GunDatabase, RemoteNonces};
-use crate::ecdh_frost as ecdh;
-use crate::ecdh_frost::KeyPair;
-use crate::elog;
+use crate::{
+    cmd,
+    cmd::FrostSetup,
+    database::{GunDatabase, RemoteNonces},
+    ecdh_frost as ecdh,
+    ecdh_frost::KeyPair,
+    elog,
+};
 use anyhow::{anyhow, Context};
 use bdk::signer::Signer;
-use bitcoin::hashes::Hash;
-use bitcoin::schnorr::{SchnorrSig, XOnlyPublicKey};
-use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::util::psbt::PartiallySignedTransaction as Psbt;
-use bitcoin::util::{sighash, taproot::TapTweakHash};
-use bitcoin::Network;
+use bitcoin::{
+    hashes::Hash,
+    schnorr::{SchnorrSig, XOnlyPublicKey},
+    secp256k1::{All, Secp256k1},
+    util::{psbt::PartiallySignedTransaction as Psbt, sighash, taproot::TapTweakHash},
+    Network,
+};
 use chacha20::cipher::StreamCipher;
 use core::str::FromStr;
 use rand::{CryptoRng, RngCore};
-use schnorr_fun::{frost::*, Schnorr};
 use schnorr_fun::{
-    frost::{PointPoly, ScalarPoly, SignSession},
+    frost::{PointPoly, ScalarPoly, SignSession, *},
     fun::{marker::*, Point, Scalar},
     musig::Nonce,
     nonce::Deterministic,
-    Message,
+    Message, Schnorr,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
-use std::path::PathBuf;
-use std::{collections::BTreeMap, fs::File, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use crate::cmd::CommonArgs;
 
@@ -110,12 +114,14 @@ impl Transcript {
     }
 
     pub fn missing_shares(&self) -> Vec<usize> {
+        // Number of shares should be one less than number of signers, (minus themselves)
+        //
         self.shares
             .iter()
             .enumerate()
-            .filter(|(_, v)| v.len() < self.n_signers())
+            .filter(|(_, v)| v.len() < self.n_signers() - 1)
             .map(|(i, _)| i)
-            .chain(self.shares.len() - 1..self.n_signers())
+            // .chain(self.shares.len() - 0..self.n_signers())
             .collect()
     }
 
