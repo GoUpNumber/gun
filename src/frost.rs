@@ -292,11 +292,7 @@ fn read_transcript<T: serde::de::DeserializeOwned>(
     }
 }
 
-pub fn run_frost_setup(
-    wallet_dir: &Path,
-    setup_file: &Path,
-    frost_setup: FrostSetup,
-) -> anyhow::Result<KeyGenOutput> {
+pub fn run_frost_setup(setup_file: &Path, frost_setup: FrostSetup) -> anyhow::Result<KeyGenOutput> {
     match frost_setup {
         FrostSetup::Start {
             working_dir,
@@ -310,11 +306,8 @@ pub fn run_frost_setup(
                 ));
             }
 
-            let n_nonces = 50;
-
             let mut transcript = Transcript::new(threshold, network);
             let my_poly = ScalarPoly::random(threshold, &mut rand::thread_rng());
-            let public_poly = my_poly.to_point_poly();
 
             let state = transcript.add_signer(my_poly);
             elog!(@info "Starting setup round 1: Adding devices");
@@ -345,7 +338,7 @@ pub fn run_frost_setup(
             elog!(@info "Starting setup round 2: Generate secret shares");
             elog!(@suggestion "Communicate the updated {} to the next device", setup_file.display());
             elog!(@suggestion "Load {} back on this device and press enter when ready", setup_file.display());
-            let mut transcript = read_transcript(setup_file, |transcript: &Transcript| {
+            let transcript = read_transcript(setup_file, |transcript: &Transcript| {
                 let missing_shares = transcript.missing_shares();
                 if missing_shares.is_empty() {
                     true
@@ -365,7 +358,6 @@ pub fn run_frost_setup(
                 ));
             }
             let mut transcript = read_transcript(setup_file, |_: &Transcript| true);
-            let network = transcript.network;
             let my_poly = ScalarPoly::random(transcript.threshold, &mut rand::thread_rng());
 
             let state = transcript.add_signer(my_poly);
@@ -434,16 +426,17 @@ pub struct FrostInputPartyShare {
 pub struct FrostTranscript {
     pub psbt: Psbt,
     pub initiator_index: usize,
-    pub inputs_to_sign: BTreeMap<usize, BTreeMap<usize, (NonceSpec, Option<Scalar<Public, Zero>>)>>,
+    pub signer_set: BTreeMap<usize, BTreeMap<usize, NonceSpec>>,
+    pub signature_shares: BTreeMap<usize, BTreeMap<usize, Scalar<Public, Zero>>>,
 }
 
 impl FrostTranscript {
     pub fn missing_signatures(&self) -> BTreeSet<usize> {
-        self.inputs_to_sign
+        self.signature_shares
             .iter()
             .map(|(_, tr)| {
                 tr.iter()
-                    .filter(|(signer_index, (_, sig_share))| sig_share.is_none())
+                    .filter(|(_, (_, sig_share))| sig_share.is_none())
                     .map(|(signer_index, _)| *signer_index)
             })
             .flatten()
@@ -454,51 +447,13 @@ impl FrostTranscript {
         initiator_index: usize,
         psbt: Psbt,
         joint_key: &JointKey,
-        gun_db: &GunDatabase,
-        signer_set: BTreeSet<usize>,
-    ) -> anyhow::Result<Self> {
-        let our_key: XOnlyPublicKey = joint_key.public_key().to_xonly().into();
-        let our_inputs = psbt
-            .inputs
-            .iter()
-            .enumerate()
-            .filter(|(_, input)| input.tap_internal_key == Some(our_key))
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>();
-
-        let inputs_to_sign = our_inputs
-            .into_iter()
-            .map(|input_index| -> anyhow::Result<_> {
-                let input = &psbt.inputs[input_index];
-
-                let mut nonce_specs = signer_set
-                    .iter()
-                    .map(|signer_index| -> anyhow::Result<_> {
-                        let remote_nonces = gun_db
-                            .get_entity::<RemoteNonces>(*signer_index)?
-                            .ok_or(anyhow!("Don't have nonces for that signer"))?;
-                        Ok((
-                            *signer_index,
-                            (
-                                NonceSpec {
-                                    signer_nonce: remote_nonces.nonce_list[remote_nonces.index],
-                                    nonce_hint: remote_nonces.index,
-                                },
-                                None,
-                            ),
-                        ))
-                    })
-                    .collect::<Result<_, _>>()?;
-
-                // TODO increment nonce
-                Ok((input_index, nonce_specs))
-            })
-            .collect::<Result<_, _>>()?;
-
+        signer_set: BTreeMap<usize, BTreeMap<usize, NonceSpec>>,
+    ) -> Self {
         Ok(FrostTranscript {
             psbt,
             initiator_index,
-            inputs_to_sign,
+            signer_set,
+            signature_shares: BTreeMap::new(),
         })
     }
 
@@ -508,7 +463,10 @@ impl FrostTranscript {
         joint_key: &JointKey,
         input_index: usize,
     ) -> anyhow::Result<SignSession> {
-        let input = self.inputs_to_sign.get(&input_index).expect("should exist");
+        let input = self
+            .signature_shares
+            .get(&input_index)
+            .expect("should exist");
         let tx_digest = message_from_psbt(&self.psbt, input_index)?;
         let message = Message::<Public>::raw(&tx_digest);
         let public_nonces = input
@@ -536,12 +494,12 @@ impl FrostTranscript {
         let frost = Frost::<Schnorr<Sha256, Deterministic<Sha256>>, Sha256>::default();
         let joint_key = Self::get_tweaked_key(joint_key);
         let sessions = self
-            .inputs_to_sign
+            .signature_shares
             .iter()
             .map(|(input_index, _)| self.get_frost_session(&frost, &joint_key, *input_index))
             .collect::<Result<Vec<_>, _>>()?;
 
-        for ((_, input), session) in self.inputs_to_sign.iter_mut().zip(sessions) {
+        for ((_, input), session) in self.signature_shares.iter_mut().zip(sessions) {
             let (nonce_spec, sig_share) = input
                 .get_mut(&my_signer_index)
                 .ok_or(anyhow!("you're not signing for this one!"))?;
@@ -576,7 +534,7 @@ impl FrostTranscript {
         let frost = Frost::<Schnorr<Sha256, Deterministic<Sha256>>, Sha256>::default();
         let joint_key = Self::get_tweaked_key(joint_key);
 
-        for (i, (input_index, input)) in self.inputs_to_sign.iter().enumerate() {
+        for (input_index, input) in self.signature_shares.iter() {
             let session = self.get_frost_session(&frost, &joint_key, *input_index)?;
 
             let sig_shares = input
@@ -663,13 +621,10 @@ impl FrostSigner {
             }
         };
 
-        let mut frost_transcript = FrostTranscript::new(
-            self.my_signer_index,
-            psbt.clone(),
-            &self.joint_key,
-            &self.db,
-            coalition,
-        )?;
+        let signers = self.db.fetch_and_increment_nonces(coalition);
+
+        let mut frost_transcript =
+            FrostTranscript::new(self.my_signer_index, psbt.clone(), &self.joint_key, signers)?;
         frost_transcript.contribute(
             &self.joint_key,
             self.my_signer_index,
@@ -685,7 +640,7 @@ impl FrostSigner {
             &frost_transcript_file,
             serde_json::to_string(&frost_transcript).unwrap(),
         ) {
-            elog!(@user_error "Failed to write frost signing session to {}", frost_transcript_file.display());
+            elog!(@user_error "Failed to write frost signing session to {}: {}", frost_transcript_file.display(), e);
             elog!(@suggestion "Press enter to try again.");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
@@ -730,7 +685,16 @@ impl Signer for FrostSigner {
         true
     }
 
-    fn id(&self, secp: &Secp256k1<All>) -> bdk::signer::SignerId {
+    fn id(&self, _secp: &Secp256k1<All>) -> bdk::signer::SignerId {
         bdk::signer::SignerId::XOnly(self.joint_key.public_key().to_xonly().into())
+    }
+}
+
+impl GunDatabase {
+    pub fn fetch_and_increment_nonces(
+        &self,
+        signers: BTreeSet<usize>,
+    ) -> BTreeMap<usize, NonceSpec> {
+        unimplemented!()
     }
 }

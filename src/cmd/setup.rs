@@ -441,7 +441,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 nonces,
                 my_signer_index,
                 network,
-            } = frost::run_frost_setup(&wallet_dir, &setup_file, frost_setup)?;
+            } = frost::run_frost_setup(&setup_file, frost_setup)?;
 
             let secret_share_file = wallet_dir.join("share.hex");
             std::fs::write(

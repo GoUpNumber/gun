@@ -42,7 +42,7 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn from_slice(bytes: &[u8]) -> Option<Self> {
-        let mut secret_key = Scalar::from_slice_mod_order(&bytes[..32])
+        let secret_key = Scalar::from_slice_mod_order(&bytes[..32])
             .expect("is 32 bytes long")
             .mark::<NonZero>()?;
         Some(Self::from_secret_key(secret_key))
