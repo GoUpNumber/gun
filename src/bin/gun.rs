@@ -47,7 +47,7 @@ pub enum Commands {
     Split(SplitOpt),
     /// Get/set configuration values
     Config(ConfigOpt),
-    FrostSign
+    FrostSign,
 }
 
 fn main() -> anyhow::Result<()> {

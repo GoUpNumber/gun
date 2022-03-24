@@ -29,7 +29,7 @@ pub enum GunSigner {
     },
     Frost {
         joint_key: JointKey,
-        my_index: usize,
+        my_signer_index: usize,
         working_dir: PathBuf,
     },
 }

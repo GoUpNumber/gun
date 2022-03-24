@@ -1,6 +1,5 @@
 mod bet;
 mod config;
-mod frost;
 mod oracle;
 mod setup;
 mod wallet;
@@ -35,7 +34,7 @@ use bdk::{
     wallet::signer::SignerOrdering,
     KeychainKind, Wallet,
 };
-use std::{sync::Arc, str::FromStr};
+use std::{str::FromStr, sync::Arc};
 
 use term_table::{row::Row, Table};
 
@@ -204,17 +203,24 @@ pub fn load_wallet(
                     }),
                 }
             }
-            GunSigner::Frost { joint_key, my_index, working_dir } => {
+            GunSigner::Frost {
+                joint_key,
+                my_signer_index,
+                working_dir,
+            } => {
                 let file_path = wallet_dir.join("share.hex");
-                let secret_share = Scalar::from_str(&fs::read_to_string(file_path)?)?;
-                Arc::new(crate::cmd::frost::FrostSigner {
+                let secret_hex = &fs::read_to_string(file_path)?;
+                let secret_share = Scalar::from_str(&secret_hex[..32])?;
+                let my_poly_secret = Scalar::from_str(&secret_hex[32..])?;
+                Arc::new(crate::frost::FrostSigner {
                     joint_key: joint_key.clone(),
-                    my_index: *my_index,
+                    my_signer_index: *my_signer_index,
                     secret_share,
+                    my_poly_secret,
                     working_dir: working_dir.clone(),
-                    db: gun_db.clone()
+                    db: gun_db.clone(),
                 })
-            },
+            }
         };
         wallet.add_signer(
             KeychainKind::External, //NOTE: will sign internal inputs as well!
@@ -626,4 +632,5 @@ macro_rules! elog {
     (@recoverable_error $($tt:tt)*) => { eprint!("\u{1F4A5} "); eprintln!($($tt)*);};
     (@user_error $($tt:tt)*) => {{ eprint!("\u{274C}"); eprintln!($($tt)*); }};
     (@question $($tt:tt)*) => { eprint!("\u{2753}"); eprintln!($($tt)*); };
-    (@suggestion $($tt:tt)*) => { eprint!("\u{1F4A1}"); eprintln!($($tt)*); };}
+    (@suggestion $($tt:tt)*) => { eprint!("\u{1F4A1}"); eprintln!($($tt)*); };
+}

@@ -2,8 +2,9 @@ use crate::{
     bip85::get_bip85_bytes,
     cmd::{self},
     config::{Config, GunSigner},
-    database::{GunDatabase, ProtocolKind, StringDescriptor},
+    database::{GunDatabase, ProtocolKind, RemoteNonces, StringDescriptor},
     elog,
+    frost::KeyGenOutput,
     keychain::ProtocolSecret,
 };
 use anyhow::{anyhow, Context};
@@ -48,33 +49,6 @@ pub struct CommonArgs {
         name = "bitcoin|regtest|testnet|signet"
     )]
     pub network: Network,
-}
-
-#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
-pub enum AddressKind {
-    Wpkh,
-    Tr,
-}
-
-impl FromStr for AddressKind {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "wpkh" => AddressKind::Wpkh,
-            "tr" => AddressKind::Tr,
-            _ => return Err(anyhow!("invalid address kind. Must be p2wpkh or p2tr")),
-        })
-    }
-}
-
-impl std::fmt::Display for AddressKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AddressKind::Wpkh => write!(f, "wpkh"),
-            AddressKind::Tr => write!(f, "tr"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
@@ -213,6 +187,14 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         ));
     }
     let secp = Secp256k1::<bdk::bitcoin::secp256k1::All>::new();
+
+    std::fs::create_dir(&wallet_dir)?;
+
+    let config_file = wallet_dir.join("config.json");
+
+    let gun_db = GunDatabase::new(
+        sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
+    );
 
     let (config, protocol_secret, (external, internal), seed_words_file) = match cmd {
         SetupOpt::Seed {
@@ -447,29 +429,41 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             )
         }
         SetupOpt::Frost(frost_setup) => {
-            use crate::cmd::frost;
+            use crate::frost;
             let (FrostSetup::Start { working_dir, .. } | FrostSetup::Add { working_dir }) =
                 &frost_setup;
             let working_dir = working_dir.clone();
             let setup_file = working_dir.join("frost-setup.json");
-            let ((my_index, secret_share), joint_key, network) =
-                frost::run_frost_setup(&wallet_dir, &setup_file, frost_setup)?;
+            let KeyGenOutput {
+                secret_share,
+                joint_key,
+                my_poly_secret,
+                nonces,
+                my_signer_index,
+                network,
+            } = frost::run_frost_setup(&wallet_dir, &setup_file, frost_setup)?;
+
             let secret_share_file = wallet_dir.join("share.hex");
-            std::fs::write(secret_share_file, secret_share.to_string())?;
-            // let xpub = ExtendedPubKey {
-            //     network,
-            //     depth: 0,
-            //     parent_fingerprint: Fingerprint::from([0u8;4]),
-            //     child_number: ChildNumber::from(0),
-            //     public_key: joint_key.public_key(),
-            //     chain_code: ChainCode::from(transcript.poly_digest()),
-            // };
+            std::fs::write(
+                secret_share_file,
+                secret_share.to_string() + &my_poly_secret.to_string(),
+            )?;
+
+            for (i, nonce_list) in nonces.into_iter().enumerate() {
+                let remote_nonces = RemoteNonces {
+                    nonce_list,
+                    index: 0,
+                };
+
+                gun_db.insert_entity(i, remote_nonces)?;
+            }
+
             let external = format!("tr({})", joint_key.public_key());
             (
                 Config {
                     signers: vec![GunSigner::Frost {
                         joint_key,
-                        my_index,
+                        my_signer_index,
                         working_dir,
                     }],
                     ..Config::default_config(network)
@@ -480,14 +474,6 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             )
         }
     };
-
-    std::fs::create_dir(&wallet_dir)?;
-
-    let config_file = wallet_dir.join("config.json");
-
-    let gun_db = GunDatabase::new(
-        sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
-    );
 
     if let Some(protocol_secret) = protocol_secret {
         gun_db.insert_entity(ProtocolKind::Bet, ProtocolSecret::Bytes(protocol_secret))?;

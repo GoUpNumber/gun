@@ -18,6 +18,7 @@ pub mod signers;
 pub use fee_spec::*;
 pub mod bip85;
 pub mod database;
+pub mod frost;
 mod serde_hacks;
 pub mod wallet;
 
@@ -28,7 +29,7 @@ pub use url::Url;
 
 pub type OracleInfo = olivia_core::OracleInfo<olivia_secp256k1::Secp256k1>;
 
-pub use schnorr_fun::fun as fun;
+pub use schnorr_fun::fun;
 
 #[derive(Clone, Debug)]
 pub enum ValueChoice {

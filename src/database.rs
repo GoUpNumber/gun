@@ -20,7 +20,7 @@ pub enum MapKey {
     ProtocolSecret(ProtocolKind),
     Descriptor(KeychainKind),
     FrostRemoteNonce(usize),
-    FrostLocalCounter
+    FrostLocalCounter,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -61,7 +61,7 @@ pub enum KeyKind {
     ProtocolSecret,
     Descriptor,
     FrostRemoteNonce,
-    FrostLocalCounter
+    FrostLocalCounter,
 }
 
 impl KeyKind {
@@ -127,12 +127,13 @@ impl_entity!(KeychainKind, StringDescriptor, Descriptor);
 
 use schnorr_fun::musig::Nonce;
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct RemoteNonces(pub Vec<Nonce>);
+pub struct RemoteNonces {
+    pub nonce_list: Vec<Nonce>,
+    pub index: usize,
+}
 impl_entity!(usize, RemoteNonces, FrostRemoteNonce);
 // pub struct FrostLocalCounter(pub usize);
 // impl_entity!((), FrostLocalCounter, FrostLocalCounter);
-
-
 
 #[derive(Debug, Clone)]
 pub struct GunDatabase(sled::Tree);

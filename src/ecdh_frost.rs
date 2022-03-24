@@ -1,7 +1,7 @@
-use crate::{rand_core::SeedableRng};
-use chacha20::{cipher::*, ChaCha20, ChaCha20Rng};
 use crate::fun::{g, marker::*, Point, Scalar, G};
-use rand::{RngCore, CryptoRng};
+use crate::rand_core::SeedableRng;
+use chacha20::{cipher::*, ChaCha20, ChaCha20Rng};
+use rand::{CryptoRng, RngCore};
 use sha2::{
     digest::{
         generic_array::{sequence::Split, typenum::U32},
@@ -33,7 +33,6 @@ pub fn ecdh_with_aux(
 pub fn ecdh(keypair: &KeyPair, remote: &Point<EvenY>) -> (ChaCha20, ChaCha20Rng) {
     ecdh_with_aux(&keypair, remote, b"")
 }
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeyPair {
