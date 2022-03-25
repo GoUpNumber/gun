@@ -186,17 +186,10 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             wallet_dir.display()
         ));
     }
+
     let secp = Secp256k1::<bdk::bitcoin::secp256k1::All>::new();
 
-    std::fs::create_dir(&wallet_dir)?;
-
-    let config_file = wallet_dir.join("config.json");
-
-    let gun_db = GunDatabase::new(
-        sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
-    );
-
-    let (config, protocol_secret, (external, internal), seed_words_file) = match cmd {
+    let (config, protocol_secret, (external, internal), file_to_create, nonces) = match cmd {
         SetupOpt::Seed {
             common_args,
             from_existing,
@@ -311,6 +304,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 Some(bip85_bytes),
                 (external.to_string(), Some(internal.to_string())),
                 Some((sw_file, mnemonic.word_iter().collect::<Vec<_>>().join(" "))),
+                vec![],
             )
         }
         SetupOpt::Descriptor {
@@ -331,6 +325,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 None,
                 (external, internal),
                 None,
+                vec![],
             )
         }
         SetupOpt::XKey {
@@ -351,6 +346,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 None,
                 (external, Some(internal)),
                 None,
+                vec![],
             )
         }
         SetupOpt::Coldcard {
@@ -426,6 +422,7 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 bip85_bytes,
                 (external.to_string(), Some(internal.to_string())),
                 None,
+                vec![],
             )
         }
         SetupOpt::Frost(frost_setup) => {
@@ -433,6 +430,12 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
             let (FrostSetup::Start { working_dir, .. } | FrostSetup::Add { working_dir }) =
                 &frost_setup;
             let working_dir = working_dir.clone();
+            if !working_dir.exists() {
+                std::fs::create_dir(&working_dir).context(format!(
+                    "Creating frost working directory {} failed",
+                    working_dir.display()
+                ))?;
+            }
             let setup_file = working_dir.join("frost-setup.json");
             let KeyGenOutput {
                 secret_share,
@@ -442,21 +445,6 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 my_signer_index,
                 network,
             } = frost::run_frost_setup(&setup_file, frost_setup)?;
-
-            let secret_share_file = wallet_dir.join("share.hex");
-            std::fs::write(
-                secret_share_file,
-                secret_share.to_string() + &my_poly_secret.to_string(),
-            )?;
-
-            for (i, nonce_list) in nonces.into_iter().enumerate() {
-                let remote_nonces = RemoteNonces {
-                    nonce_list,
-                    index: 0,
-                };
-
-                gun_db.insert_entity(i, remote_nonces)?;
-            }
 
             let external = format!("tr({})", joint_key.public_key());
             (
@@ -470,10 +458,22 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
                 },
                 None,
                 (external, None),
-                None,
+                Some((
+                    wallet_dir.join("share.hex"),
+                    secret_share.to_string() + &my_poly_secret.to_string(),
+                )),
+                nonces,
             )
         }
     };
+
+    std::fs::create_dir(&wallet_dir)?;
+
+    let config_file = wallet_dir.join("config.json");
+
+    let gun_db = GunDatabase::new(
+        sled::open(wallet_dir.join("database.sled").to_str().unwrap())?.open_tree("gun")?,
+    );
 
     if let Some(protocol_secret) = protocol_secret {
         gun_db.insert_entity(ProtocolKind::Bet, ProtocolSecret::Bytes(protocol_secret))?;
@@ -489,10 +489,20 @@ pub fn run_setup(wallet_dir: &std::path::Path, cmd: SetupOpt) -> anyhow::Result<
         gun_db.insert_entity(KeychainKind::Internal, StringDescriptor(internal))?;
     }
 
+    for (i, nonce_list) in nonces.into_iter().enumerate() {
+        let remote_nonces = RemoteNonces {
+            nonce_list,
+            index: 0,
+        };
+
+        gun_db.insert_entity(i, remote_nonces)?;
+    }
+
     cmd::write_config(&config_file, config)?;
 
-    if let Some((path, content)) = seed_words_file {
-        std::fs::write(path, content)?;
+    if let Some((path, content)) = file_to_create {
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to create {}", path.display()))?;
     }
 
     elog!(@celebration "Successfully created wallet at {}", wallet_dir.display());

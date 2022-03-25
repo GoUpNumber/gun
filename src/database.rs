@@ -1,4 +1,6 @@
-use crate::{betting::*, elog, keychain::ProtocolSecret, OracleInfo};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::{betting::*, elog, frost::NonceSpec, keychain::ProtocolSecret, OracleInfo};
 use anyhow::{anyhow, Context};
 use bdk::{
     bitcoin::OutPoint,
@@ -219,7 +221,7 @@ impl GunDatabase {
                         ))
                     })?;
                     let old_state = serde_json::from_slice(&old_state[..])
-                        .expect("it's in the DB so it should be deserializable");
+                        .expect("it's in the db so it should be deserializable");
                     let new_state = f(old_state, *bet_id, TxDb(db))
                         .map_err(ConflictableTransactionError::Abort)?;
                     db.insert(key, serde_json::to_vec(&new_state).unwrap())?;
@@ -283,6 +285,54 @@ impl GunDatabase {
                 .join(", ");
             Err(anyhow!("Bets {} are using the protocol secret so you can't change it until they're resolved", in_use))
         }
+    }
+
+    pub fn fetch_and_increment_nonces(
+        &self,
+        signers: &BTreeSet<usize>,
+    ) -> anyhow::Result<BTreeMap<usize, NonceSpec>> {
+        self.0
+            .transaction(|db| {
+                signers
+                    .iter()
+                    .map(|signer| {
+                        let key = VersionedKey::from(MapKey::FrostRemoteNonce(*signer));
+                        let remote_nonces = db.remove(key.to_bytes())?.ok_or_else(|| {
+                            ConflictableTransactionError::Abort(anyhow!(
+                                "no nonces for signer {}",
+                                signer
+                            ))
+                        })?;
+
+                        let mut remote_nonces =
+                            serde_json::from_slice::<RemoteNonces>(&remote_nonces)
+                                .expect("it's in the db so it should be deserializable");
+
+                        let nonce_spec = NonceSpec {
+                            nonce_hint: remote_nonces.index,
+                            signer_nonce: *remote_nonces
+                                .nonce_list
+                                .get(remote_nonces.index)
+                                .ok_or_else(|| {
+                                    ConflictableTransactionError::Abort(anyhow!(
+                                        "We've run out nonces for signer {}",
+                                        signer
+                                    ))
+                                })?,
+                        };
+
+                        remote_nonces.index += 1;
+
+                        db.insert(key.to_bytes(), serde_json::to_vec(&remote_nonces).unwrap())?;
+
+                        Ok((*signer, nonce_spec))
+                    })
+                    .collect::<Result<_, _>>()
+            })
+            .map_err(|e| match e {
+                sled::transaction::TransactionError::Abort(e) => e,
+                sled::transaction::TransactionError::Storage(e) => e.into(),
+            })
     }
 }
 

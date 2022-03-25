@@ -2,18 +2,19 @@ mod bet;
 mod config;
 mod oracle;
 mod setup;
+mod sign;
 mod wallet;
 pub use bet::*;
 pub use config::*;
 pub use oracle::*;
 use schnorr_fun::fun::Scalar;
 pub use setup::*;
+pub use sign::*;
 pub use wallet::*;
 
 use crate::{
     config::GunSigner,
     database::{ProtocolKind, StringDescriptor},
-    elog,
     keychain::ProtocolSecret,
     signers::{PsbtDirSigner, PwSeedSigner, XKeySigner},
     wallet::GunWallet,
@@ -93,7 +94,7 @@ pub fn read_yn(question: &str) -> bool {
     use std::io::{self, BufRead};
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-    elog!(@question "{} [y/n]? ", question.replace('\n', "\n> "));
+    eprintln!("> {} [y/n]? ", question.replace('\n', "\n> "));
     lines
         .find_map(
             |line| match line.unwrap().trim_end().to_lowercase().as_str() {
@@ -208,10 +209,7 @@ pub fn load_wallet(
                 my_signer_index,
                 working_dir,
             } => {
-                let file_path = wallet_dir.join("share.hex");
-                let secret_hex = &fs::read_to_string(file_path)?;
-                let secret_share = Scalar::from_str(&secret_hex[..32])?;
-                let my_poly_secret = Scalar::from_str(&secret_hex[32..])?;
+                let (secret_share, my_poly_secret) = load_frost_share(wallet_dir)?;
                 Arc::new(crate::frost::FrostSigner {
                     joint_key: joint_key.clone(),
                     my_signer_index: *my_signer_index,
@@ -219,6 +217,7 @@ pub fn load_wallet(
                     my_poly_secret,
                     working_dir: working_dir.clone(),
                     db: gun_db.clone(),
+                    network: config.network
                 })
             }
         };
@@ -235,6 +234,15 @@ pub fn load_wallet(
     let gun_wallet = GunWallet::new(wallet, gun_db);
 
     Ok((gun_wallet, keychain, config))
+}
+
+pub fn load_frost_share(wallet_dir: &std::path::Path) -> anyhow::Result<(Scalar, Scalar)> {
+    let file_path = wallet_dir.join("share.hex");
+    let secret_hex = &fs::read_to_string(file_path)?;
+    let secret_share = Scalar::from_str(&secret_hex[..64])?;
+    let my_poly_secret = Scalar::from_str(&secret_hex[64..])?;
+
+    Ok((secret_share, my_poly_secret))
 }
 
 pub fn load_wallet_db(wallet_dir: &std::path::Path) -> anyhow::Result<impl BatchDatabase> {
@@ -582,7 +590,7 @@ pub fn decide_to_broadcast(
         } else {
             use bdk::blockchain::Broadcast;
             let txid = tx.txid();
-            Broadcast::broadcast(blockchain, tx)?;
+            Broadcast::broadcast(blockchain, tx).context(format!("Trying to broadcast {}", txid))?;
             Ok((item! { "txid" => Cell::string(txid)}, Some(txid)))
         }
     } else {
@@ -633,4 +641,5 @@ macro_rules! elog {
     (@user_error $($tt:tt)*) => {{ eprint!("\u{274C}"); eprintln!($($tt)*); }};
     (@question $($tt:tt)*) => { eprint!("\u{2753}"); eprintln!($($tt)*); };
     (@suggestion $($tt:tt)*) => { eprint!("\u{1F4A1}"); eprintln!($($tt)*); };
+    (@magic $($tt:tt)*) => { eprint!("\u{2728}"); eprintln!($($tt)*); };
 }

@@ -335,6 +335,8 @@ impl SpendOpt {
             print_tx,
         )?;
 
+        elog!(@celebration "Transaction broadcasted!");
+
         if let Some(txid) = txid {
             if !print_tx {
                 for bet_id in claiming_bet_ids {

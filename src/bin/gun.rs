@@ -47,7 +47,8 @@ pub enum Commands {
     Split(SplitOpt),
     /// Get/set configuration values
     Config(ConfigOpt),
-    FrostSign,
+    /// Sign a psbt
+    Sign,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -111,7 +112,7 @@ fn main() -> anyhow::Result<()> {
             Commands::Config(opt) => {
                 cmd::run_config_cmd(&wallet_dir, &wallet, &wallet_dir.join("config.json"), opt)
             }
-            Commands::FrostSign => todo!(),
+            Commands::Sign => cmd::run_sign_cmd(&wallet_dir, &config),
         }
     };
 

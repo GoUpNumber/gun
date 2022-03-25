@@ -195,7 +195,7 @@ impl Signer for PsbtDirSigner {
             }
         }
 
-        elog!(@celebration "Wrote PSBT to {}", psbt_file.display());
+        elog!(@magic "Wrote PSBT to {}", psbt_file.display());
 
         let file_locations = [
             self.path.as_path().join(format!("{}-signed.psbt", txid)),
