@@ -366,7 +366,10 @@ pub fn run_frost_setup(setup_file: &Path, frost_setup: FrostSetup) -> anyhow::Re
                 transcript = read_transcript(setup_file, false, |transcript: &Transcript| {
                     if transcript.n_signers() >= transcript.threshold {
                         if !transcript.round2_started() {
-                            cmd::read_yn(&format!("You've added {} signing devices. Are you sure you've finished?", transcript.n_signers()))
+                            cmd::read_yn(&format!(
+                                "You've added {} signing devices. Are you sure you've finished?",
+                                transcript.n_signers()
+                            ))
                         } else {
                             true
                         }
@@ -416,7 +419,7 @@ pub struct FrostSigner {
     pub my_poly_secret: Scalar,
     pub working_dir: PathBuf,
     pub db: GunDatabase,
-    pub network: Network
+    pub network: Network,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -641,7 +644,6 @@ pub fn get_psbt_input_indexes(psbt: &Psbt, joint_key: &JointKey) -> Vec<usize> {
 
 impl FrostSigner {
     fn _sign(&self, psbt: &mut Psbt) -> anyhow::Result<()> {
-
         let possible_signers = (0..self.joint_key.n_signers())
             .filter(|i| *i != self.my_signer_index)
             .map(|x| x.to_string())

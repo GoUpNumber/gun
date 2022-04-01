@@ -47,14 +47,12 @@ pub fn run_sign_cmd(wallet_dir: &Path, config: &Config) -> anyhow::Result<CmdOut
                         "{}\nDo you want to sign the above trasaction?",
                         cmd::display_psbt(config.network, &transcript.psbt)
                     )) {
-
                         transcript.contribute(
                             &joint_key,
                             *my_signer_index,
                             &secret_share,
                             &my_poly_secret,
                         )?;
-
 
                         std::fs::write(&file, serde_json::to_string_pretty(&transcript).unwrap())
                             .with_context(|| {

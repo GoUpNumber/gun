@@ -217,7 +217,7 @@ pub fn load_wallet(
                     my_poly_secret,
                     working_dir: working_dir.clone(),
                     db: gun_db.clone(),
-                    network: config.network
+                    network: config.network,
                 })
             }
         };
@@ -590,7 +590,8 @@ pub fn decide_to_broadcast(
         } else {
             use bdk::blockchain::Broadcast;
             let txid = tx.txid();
-            Broadcast::broadcast(blockchain, tx).context(format!("Trying to broadcast {}", txid))?;
+            Broadcast::broadcast(blockchain, tx)
+                .context(format!("Trying to broadcast {}", txid))?;
             Ok((item! { "txid" => Cell::string(txid)}, Some(txid)))
         }
     } else {
