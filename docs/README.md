@@ -34,7 +34,7 @@ To setup your wallet see [`gun setup --help`](https://gun.fun/setup/setup.html).
 
 <big>
 
-Join us on [Discord](https://discord.gg/Wknb2A6J)
+Join us on [Discord](https://discord.gg/MB27cDJyrR)
 
 </big>
 
