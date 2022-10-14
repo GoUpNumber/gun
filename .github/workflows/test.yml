@@ -9,7 +9,7 @@ jobs:
       matrix:
         toolchain: [
            { rust: "1.56.0", args: "" },
-           # { rust: "nightly", args: "--features=nightly" } # disable nightly temporarily
+           { rust: "nightly", args: "" }
         ]
     steps:
       - uses: actions/checkout@v2
